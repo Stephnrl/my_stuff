@@ -1,0 +1,23 @@
+{
+  "images": {
+    "ansible": {
+      "tag": "ansible-azure",
+      "dockerfile": "Dockerfile.ansible",
+      "entrypoint": "ansible-playbook",
+      "mount_paths": [
+        {"host": "~/ansible_projects", "container": "/ansible/playbooks"},
+        {"host": "~/.azure", "container": "/root/.azure"}
+      ]
+    },
+    "golang": {
+      "tag": "golang-dev",
+      "dockerfile": "Dockerfile.golang",
+      "entrypoint": "/bin/bash",
+      "mount_paths": [
+        {"host": ".", "container": "/go/src/app"}
+      ]
+    }
+  },
+  "default_image": "ansible",
+  "ansible_directory": "~/ansible_projects"
+}
