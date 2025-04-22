@@ -1,0 +1,55 @@
+---
+- name: Include maintenance mode tasks
+  include_tasks: maintenance_mode.yml
+  vars:
+    maintenance_mode: enable
+
+- name: Verify all replicas are stopped before upgrading primary (if HA is configured)
+  command: ghe-repl-status
+  register: repl_status_check
+  failed_when: false
+  changed_when: false
+
+- name: Stop replication on all replica nodes (if any)
+  command: ghe-repl-stop-all
+  when: repl_status_check.rc == 0 and 'OK' in repl_status_check.stdout
+  register: stop_repl_result
+  changed_when: "'Stopped' in stop_repl_result.stdout"
+
+- name: Upgrade primary node
+  command: "ghe-upgrade {{ download_result.dest }}"
+  register: upgrade_result
+  failed_when: upgrade_result.rc != 0
+
+- name: Display upgrade result
+  debug:
+    var: upgrade_result.stdout_lines
+
+- name: Monitor background upgrade jobs
+  command: ghe-check-background-upgrade-jobs
+  register: bg_jobs
+  until: "'Waiting for jobs' not in bg_jobs.stdout"
+  retries: 120
+  delay: 30
+
+- name: Wait for configuration run to complete
+  shell: tail -1 /data/user/common/ghe-config.log | grep -q "Completed"
+  register: config_complete
+  until: config_complete.rc == 0
+  retries: 60
+  delay: 10
+  changed_when: false
+
+- name: Verify upgrade
+  command: ghe-version
+  register: version_after
+  changed_when: false
+
+- name: Display new version
+  debug:
+    msg: "GitHub Enterprise Server upgraded to version {{ version_after.stdout | trim }}"
+
+- name: Keep maintenance mode enabled for replica upgrades
+  debug:
+    msg: "Maintaining maintenance mode for replica upgrades. Disable manually after all replicas are upgraded."
+  when: repl_status_check.rc == 0 and 'OK' in repl_status_check.stdout
