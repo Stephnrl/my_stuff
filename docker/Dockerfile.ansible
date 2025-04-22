@@ -1,0 +1,64 @@
+FROM python:3.11-slim
+
+# Install required packages
+RUN apt-get update && apt-get install -y \
+    gcc \
+    python3-dev \
+    libffi-dev \
+    openssh-client \
+    git \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Ansible and Azure modules with latest versions
+RUN pip install --no-cache-dir \
+    ansible==9.3.0 \
+    ansible-core==2.16.2 \
+    ansible-lint==6.22.1 \
+    azure-cli==2.58.0 \
+    azure-identity==1.21.0 \
+    azure.azcollection==3.3.1 \
+    pywinrm==0.4.3 \
+    jmespath==1.0.1 \
+    netaddr==0.9.0 \
+    passlib==1.7.4 \
+    pytest==7.4.3 \
+    pytest-ansible==3.1.0
+
+# Install the Azure collection
+RUN ansible-galaxy collection install azure.azcollection
+
+# Create directories for Ansible
+RUN mkdir -p /ansible/playbooks /ansible/roles /ansible/inventory /ansible/collections
+
+# Set up ansible configuration
+RUN echo "[defaults]" > /etc/ansible/ansible.cfg && \
+    echo "host_key_checking = False" >> /etc/ansible/ansible.cfg && \
+    echo "inventory = /ansible/playbooks/inventory" >> /etc/ansible/ansible.cfg && \
+    echo "roles_path = /ansible/roles" >> /etc/ansible/ansible.cfg && \
+    echo "collections_path = /ansible/collections" >> /etc/ansible/ansible.cfg && \
+    echo "retry_files_enabled = False" >> /etc/ansible/ansible.cfg && \
+    echo "interpreter_python = auto_silent" >> /etc/ansible/ansible.cfg && \
+    echo "[inventory]" >> /etc/ansible/ansible.cfg && \
+    echo "enable_plugins = azure_rm, host_list, script, yaml, ini" >> /etc/ansible/ansible.cfg
+
+# Create a sample Azure RM inventory file
+RUN mkdir -p /ansible/playbooks/inventory && \
+    echo "plugin: azure_rm" > /ansible/playbooks/inventory/azure_rm.yml && \
+    echo "auth_source: auto" >> /ansible/playbooks/inventory/azure_rm.yml && \
+    echo "# include_vm_resource_groups:" >> /ansible/playbooks/inventory/azure_rm.yml && \
+    echo "#   - my-resource-group" >> /ansible/playbooks/inventory/azure_rm.yml
+
+# Set up the working directory
+WORKDIR /ansible/playbooks
+
+# Create volume mount points
+VOLUME ["/ansible/playbooks", "/root/.azure"]
+
+# Test Ansible and Python versions at build time
+RUN ansible --version && \
+    python --version
+
+ENTRYPOINT ["ansible-playbook"]
+CMD ["--version"]
