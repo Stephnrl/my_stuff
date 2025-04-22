@@ -1,0 +1,9 @@
+---
+# GitHub Enterprise Server upgrade configuration
+current_version: "3.11.0"
+target_version: "3.13.14"
+upgrade_pkg_url: "https://github-enterprise.s3.amazonaws.com/azure/updates/github-enterprise-azure-3.13.14.pkg"
+upgrade_pkg_checksum: "185cbb64b515c12f81d013a7d8c367b71cfda8f6f4e093874d8eb9d9381def7b"
+
+# Maintenance window configuration
+maintenance_message: "GitHub Enterprise Server is being upgraded to version 3.13.14. Please check back later."
