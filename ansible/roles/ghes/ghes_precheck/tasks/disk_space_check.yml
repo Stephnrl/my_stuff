@@ -1,0 +1,12 @@
+---
+- name: Check available disk space
+  shell: df -h /data | awk 'NR==2 {print $5}' | sed 's/%//'
+  register: data_disk_usage
+  changed_when: false
+
+- name: Verify minimum 15% free disk space
+  assert:
+    that:
+      - data_disk_usage.stdout | int <= 85
+    fail_msg: "FAILED: Not enough free space on data disk. Currently {{ data_disk_usage.stdout }}% used, need at least 15% free."
+    success_msg: "PASSED: Data disk has {{ 100 - data_disk_usage.stdout | int }}% free space, which meets the minimum requirement."
