@@ -71,7 +71,11 @@ class DockerWrapper:
             print(f"Warning: Failed to save config: {e}")
             
     def fix_path(self, path):
-        """Fix path for current OS and expand user directory"""
+        """Fix path for current OS and expand user directory and env vars"""
+        # Expand environment variables first
+        path = self.expand_env_vars(path)
+        
+        # Then expand user directory
         if path.startswith('~'):
             path = os.path.expanduser(path)
         
@@ -123,6 +127,13 @@ class DockerWrapper:
         tag = image_config['tag']
         entrypoint = image_config.get('entrypoint', '/bin/bash')
         mount_paths = image_config.get('mount_paths', [])
+        
+        # Override ansible directory if this is the ansible image
+        if image_name == 'ansible' and 'ansible_directory' in self.config:
+            for i, mount in enumerate(mount_paths):
+                if mount['container'] == '/ansible/playbooks':
+                    mount_paths[i]['host'] = self.config['ansible_directory']
+                    break
         
         # Build docker run command
         cmd = ['docker', 'run', '-it', '--rm']
@@ -207,7 +218,40 @@ class DockerWrapper:
         print(f"Set default image to '{image_name}'.")
         return True
 
-
+    def expand_env_vars(self, path):
+        """Expand environment variables and template variables in paths"""
+        # First handle ${VAR:-default} syntax
+        import re
+        pattern = r'\${([^}:]+):-([^}]+)}'
+        matches = re.findall(pattern, path)
+        
+        for var_name, default_val in matches:
+            env_val = os.environ.get(var_name)
+            replacement = env_val if env_val is not None else default_val
+            path = path.replace(f"${{{var_name}:-{default_val}}}", replacement)
+        
+        # Then handle normal environment variables
+        path = os.path.expandvars(path)
+        return path
+        
+    def set_ansible_directory(self, directory):
+        """Set the ansible directory"""
+        # Expand and validate the path
+        expanded_path = self.fix_path(directory)
+        if not os.path.exists(expanded_path):
+            print(f"Warning: Directory '{expanded_path}' does not exist. Creating it.")
+            try:
+                os.makedirs(expanded_path, exist_ok=True)
+            except Exception as e:
+                print(f"Error creating directory: {e}")
+                return False
+        
+        # Update config
+        self.config['ansible_directory'] = directory
+        self.save_config()
+        print(f"Set ansible directory to '{directory}'")
+        return True
+    
 def main():
     # Create main parser
     parser = argparse.ArgumentParser(description='Docker Container Wrapper')
@@ -220,6 +264,7 @@ def main():
     # Run command
     run_parser = subparsers.add_parser('run', help='Run Docker container')
     run_parser.add_argument('image', nargs='?', help='Image to run')
+    run_parser.add_argument('--project', '-p', help='Project from user config')
     run_parser.add_argument('args', nargs='*', help='Arguments to pass to container')
     
     # Shell command
@@ -247,7 +292,11 @@ def main():
     # Set default command
     default_parser = subparsers.add_parser('default', help='Set default image')
     default_parser.add_argument('image', help='Image to set as default')
-    
+
+    # Set ansible directory command
+    ansible_dir_parser = subparsers.add_parser('set-ansible-dir', help='Set ansible directory')
+    ansible_dir_parser.add_argument('directory', help='Path to ansible directory')
+
     # Parse arguments
     args = parser.parse_args()
     
@@ -266,7 +315,7 @@ def main():
         
     elif args.command == 'run':
         image = args.image or wrapper.config['default_image']
-        result = wrapper.run_container(image, args.args)
+        result = wrapper.run_container(image, args.args, args.project)
         return result.returncode
         
     elif args.command == 'shell':
@@ -288,7 +337,10 @@ def main():
     elif args.command == 'clean':
         image = args.image or wrapper.config['default_image']
         return 0 if wrapper.clean_image(image) else 1
-        
+
+    elif args.command == 'set-ansible-dir':
+        return 0 if wrapper.set_ansible_directory(args.directory) else 1
+
     elif args.command == 'default':
         return 0 if wrapper.set_default_image(args.image) else 1
 
