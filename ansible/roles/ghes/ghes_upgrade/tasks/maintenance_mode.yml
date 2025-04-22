@@ -1,0 +1,26 @@
+---
+- name: Enable maintenance mode
+  command: ghe-maintenance -s
+  register: maintenance_result
+  changed_when: "'Enabling maintenance mode' in maintenance_result.stdout"
+  when: maintenance_mode == 'enable'
+
+- name: Set maintenance message
+  command: "ghe-motd --message '{{ maintenance_message }}'"
+  when: 
+    - maintenance_mode == 'enable'
+    - maintenance_message is defined and maintenance_message | length > 0
+
+- name: Wait for active processes to complete
+  command: ghe-maintenance -q
+  register: active_processes
+  until: active_processes.stdout == "0"
+  retries: 30
+  delay: 10
+  when: maintenance_mode == 'enable'
+
+- name: Disable maintenance mode
+  command: ghe-maintenance -u
+  register: maintenance_result
+  changed_when: "'Disabling maintenance mode' in maintenance_result.stdout"
+  when: maintenance_mode == 'disable'
