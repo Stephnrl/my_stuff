@@ -1,0 +1,78 @@
+# .NET SDK on Iron Bank UBI 9 Image
+# This follows the Iron Bank pattern for .NET images
+
+# Base image ARGs - these can be passed from workflow
+ARG BASE_REGISTRY=localhost
+ARG BASE_IMAGE=base/ironbank-ubi9-minimal
+ARG BASE_TAG=local
+
+FROM ${BASE_REGISTRY}/${BASE_IMAGE}:${BASE_TAG}
+
+USER 0
+
+# Create dotnet user, set up application directory
+RUN useradd dotnet -m -d /home/dotnet -s /sbin/nologin \
+    && mkdir -p /app \
+    && chown -R dotnet /app \
+    && microdnf update -y \
+    && microdnf install -y \
+        tar \
+        gzip \
+        libicu \
+        openssl \
+        tzdata \
+        ca-certificates \
+        krb5-libs \
+        libgcc \
+        libstdc++ \
+        zlib \
+    && microdnf clean all \
+    && rm -rf /var/cache/dnf
+
+# ARG for the .NET version - will be passed from workflow
+ARG DOTNET_VERSION=8.0
+
+# Set environment variables
+ENV \
+    # .NET Runtime environment variables
+    DOTNET_RUNNING_IN_CONTAINER=true \
+    DOTNET_USE_POLLING_FILE_WATCHER=true \
+    # Skip extraction of XML docs - generally not useful within an image/container
+    NUGET_XMLDOC_MODE=skip \
+    # Enable correct mode for dotnet watch (only mode supported in a container)
+    DOTNET_USE_POLLING_FILE_WATCHER=true \
+    # Set the invariant mode since we don't need full globalization support
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=true \
+    # Set path
+    PATH="$PATH:/usr/share/dotnet:/root/.dotnet/tools"
+
+# Download and install .NET SDK
+RUN curl -sSL --output dotnet.tar.gz https://dotnetcli.azureedge.net/dotnet/Sdk/${DOTNET_VERSION}/dotnet-sdk-${DOTNET_VERSION}-linux-x64.tar.gz \
+    && mkdir -p /usr/share/dotnet \
+    && tar -zxf dotnet.tar.gz -C /usr/share/dotnet \
+    && rm dotnet.tar.gz \
+    && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
+    # Trigger first run experience by running a simple command
+    && dotnet --info \
+    # Set appropriate permissions 
+    && chown -R dotnet:dotnet /usr/share/dotnet \
+    && chmod -R 755 /usr/share/dotnet
+
+# Set up the working directory
+WORKDIR /app
+
+# Verify installation
+RUN dotnet --version
+
+# Set metadata
+LABEL maintainer="Your Name <your.email@example.com>"
+LABEL description=".NET SDK ${DOTNET_VERSION} on Iron Bank UBI 9"
+LABEL name="dotnet/ironbank-ubi9"
+LABEL summary="Iron Bank compliant .NET SDK ${DOTNET_VERSION} container"
+LABEL org.opencontainers.image.source="https://github.com/yourusername/your-repo"
+
+# Switch to non-root user
+USER dotnet
+
+# Set the entrypoint
+ENTRYPOINT ["dotnet"]
