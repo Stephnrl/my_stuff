@@ -1,0 +1,142 @@
+name: Build Application with Local Base
+
+on:
+  workflow_dispatch:
+    inputs:
+      os_version:
+        description: 'OS Version'
+        required: true
+        default: 'ubi9'
+        type: choice
+        options:
+          - ubi8
+          - ubi9
+      app_type:
+        description: 'Application Type'
+        required: true
+        default: 'dotnet'
+        type: choice
+        options:
+          - dotnet
+          - nodejs
+          - python
+      app_version:
+        description: 'Application Version'
+        required: true
+        default: '8.0'
+        type: string
+      image_tag:
+        description: 'Output image tag'
+        required: true
+        default: 'latest'
+        type: string
+      slim:
+        description: 'Build slim version'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+
+permissions:
+  id-token: write # Required for OIDC authentication
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Login to Azure Container Registry
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az acr login --name $(echo ${{ env.ACR_REGISTRY }} | cut -d. -f1)
+
+      - name: Set image variables
+        id: vars
+        run: |
+          OS_VERSION=${{ github.event.inputs.os_version }}
+          APP_TYPE=${{ github.event.inputs.app_type }}
+          APP_VERSION=${{ github.event.inputs.app_version }}
+          IMAGE_TAG=${{ github.event.inputs.image_tag }}
+          
+          SLIM_SUFFIX=""
+          if [[ "${{ github.event.inputs.slim }}" == "true" ]]; then
+            SLIM_SUFFIX="-slim"
+          fi
+          
+          # Local tag for base image (won't be pushed to registry)
+          BASE_IMAGE_LOCAL="localhost/base/${OS_VERSION}${SLIM_SUFFIX}:local"
+          
+          # Final image tag that will be pushed to registry
+          APP_IMAGE="${{ env.ACR_REGISTRY }}/${APP_TYPE}/${OS_VERSION}-${APP_TYPE}${APP_VERSION}${SLIM_SUFFIX}"
+          FULL_TAG="${APP_IMAGE}:${IMAGE_TAG}"
+          
+          echo "os_version=${OS_VERSION}" >> $GITHUB_OUTPUT
+          echo "app_type=${APP_TYPE}" >> $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" >> $GITHUB_OUTPUT
+          echo "base_image_local=${BASE_IMAGE_LOCAL}" >> $GITHUB_OUTPUT
+          echo "app_image=${APP_IMAGE}" >> $GITHUB_OUTPUT
+          echo "full_tag=${FULL_TAG}" >> $GITHUB_OUTPUT
+          
+          echo "Building base image: ${BASE_IMAGE_LOCAL}"
+          echo "Building application image: ${FULL_TAG}"
+
+      # Step 1: Build base image locally (not pushed to registry)
+      - name: Build base OS image locally
+        uses: docker/build-push-action@v6
+        with:
+          context: ./images/base/${{ steps.vars.outputs.os_version }}
+          push: false
+          load: true
+          tags: ${{ steps.vars.outputs.base_image_local }}
+          build-args: |
+            SLIM=${{ github.event.inputs.slim }}
+          cache-from: type=gha,scope=base-${{ steps.vars.outputs.os_version }}${{ github.event.inputs.slim && '-slim' || '' }}
+          cache-to: type=gha,scope=base-${{ steps.vars.outputs.os_version }}${{ github.event.inputs.slim && '-slim' || '' }},mode=max
+
+      # Step 2: Build application image using local base image and push to registry
+      - name: Build and push application image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./images//${{ steps.vars.outputs.app_type }}/${{ steps.vars.outputs.os_version }}
+          push: true
+          tags: ${{ steps.vars.outputs.full_tag }}
+          build-args: |
+            BASE_IMAGE=${{ steps.vars.outputs.base_image_local }}
+            ${{ steps.vars.outputs.app_type == 'dotnet' && 'DOTNET_VERSION' || steps.vars.outputs.app_type == 'nodejs' && 'NODE_VERSION' || 'PYTHON_VERSION' }}=${{ steps.vars.outputs.app_version }}
+          cache-from: type=gha,scope=${{ steps.vars.outputs.app_type }}-${{ steps.vars.outputs.os_version }}-${{ steps.vars.outputs.app_version }}${{ github.event.inputs.slim && '-slim' || '' }}
+          cache-to: type=gha,scope=${{ steps.vars.outputs.app_type }}-${{ steps.vars.outputs.os_version }}-${{ steps.vars.outputs.app_version }}${{ github.event.inputs.slim && '-slim' || '' }},mode=max
+
+      - name: Scan image for vulnerabilities
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            # This is a placeholder for a proper vulnerability scanner
+            # You would integrate with your preferred scanning tool here
+            echo "Scanning image ${{ steps.vars.outputs.full_tag }} for vulnerabilities"
+            
+            # Example if using Trivy:
+            # docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image ${{ steps.vars.outputs.full_tag }}
+
+      - name: Tag image as latest if requested
+        if: github.event.inputs.image_tag != 'latest' && github.ref == 'refs/heads/main'
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            docker tag ${{ steps.vars.outputs.full_tag }} ${{ steps.vars.outputs.app_image }}:latest
+            docker push ${{ steps.vars.outputs.app_image }}:latest
