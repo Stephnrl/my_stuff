@@ -1,0 +1,26 @@
+---
+- name: Include background job verification tasks
+  include_tasks: background_jobs.yml
+  tags: [check_jobs]
+
+- name: Include functionality check tasks
+  include_tasks: functionality_check.yml
+  tags: [check_functionality]
+
+- name: Verify upgrade completed successfully
+  command: ghe-version
+  register: current_version
+  changed_when: false
+
+- name: Verify upgraded version matches target
+  assert:
+    that:
+      - current_version.stdout | trim == target_version
+    fail_msg: "Upgrade failed. Current version ({{ current_version.stdout | trim }}) does not match target version ({{ target_version }})"
+    success_msg: "Upgrade successful! Current version is {{ current_version.stdout | trim }}"
+
+- name: Include maintenance mode tasks to disable maintenance
+  include_tasks: ../ghes_upgrade/tasks/maintenance_mode.yml
+  vars:
+    maintenance_mode: disable
+  when: disable_maintenance_mode | bool
