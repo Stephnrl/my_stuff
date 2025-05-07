@@ -1,4 +1,0 @@
----
-- name: disable maintenance mode
-  command: ghe-maintenance -u
-  listen: "disable maintenance"

@@ -1,6 +1,0 @@
----
-# Whether to disable maintenance mode after verification
-disable_maintenance_mode: true
-
-# Target version to verify against
-target_version: "3.13.14"
