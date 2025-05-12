@@ -1,0 +1,46 @@
+// Basic query for APIM errors
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| where ResponseCode >= 500 or ResponseCode == 429
+| project TimeGenerated, OperationId, ApiId, ResponseCode, ResponseSize, Method, BackendResponseCode
+| order by TimeGenerated desc
+
+// Query to see error distribution
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| where ResponseCode >= 400
+| summarize count() by ResponseCode, bin(TimeGenerated, 15m)
+| render timechart
+
+//Looking For Specific Issues
+
+//Throttling (429) errors:
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| where ResponseCode == 429
+| project TimeGenerated, ApiId, OperationId, ProductId, UserId
+| order by TimeGenerated desc
+
+//Server errors (5xx):
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| where ResponseCode >= 500
+| project TimeGenerated, ApiId, OperationId, BackendResponseCode, BackendTime, TotalTime
+| order by TimeGenerated desc
+
+//Slow responses:
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| project ApiId, OperationId, TotalTime, BackendTime
+| where TotalTime > 1000 // More than 1 second
+| order by TotalTime desc
+
+//High latency pattern:
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| summarize avg(TotalTime) by bin(TimeGenerated, 5m), ApiId
+| render timechart
