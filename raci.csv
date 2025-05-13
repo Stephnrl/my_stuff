@@ -1,0 +1,39 @@
+Activity/Deliverable,DevOps Team,Client Team (w365)
+GitHub Infrastructure,,
+GitHub server installation,R/A,I
+GitHub server updates/maintenance,R/A,I
+GitHub server high availability configuration,R/A,I
+GitHub server backup/recovery,R/A,I
+GitHub server performance monitoring,R/A,I
+Authentication & Access,,
+Azure app registrations for GitHub OIDC,R/A,C
+GitHub organization creation,R/A,I
+GitHub team/user administration,R/A,C
+Repository access permissions,R/A,C
+Repository Management,,
+Repository creation,R/A,C
+Repository structure/architecture,C,R/A
+Branch protection rules,C,R/A
+Code Management,,
+Code development,I,R/A
+Code review,I,R/A
+Code testing,I,R/A
+Code documentation,I,R/A
+GitHub Actions,,
+GitHub Actions infrastructure,R/A,I
+GitHub Actions runner configuration,R/A,I
+GitHub Actions workflow development,C,R/A
+GitHub Actions workflow maintenance,I,R/A
+GitHub Actions workflow troubleshooting,C,R/A
+Specific Pipeline Items,,
+Image building pipeline code,I,R/A
+Azure image deployment,I,R/A
+W365 cloud PC configuration,I,R/A
+Pipeline integrations with other systems,C,R/A
+Knowledge Transfer & Support,,
+GitHub platform documentation,R/A,I
+GitHub Actions capability documentation,R/A,I
+Custom pipeline documentation,C,R/A
+Pipeline code training,I,R/A
+First-line pipeline support,I,R/A
+GitHub platform support,R/A,I
