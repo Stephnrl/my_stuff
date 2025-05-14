@@ -1,0 +1,24 @@
+{
+    "version": "0.1.0",
+    "releaseNotes": "Initial release of FedRAMP High & DoD IL4/IL5 compliant Key Vault module",
+    "lastUpdated": "2025-05-14",
+    "authors": [
+        "Your Team Name"
+    ],
+    "dependencies": {
+        "privateEndpoint": "0.1.0",
+        "complianceTags": "0.1.0"
+    },
+    "compliance": {
+        "fedrampHigh": true,
+        "dodIL4": true,
+        "dodIL5": true,
+        "hipaa": false,
+        "pciDss": false
+    },
+    "testedRegions": [
+        "usgovvirginia",
+        "usgovtexas",
+        "usgovarizona"
+    ]
+}
