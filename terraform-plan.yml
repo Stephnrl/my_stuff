@@ -1,0 +1,130 @@
+name: Terraform Plan
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**.tf'
+      - 'terraform/environments/**'
+      - '.github/workflows/terraform-plan.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**.tf'
+      - 'terraform/environments/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to plan deployment for'
+        required: true
+        default: 'nonprod'
+        type: choice
+        options:
+          - nonprod
+          - prod
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+  pull-requests: write  # To post PR comments
+
+jobs:
+  terraform-plan:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'nonprod' }}
+    defaults:
+      run:
+        working-directory: terraform
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Azure Login with OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.0"
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ github.event.inputs.environment || 'nonprod' }}.tfstate" \
+            -backend-config="environment=usgovernment"
+      
+      - name: Setup Terraform Workspace
+        id: workspace
+        run: |
+          terraform workspace select ${{ github.event.inputs.environment || 'nonprod' }} || terraform workspace new ${{ github.event.inputs.environment || 'nonprod' }}
+      
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate
+      
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var-file="environments/${{ github.event.inputs.environment || 'nonprod' }}.tfvars" \
+            -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
+            -out=tfplan
+        continue-on-error: true
+      
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ github.event.inputs.environment || 'nonprod' }}
+          path: terraform/tfplan
+          retention-days: 5
+      
+      - name: Create Plan Summary
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "## Terraform Plan Results for ${{ github.event.inputs.environment || 'nonprod' }}" > plan_summary.md
+          echo "| Step | Status |" >> plan_summary.md
+          echo "| ---- | ------ |" >> plan_summary.md
+          echo "| Format | ${{ steps.fmt.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> plan_summary.md
+          echo "| Initialize | ${{ steps.init.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> plan_summary.md
+          echo "| Validate | ${{ steps.validate.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> plan_summary.md
+          echo "| Plan | ${{ steps.plan.outcome == 'success' && '✅ Passed' || '⚠️ Has Changes' }} |" >> plan_summary.md
+          echo "" >> plan_summary.md
+          echo "### Plan Overview" >> plan_summary.md
+          echo '```' >> plan_summary.md
+          terraform show -no-color tfplan >> plan_summary.md
+          echo '```' >> plan_summary.md
+
+      - name: Add PR Comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const planSummary = fs.readFileSync('terraform/plan_summary.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: planSummary
+            });
+      
+      - name: Terraform Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
