@@ -1,0 +1,92 @@
+name: Terraform Apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'nonprod'
+        type: choice
+        options:
+          - nonprod
+          - prod
+      confirm_apply:
+        description: 'Type "APPLY" to confirm deployment'
+        required: true
+        type: string
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+jobs:
+  terraform-apply:
+    # Only run if confirmation is "APPLY"
+    if: github.event.inputs.confirm_apply == 'APPLY'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    defaults:
+      run:
+        working-directory: terraform
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Azure Login with OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.5.0"
+      
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ secrets.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ github.event.inputs.environment }}.tfstate" \
+            -backend-config="environment=usgovernment"
+      
+      - name: Setup Terraform Workspace
+        run: |
+          terraform workspace select ${{ github.event.inputs.environment }} || terraform workspace new ${{ github.event.inputs.environment }}
+      
+      # Option 1: Download and use the previously generated plan
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-plan-${{ github.event.inputs.environment }}
+          path: terraform
+        continue-on-error: true
+        
+      # Option 2: Create a new plan and then apply it (useful if no previous plan is available)
+      - name: Terraform Plan (if needed)
+        id: plan_new
+        if: failure()  # Only runs if the download artifact step fails
+        run: |
+          terraform plan \
+            -var-file="environments/${{ github.event.inputs.environment }}.tfvars" \
+            -var="ssh_public_key=${{ secrets.SSH_PUBLIC_KEY }}" \
+            -out=tfplan
+      
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+      
+      - name: Output Apply Results
+        run: |
+          echo "## Terraform Apply Completed for ${{ github.event.inputs.environment }}" > apply_results.md
+          echo "" >> apply_results.md
+          echo "### Outputs" >> apply_results.md
+          echo '```' >> apply_results.md
+          terraform output >> apply_results.md
+          echo '```' >> apply_results.md
+          cat apply_results.md
