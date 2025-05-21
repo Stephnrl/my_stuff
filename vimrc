@@ -98,6 +98,21 @@ nnoremap <leader>bp :bprevious<CR>
 nnoremap <leader>bd :bdelete<CR>
 nnoremap <leader>ls :ls<CR>
 
+" Tab navigation
+nnoremap <leader>tn :tabnew<CR>          " Create new tab
+nnoremap <leader>tc :tabclose<CR>        " Close current tab
+nnoremap <C-PageUp> :tabprevious<CR>     " Previous tab with Ctrl+PageUp
+nnoremap <C-PageDown> :tabnext<CR>       " Next tab with Ctrl+PageDown
+nnoremap <leader>t1 1gt                  " Go to tab 1
+nnoremap <leader>t2 2gt                  " Go to tab 2
+nnoremap <leader>t3 3gt                  " Go to tab 3
+nnoremap <leader>t4 4gt                  " Go to tab 4
+nnoremap <leader>t5 5gt                  " Go to tab 5
+nnoremap <leader>t6 6gt                  " Go to tab 6
+nnoremap <leader>t7 7gt                  " Go to tab 7
+nnoremap <leader>t8 8gt                  " Go to tab 8
+nnoremap <leader>t9 9gt                  " Go to tab 9
+
 " File explorer
 nnoremap <leader>e :Explore<CR>
 
@@ -152,6 +167,7 @@ Plug 'vim-airline/vim-airline-themes'      " Status line themes
 " Color scheme (similar to popular Neovim themes)
 Plug 'joshdick/onedark.vim'                " Color scheme
 Plug 'morhetz/gruvbox'                     " Another popular theme
+Plug 'catppuccin/vim', { 'as': 'catppuccin' } " Catppuccin theme
 
 " Commenting
 Plug 'tpope/vim-commentary'                " Easy code commenting
@@ -175,6 +191,13 @@ nnoremap <leader>fh :History<CR>
 nnoremap <leader>n :NERDTreeToggle<CR>
 nnoremap <leader>nf :NERDTreeFind<CR>
 
+" Open NERDTree automatically when vim starts
+autocmd VimEnter * NERDTree
+" Focus on the main window after opening NERDTree
+autocmd VimEnter * wincmd p
+" Close vim if NERDTree is the only window remaining
+autocmd BufEnter * if (winnr("$") == 1 && exists("b:NERDTree") && b:NERDTree.isTabTree()) | q | endif
+
 " Use Airline
 let g:airline_powerline_fonts = 1
 let g:airline#extensions#tabline#enabled = 1
@@ -183,7 +206,13 @@ let g:airline#extensions#tabline#enabled = 1
 if has('termguicolors')
   set termguicolors
 endif
-colorscheme onedark   " Or use gruvbox if you prefer
+
+" Set Catppuccin theme options (before applying the colorscheme)
+let g:catppuccin_flavour = "mocha" " Options: latte, frappe, macchiato, mocha
+colorscheme catppuccin " Or use onedark or gruvbox if you prefer
+
+" Customize airline theme to match
+let g:airline_theme = 'catppuccin'
 
 " LSP Configuration
 if executable('pylsp')
