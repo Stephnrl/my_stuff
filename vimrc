@@ -207,12 +207,12 @@ if has('termguicolors')
   set termguicolors
 endif
 
-" Set Catppuccin theme options (before applying the colorscheme)
-let g:catppuccin_flavour = "mocha" " Options: latte, frappe, macchiato, mocha
-colorscheme catppuccin " Or use onedark or gruvbox if you prefer
+" Set Catppuccin theme
+" Available options: catppuccin_latte, catppuccin_frappe, catppuccin_macchiato, catppuccin_mocha
+colorscheme catppuccin_mocha
 
-" Customize airline theme to match
-let g:airline_theme = 'catppuccin'
+" Customize airline theme to match (if using airline)
+let g:airline_theme = 'catppuccin_mocha'
 
 " LSP Configuration
 if executable('pylsp')
