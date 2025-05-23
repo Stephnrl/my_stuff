@@ -285,3 +285,25 @@ echo "  • test-github-ssh    - Test your GitHub SSH connection"
 echo "  • add-github-key     - Add your GitHub key to SSH agent"
 echo "  • ssh-list           - List loaded SSH keys"
 echo "  • ssh-clear          - Clear all SSH keys from agent"
+
+
+
+azure_env() {
+    if ! command -v az &> /dev/null; then
+        echo "Azure CLI not found. Please install az cli first."
+        return 1
+    fi
+    
+    if ! az account show &> /dev/null; then
+        echo "Not logged into Azure. Please run 'az login' first."
+        return 1
+    fi
+    
+    echo "Setting Azure environment variables..."
+    export AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+    export AZURE_TENANT_ID=$(az account show --query tenantId -o tsv)
+    
+    echo "✓ AZURE_SUBSCRIPTION_ID: $AZURE_SUBSCRIPTION_ID"
+    echo "✓ AZURE_TENANT_ID: $AZURE_TENANT_ID"
+    echo "Azure environment variables set successfully!"
+}
