@@ -193,3 +193,51 @@ echo "  • Username@hostname"
 echo "  • Current directory (shortened if long)"
 echo "  • Git branch and detailed status"
 echo "  • Clean prompt symbol on new line"
+
+
+
+# SSH Agent Auto-Start Function
+# Add this entire section to your ~/.bashrc file
+
+# Function to start SSH agent if not running
+start_ssh_agent() {
+    # Check if ssh-agent is already running
+    if pgrep -u "$USER" ssh-agent > /dev/null; then
+        # Agent is running, but we need to find the socket
+        export SSH_AGENT_PID=$(pgrep -u "$USER" ssh-agent)
+        export SSH_AUTH_SOCK=$(find /tmp -path "*/ssh-*" -name "agent*" -uid $(id -u) 2>/dev/null | head -1)
+        
+        # Verify the connection works
+        if ! ssh-add -l >/dev/null 2>&1; then
+            # Connection failed, kill and restart
+            pkill -u "$USER" ssh-agent
+            eval "$(ssh-agent -s)" > /dev/null
+        fi
+    else
+        # No agent running, start one
+        eval "$(ssh-agent -s)" > /dev/null
+    fi
+    
+    # Add your GitHub SSH key if it's not already added
+    if ! ssh-add -l | grep -q "id_ed25519_github\|id_rsa_github"; then
+        # Try to add the key (will prompt for passphrase if set)
+        if [[ -f ~/.ssh/id_ed25519_github ]]; then
+            ssh-add ~/.ssh/id_ed25519_github 2>/dev/null
+        elif [[ -f ~/.ssh/id_rsa_github ]]; then
+            ssh-add ~/.ssh/id_rsa_github 2>/dev/null
+        fi
+    fi
+}
+
+# Function to show SSH agent status in prompt (optional)
+ssh_agent_status() {
+    if ssh-add -l >/dev/null 2>&1; then
+        local key_count=$(ssh-add -l | wc -l)
+        echo "${GREEN}🔑${key_count}${RESET}"
+    else
+        echo "${RED}🔒${RESET}"
+    fi
+}
+
+# Auto-start SSH agent when terminal opens
+start_ssh_agent
