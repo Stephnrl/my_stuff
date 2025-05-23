@@ -241,3 +241,47 @@ ssh_agent_status() {
 
 # Auto-start SSH agent when terminal opens
 start_ssh_agent
+
+
+
+
+
+# Function to display your public key for copying to GitHub
+show-github-key() {
+    if [[ -f ~/.ssh/id_ed25519_github.pub ]]; then
+        echo "Your GitHub public key (copy this to GitHub):"
+        echo "================================================"
+        cat ~/.ssh/id_ed25519_github.pub
+        echo "================================================"
+        echo "Go to: https://github.com/settings/ssh/new"
+    elif [[ -f ~/.ssh/id_rsa_github.pub ]]; then
+        echo "Your GitHub public key (copy this to GitHub):"
+        echo "================================================"
+        cat ~/.ssh/id_rsa_github.pub
+        echo "================================================"
+        echo "Go to: https://github.com/settings/ssh/new"
+    else
+        echo "No GitHub SSH key found. Generate one first with:"
+        echo "ssh-keygen -t ed25519 -C \"your_email@example.com\" -f ~/.ssh/id_ed25519_github"
+    fi
+}
+
+# Function to test GitHub SSH connection
+test-github-ssh() {
+    echo "Testing GitHub SSH connection..."
+    ssh -T git@github.com
+    
+    if [[ $? -eq 1 ]]; then
+        echo "✅ SSH connection to GitHub successful!"
+    else
+        echo "❌ SSH connection failed. Check your key and GitHub settings."
+    fi
+}
+
+echo "SSH Agent configuration loaded!"
+echo "Available commands:"
+echo "  • show-github-key    - Display your public key to add to GitHub"
+echo "  • test-github-ssh    - Test your GitHub SSH connection"
+echo "  • add-github-key     - Add your GitHub key to SSH agent"
+echo "  • ssh-list           - List loaded SSH keys"
+echo "  • ssh-clear          - Clear all SSH keys from agent"
