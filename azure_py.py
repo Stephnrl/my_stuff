@@ -49,17 +49,35 @@ EXAMPLES = '''
 # inventory_azure_cli.yml
 plugin: azure_cli
 
-# Filter by specific resource groups
+# Parse specific subscription with all resource groups
+subscriptions:
+  - "12345678-1234-1234-1234-123456789012"
+resource_groups:
+  - "*"  # This will get ALL resource groups in the subscription
+
+# Or parse multiple subscriptions with all their resource groups
+subscriptions:
+  - "subscription-id-1"
+  - "subscription-id-2"
+resource_groups: ["*"]
+
+# Parse all subscriptions and all resource groups (if not specified)
+# subscriptions: []  # Empty or omitted = all accessible subscriptions
+# resource_groups: [] # Empty or omitted = all resource groups
+
+# Filter by specific resource groups in specific subscription
+subscriptions:
+  - "12345678-1234-1234-1234-123456789012"
 resource_groups:
   - myapp-prod-rg
   - myapp-staging-rg
 
-# Filter by locations
+# Filter by locations (applied after getting VMs)
 locations:
   - eastus
   - westus2
 
-# Filter by tags
+# Filter by tags (applied after getting VMs)
 tag_filters:
   Environment: production
   Application: myapp
@@ -149,21 +167,26 @@ class InventoryModule(BaseInventoryPlugin, Constructable):
 
     def _get_vms_for_subscription(self, subscription_id, filters):
         """Get VMs for a specific subscription with filters."""
-        # Build the az vm list command
-        cmd_parts = [
-            'az vm list',
-            f'--subscription {subscription_id}',
-            '--show-details',
-            '--output json'
-        ]
+        resource_groups = filters.get('resource_groups', [])
         
-        # Add resource group filter if specified
-        if filters.get('resource_groups'):
-            rg_filter = ' '.join(filters['resource_groups'])
-            cmd_parts.append(f'--resource-group "{rg_filter}"')
-        
-        command = ' '.join(cmd_parts)
-        vms = self._run_az_command(command)
+        # If resource_groups contains '*' or is empty, get all VMs in subscription
+        if not resource_groups or '*' in resource_groups:
+            self.display.vvv(f"Getting all VMs in subscription {subscription_id}")
+            command = f'az vm list --subscription {subscription_id} --show-details --output json'
+            vms = self._run_az_command(command)
+        else:
+            # Get VMs from specific resource groups
+            all_vms = []
+            for rg in resource_groups:
+                self.display.vvv(f"Getting VMs from resource group: {rg}")
+                try:
+                    command = f'az vm list --subscription {subscription_id} --resource-group "{rg}" --show-details --output json'
+                    rg_vms = self._run_az_command(command)
+                    all_vms.extend(rg_vms)
+                except AnsibleError as e:
+                    self.display.warning(f"Could not get VMs from resource group {rg}: {e}")
+                    continue
+            vms = all_vms
         
         # Apply additional filters
         filtered_vms = []
@@ -350,72 +373,65 @@ enable_plugins = host_list, script, auto, yaml, ini, toml, azure_cli
 inventory_plugins = ./inventory_plugins
 
 ---
-# Example inventory configuration file
-# inventory_azure_cli.yml
+# Example inventory configuration files
 
+# inventory_all_rgs.yml - Get ALL resource groups in specific subscription
 plugin: azure_cli
 
-# Optional: Filter by specific subscriptions
-# subscriptions:
-#   - subscription-id-1
-#   - subscription-id-2
+subscriptions:
+  - "12345678-1234-1234-1234-123456789012"  # Your subscription ID
 
-# Optional: Filter by resource groups
 resource_groups:
-  - myapp-prod-rg
-  - myapp-dev-rg
+  - "*"  # Wildcard - gets ALL resource groups
 
-# Optional: Filter by locations
+# Optional filters (applied after getting all VMs)
 locations:
   - eastus
   - westus2
 
-# Optional: Filter by tags
 tag_filters:
   Environment: production
 
-# Create additional groups based on conditions
 groups:
-  # Group VMs by environment tag
   production: "tags.Environment == 'production'"
-  development: "tags.Environment == 'development'"
-  
-  # Group by VM role
   webservers: "'web' in (tags.Role | default(''))"
-  databases: "'db' in (tags.Role | default(''))"
-  
-  # Group by power state
-  running_vms: "power_state == 'VM running'"
-  stopped_vms: "power_state == 'VM stopped'"
 
-# Create keyed groups (groups named after variable values)
 keyed_groups:
   - key: location
     prefix: location
-    separator: "_"
+  - key: resource_group  
+    prefix: rg
+
+---
+# inventory_multiple_subs_all_rgs.yml - Multiple subscriptions, all RGs each
+plugin: azure_cli
+
+subscriptions:
+  - "subscription-id-1"
+  - "subscription-id-2"
+  - "subscription-id-3"
+
+resource_groups: ["*"]  # All resource groups in each subscription
+
+---
+# inventory_everything.yml - All accessible subscriptions and resource groups
+plugin: azure_cli
+
+# Empty/omitted subscriptions = all accessible subscriptions
+# Empty/omitted resource_groups = all resource groups
+# This is the most comprehensive discovery
+
+groups:
+  production: "tags.Environment == 'production'"
+  development: "tags.Environment == 'development'"
+
+keyed_groups:
+  - key: subscription_id
+    prefix: sub
+  - key: location
+    prefix: loc
   - key: resource_group
     prefix: rg
-    separator: "_"
-  - key: tags.Environment | default('untagged')
-    prefix: env
-    separator: "_"
-
-# Compose additional variables
-compose:
-  # Set ansible_host intelligently
-  ansible_host: public_ip | default(private_ip) | default(name)
-  
-  # Create useful derived variables
-  vm_size_family: vm_size.split('_')[0] if vm_size else 'unknown'
-  is_production: tags.Environment == 'production'
-  short_location: location[:3] if location else 'unk'
-  
-  # Network info
-  has_public_ip: public_ip is defined and public_ip != ""
-  
-  # OS detection
-  is_windows: os_type == 'Windows'
-  is_linux: os_type == 'Linux'
 
 ---
 # Usage examples:
