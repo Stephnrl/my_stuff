@@ -74,26 +74,23 @@ Get-IISAppPool -Name "workbookleader"
 # Check Windows Event Logs
 Get-EventLog -LogName Application -Source "IIS*" -Newest 10
 Get-EventLog -LogName System -Newest 30 | Where-Object {$_.Source -like "*IIS*"}
+C:\WINDOWS\system32\inetsrv\appcmd.exe list module | findstr -i aspnet
 
-# Check the current deployment structure
-Get-ChildItem "D:\Sites\workbookloader\1.0.97-9-setup-azure-configuration-alt.273\" | Select-Object Name, @{Name="Type";Expression={if($_.PSIsContainer){"Directory"}else{"File"}}}
+Get-ChildItem "D:\Sites\workbookloader\1.0.97-9-setup-azure-configuration-alt.273\" -Recurse | 
+    Select-Object FullName, @{Name="Type";Expression={if($_.PSIsContainer){"Directory"}else{"File"}}}, Length, LastWriteTime | 
+    Sort-Object FullName
 
-# Get the exact site configuration
-Get-IISSite | Where-Object {$_.Name -like "*workbook*"} | ForEach-Object {
-    Write-Host "Site Name: $($_.Name)"
-    Write-Host "State: $($_.State)"
-    Write-Host "Physical Path: $($_.Applications[0].VirtualDirectories[0].PhysicalPath)"
-    Write-Host "Bindings: $($_.Bindings.BindingInformation)"
-    Write-Host "---"
-}
+$deployPath = "D:\Sites\workbookloader\1.0.97-9-setup-azure-configuration-alt.273\"
 
-# Check if there are multiple applications under the site
-Get-IISSite | Where-Object {$_.Name -like "*workbook*"} | ForEach-Object {
-    $site = $_
-    Write-Host "Site: $($site.Name)"
-    $site.Applications | ForEach-Object {
-        Write-Host "  App Path: $($_.Path)"
-        Write-Host "  Physical Path: $($_.VirtualDirectories[0].PhysicalPath)"
-        Write-Host "  App Pool: $($_.ApplicationPoolName)"
+# Check for essential files
+@("appsettings.json", "web.config") | ForEach-Object {
+    if (Test-Path "$deployPath\$_") {
+        Write-Host "✅ Found: $_"
+    } else {
+        Write-Host "❌ Missing: $_"
     }
 }
+
+# Look for the main application executable
+Get-ChildItem $deployPath -Filter "*.exe" | Select-Object Name
+Get-ChildItem $deployPath -Filter "*.dll" | Where-Object {$_.Name -like "*workbook*"} | Select-Object Name
