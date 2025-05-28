@@ -26,12 +26,12 @@ Get-WmiObject -Class Win32_PerfRawData_PerfProc_Process |
     Format-Table -AutoSize
 
 
-Get-Counter "\Process(*)\% Processor Time" -SampleInterval 2 -MaxSamples 5 | 
-    Select-Object -ExpandProperty CounterSamples | 
-    Where-Object {$_.CookedValue -gt 5} |
-    Sort-Object CookedValue -Descending | 
-    Select-Object -First 10 @{
-        Name='Process'; Expression={$_.InstanceName}
-    }, @{
-        Name='CPU %'; Expression={[math]::Round($_.CookedValue,2)}
-    } | Format-Table -AutoSize
+Get-WmiObject -Query "SELECT * FROM Win32_Process WHERE Name='svchost.exe'" | ForEach-Object {
+    $processId = $_.ProcessId
+    $services = Get-WmiObject -Query "SELECT * FROM Win32_Service WHERE ProcessId=$processId"
+    [PSCustomObject]@{
+        ProcessId = $processId
+        Services = ($services.Name -join ', ')
+        CPU = (Get-Process -Id $processId -ErrorAction SilentlyContinue).CPU
+    }
+} | Sort-Object CPU -Descending | Format-Table -Wrap
