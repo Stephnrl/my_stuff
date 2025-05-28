@@ -7,6 +7,26 @@ try {
     Write-Host "Status Code: $($_.Exception.Response.StatusCode.value__)"
 }
 
+try {
+    $response = Invoke-WebRequest -Uri "http://localhost:94/workbookloader/api/version" -UseBasicParsing -MaximumRedirection 0
+} catch {
+    Write-Host "Response: $($_.Exception.Response.StatusCode)"
+    Write-Host "Headers: $($_.Exception.Response.Headers)"
+}
+
+Get-IISSite | Where-Object {$_.Name -like "*workbook*"} | Select-Object Name, Bindings
+
+
+try {
+    # Skip certificate validation for testing
+    [System.Net.ServicePointManager]::ServerCertificateValidationCallback = {$true}
+    $response = Invoke-WebRequest -Uri "https://localhost:94/workbookloader/api/version" -UseBasicParsing -TimeoutSec 10
+    Write-Host "HTTPS Status: $($response.StatusCode)"
+    Write-Host "HTTPS Content: $($response.Content)"
+} catch {
+    Write-Host "HTTPS Error: $($_.Exception.Message)"
+}
+
 
 Get-IISSite | Select-Object Name, State, @{Name="Bindings";Expression={$_.Bindings | ForEach-Object {"$($_.Protocol):$($_.BindingInformation)"}}}
 
