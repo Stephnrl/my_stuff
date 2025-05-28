@@ -73,7 +73,27 @@ Get-ChildItem "*.exe" | Select-Object Name
 Get-IISAppPool -Name "workbookleader"
 # Check Windows Event Logs
 Get-EventLog -LogName Application -Source "IIS*" -Newest 10
-Get-EventLog -LogName System -Newest 10 | Where-Object {$_.Source -like "*IIS*"}
+Get-EventLog -LogName System -Newest 30 | Where-Object {$_.Source -like "*IIS*"}
 
-# Check IIS logs (usually in C:\inetpub\logs\LogFiles\)
-Get-ChildItem C:\inetpub\logs\LogFiles\W3SVC* | Get-ChildItem | Sort-Object LastWriteTime -Descending | Select-Object -First 3
+# Check the current deployment structure
+Get-ChildItem "D:\Sites\workbookloader\1.0.97-9-setup-azure-configuration-alt.273\" | Select-Object Name, @{Name="Type";Expression={if($_.PSIsContainer){"Directory"}else{"File"}}}
+
+# Get the exact site configuration
+Get-IISSite | Where-Object {$_.Name -like "*workbook*"} | ForEach-Object {
+    Write-Host "Site Name: $($_.Name)"
+    Write-Host "State: $($_.State)"
+    Write-Host "Physical Path: $($_.Applications[0].VirtualDirectories[0].PhysicalPath)"
+    Write-Host "Bindings: $($_.Bindings.BindingInformation)"
+    Write-Host "---"
+}
+
+# Check if there are multiple applications under the site
+Get-IISSite | Where-Object {$_.Name -like "*workbook*"} | ForEach-Object {
+    $site = $_
+    Write-Host "Site: $($site.Name)"
+    $site.Applications | ForEach-Object {
+        Write-Host "  App Path: $($_.Path)"
+        Write-Host "  Physical Path: $($_.VirtualDirectories[0].PhysicalPath)"
+        Write-Host "  App Pool: $($_.ApplicationPoolName)"
+    }
+}
