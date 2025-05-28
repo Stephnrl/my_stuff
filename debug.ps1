@@ -35,3 +35,12 @@ Get-WmiObject -Query "SELECT * FROM Win32_Process WHERE Name='svchost.exe'" | Fo
         CPU = (Get-Process -Id $processId -ErrorAction SilentlyContinue).CPU
     }
 } | Sort-Object CPU -Descending | Format-Table -Wrap
+
+
+
+
+# Just get the most recent errors (last 10)
+Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 10 | Select-Object TimeCreated, ProviderName, Id | Format-Table
+
+# Look for deployment-specific errors only
+Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 | Where-Object {$_.Message -match "Deploy|PowerShell"} | Select-Object TimeCreated, Message -First 5
