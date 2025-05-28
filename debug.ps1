@@ -39,8 +39,15 @@ Get-WmiObject -Query "SELECT * FROM Win32_Process WHERE Name='svchost.exe'" | Fo
 
 
 
-# Just get the most recent errors (last 10)
-Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 10 | Select-Object TimeCreated, ProviderName, Id | Format-Table
+Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddDays(-7)} -MaxEvents 100 | Where-Object {$_.Message -match "Invoke-RemoteDeployment|Test Web Application|RuntimeException|DevTestLabs"} | Select-Object TimeCreated, ProviderName, Message | Format-List
 
-# Look for deployment-specific errors only
-Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2} -MaxEvents 50 | Where-Object {$_.Message -match "Deploy|PowerShell"} | Select-Object TimeCreated, Message -First 5
+
+Get-WinEvent -FilterHashtable @{LogName='Windows PowerShell'; Level=2; StartTime=(Get-Date).AddDays(-7)} -MaxEvents 50 | Select-Object TimeCreated, Id, Message | Format-List
+
+Get-ChildItem C:\ -Recurse -Name "*deploy*","*error*","*.log" -ErrorAction SilentlyContinue | Where-Object {(Get-Item $_ -ErrorAction SilentlyContinue).LastWriteTime -gt (Get-Date).AddDays(-7)} | ForEach-Object {
+    Write-Host "Found: $_"
+    Get-Content $_ -Tail 10 -ErrorAction SilentlyContinue
+}
+
+Get-ChildItem $env:TEMP, "C:\Windows\Temp" -Name "*.log" -ErrorAction SilentlyContinue | Where-Object {(Get-Item "$env:TEMP\$_" -ErrorAction SilentlyContinue).LastWriteTime -gt (Get-Date).AddDays(-7)}
+
