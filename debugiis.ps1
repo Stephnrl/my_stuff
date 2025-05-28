@@ -70,27 +70,18 @@ Get-ChildItem "*.exe" | Select-Object Name
 
 
 
-Get-IISAppPool -Name "workbookleader"
-# Check Windows Event Logs
-Get-EventLog -LogName Application -Source "IIS*" -Newest 10
-Get-EventLog -LogName System -Newest 30 | Where-Object {$_.Source -like "*IIS*"}
-C:\WINDOWS\system32\inetsrv\appcmd.exe list module | findstr -i aspnet
+# Look for more specific error details in the last hour
+Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddHours(-1)} | 
+    Where-Object {$_.Message -like "*workbook*" -or $_.Message -like "*APPHOST*" -or $_.LevelDisplayName -eq "Error"} | 
+    Select-Object TimeCreated, LevelDisplayName, Id, Message | 
+    Sort-Object TimeCreated | Format-Table -Wrap
 
-Get-ChildItem "D:\Sites\workbookloader\1.0.97-9-setup-azure-configuration-alt.273\" -Recurse | 
-    Select-Object FullName, @{Name="Type";Expression={if($_.PSIsContainer){"Directory"}else{"File"}}}, Length, LastWriteTime | 
-    Sort-Object FullName
+# Also check System log for IIS Worker Process issues
+Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddHours(-1)} | 
+    Where-Object {$_.Message -like "*w3wp*" -or $_.Message -like "*IIS*"} | 
+    Select-Object TimeCreated, LevelDisplayName, Message | Format-List
 
-$deployPath = "D:\Sites\workbookloader\1.0.97-9-setup-azure-configuration-alt.273\"
 
-# Check for essential files
-@("appsettings.json", "web.config") | ForEach-Object {
-    if (Test-Path "$deployPath\$_") {
-        Write-Host "✅ Found: $_"
-    } else {
-        Write-Host "❌ Missing: $_"
-    }
-}
-
-# Look for the main application executable
-Get-ChildItem $deployPath -Filter "*.exe" | Select-Object Name
-Get-ChildItem $deployPath -Filter "*.dll" | Where-Object {$_.Name -like "*workbook*"} | Select-Object Name
+# Import IIS module and check app pool configuration
+Import-Module WebAdministration
+Get-IISAppPool -Name "workbookloader" | Select-Object Name, State, ProcessModel, Recycling
