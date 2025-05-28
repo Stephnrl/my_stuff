@@ -67,3 +67,13 @@ Get-ChildItem "D:\Sites\workbookloader\*.dll" | Select-Object Name -First 5
 cd "D:\Sites\workbookloader\"
 # Look for the main executable
 Get-ChildItem "*.exe" | Select-Object Name
+
+
+
+Get-IISAppPool -Name "workbookleader"
+# Check Windows Event Logs
+Get-EventLog -LogName Application -Source "IIS*" -Newest 10
+Get-EventLog -LogName System -Newest 10 | Where-Object {$_.Source -like "*IIS*"}
+
+# Check IIS logs (usually in C:\inetpub\logs\LogFiles\)
+Get-ChildItem C:\inetpub\logs\LogFiles\W3SVC* | Get-ChildItem | Sort-Object LastWriteTime -Descending | Select-Object -First 3
