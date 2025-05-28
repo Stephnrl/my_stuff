@@ -24,3 +24,14 @@ Get-WmiObject -Class Win32_PerfRawData_PerfProc_Process |
     Select-Object -First 10 Name, 
     @{Name="Memory MB";Expression={[math]::round($_.WorkingSetSize/1MB,2)}} |
     Format-Table -AutoSize
+
+
+Get-Counter "\Process(*)\% Processor Time" -SampleInterval 2 -MaxSamples 5 | 
+    Select-Object -ExpandProperty CounterSamples | 
+    Where-Object {$_.CookedValue -gt 5} |
+    Sort-Object CookedValue -Descending | 
+    Select-Object -First 10 @{
+        Name='Process'; Expression={$_.InstanceName}
+    }, @{
+        Name='CPU %'; Expression={[math]::Round($_.CookedValue,2)}
+    } | Format-Table -AutoSize
