@@ -1,0 +1,22 @@
+{
+  "snapshot_session": {
+    "timestamp": "{{ ansible_date_time.iso8601 }}",
+    "hostname": "{{ ansible_hostname }}",
+    "vm_name": "{{ vm_details.name }}",
+    "resource_group": "{{ azure_resource_group }}",
+    "subscription_id": "{{ azure_subscription_id }}",
+    "upgrade_package": "{{ upgrade_package | default('unknown') }}"
+  },
+  "snapshots": [
+{% for snapshot in created_snapshots %}
+    {
+      "disk_name": "{{ snapshot.disk_name }}",
+      "disk_type": "{{ snapshot.disk_type }}",
+      "snapshot_name": "{{ snapshot.snapshot_name }}",
+      "snapshot_id": "{{ snapshot.snapshot_id }}",
+      "source_disk_id": "{{ snapshot.source_disk_id }}",
+      "creation_time": "{{ snapshot.creation_time }}"
+    }{% if not loop.last %},{% endif %}
+{% endfor %}
+  ]
+}
