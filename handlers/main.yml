@@ -1,0 +1,17 @@
+---
+- name: reload systemd
+  systemd:
+    daemon_reload: yes
+
+- name: restart backup services
+  systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - ghe-backup.timer
+  ignore_errors: yes
+
+- name: restart backup timer
+  systemd:
+    name: ghe-backup.timer
+    state: restarted
