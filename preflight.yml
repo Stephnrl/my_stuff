@@ -1,0 +1,69 @@
+---
+- name: GHE Preflight Checks
+  block:
+    - name: Check if upgrade package exists
+      stat:
+        path: "{{ upgrade_package }}"
+      register: pkg_stat
+      failed_when: not pkg_stat.stat.exists
+
+    - name: Verify package integrity
+      shell: |
+        file "{{ upgrade_package }}" | grep -q "GitHub Enterprise"
+      register: pkg_integrity
+      failed_when: pkg_integrity.rc != 0
+
+    - name: Check available disk space
+      shell: df -BG {{ upgrade_package_path }} | tail -1 | awk '{print $4}' | sed 's/G//'
+      register: available_space
+      failed_when: available_space.stdout | int < required_disk_space_gb
+
+    - name: Check system memory
+      shell: free -g | grep '^Mem:' | awk '{print $2}'
+      register: system_memory
+      failed_when: system_memory.stdout | int < min_memory_gb
+
+    - name: Verify current system health
+      uri:
+        url: "https://{{ inventory_hostname }}:{{ ghe_admin_port }}/setup/api/status"
+        method: GET
+        validate_certs: no
+        status_code: 200
+      register: pre_health_check
+
+    - name: Create Azure VM snapshots before upgrade
+      include_role:
+        name: common/azure_snapshot
+      when: 
+        - ansible_system_vendor == "Microsoft Corporation"
+        - ansible_product_name == "Virtual Machine"
+        - create_azure_snapshots | default(true)
+      tags:
+        - azure_snapshots
+        - backup
+
+    - name: Verify snapshots were created successfully
+      fail:
+        msg: "Critical: Azure snapshots failed - cannot proceed with upgrade"
+      when: 
+        - create_azure_snapshots | default(true)
+        - snapshot_creation_failed | default(false)
+
+    - name: Display preflight results
+      debug:
+        msg: |
+          Preflight checks completed successfully:
+          - Package: {{ upgrade_package }} ({{ (pkg_stat.stat.size / 1024 / 1024 / 1024) | round(2) }}GB)
+          - Available space: {{ available_space.stdout }}GB
+          - System memory: {{ system_memory.stdout }}GB
+          - System health: {{ pre_health_check.json.status | default('OK') }}
+
+  rescue:
+    - name: Preflight failure notification
+      fail:
+        msg: |
+          Preflight checks failed. Please review the following:
+          - Ensure upgrade package exists and is valid
+          - Verify sufficient disk space ({{ required_disk_space_gb }}GB required)
+          - Check system memory ({{ min_memory_gb }}GB required)
+          - Verify all services are healthy
