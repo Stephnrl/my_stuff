@@ -1,0 +1,42 @@
+---
+- name: Cleanup old snapshots
+  block:
+    - name: Get existing snapshots for this VM
+      azure.azcollection.azure_rm_snapshot_info:
+        subscription_id: "{{ azure_subscription_id }}"
+        resource_group: "{{ azure_resource_group }}"
+        tags:
+          - "Hostname:{{ ansible_hostname }}"
+          - "Purpose:Upgrade-Backup"
+      register: existing_snapshots
+      delegate_to: localhost
+
+    - name: Identify old snapshots to remove
+      set_fact:
+        snapshots_to_remove: |
+          {%- set old_snapshots = [] -%}
+          {%- set snapshots_by_disk = existing_snapshots.snapshots | groupby('tags.DiskName') -%}
+          {%- for disk_name, disk_snapshots in snapshots_by_disk -%}
+            {%- set sorted_snapshots = disk_snapshots | sort(attribute='time_created', reverse=true) -%}
+            {%- if sorted_snapshots | length > max_snapshots_per_disk -%}
+              {%- for snapshot in sorted_snapshots[max_snapshots_per_disk:] -%}
+                {%- set _ = old_snapshots.append(snapshot) -%}
+              {%- endfor -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ old_snapshots }}
+
+    - name: Remove old snapshots
+      azure.azcollection.azure_rm_snapshot:
+        subscription_id: "{{ azure_subscription_id }}"
+        resource_group: "{{ azure_resource_group }}"
+        name: "{{ item.name }}"
+        state: absent
+      loop: "{{ snapshots_to_remove }}"
+      delegate_to: localhost
+      when: snapshots_to_remove | length > 0
+
+    - name: Log cleanup results
+      debug:
+        msg: "Removed {{ snapshots_to_remove | length }} old snapshots"
+      when: snapshots_to_remove | length > 0
