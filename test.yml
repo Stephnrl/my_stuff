@@ -1,0 +1,16 @@
+- name: Display SSH public key for GHES configuration
+  debug:
+    msg: |
+      
+      =====================================================
+      SSH PUBLIC KEY FOR GITHUB ENTERPRISE SERVER
+      =====================================================
+      
+      Add this public key to your GitHub Enterprise Server
+      admin SSH access under: Management Console > Privacy > SSH Keys
+      
+      {{ ssh_public_key.stdout }}
+      
+      =====================================================
+  when: ssh_public_key is defined
+  tags: ['display-key']
