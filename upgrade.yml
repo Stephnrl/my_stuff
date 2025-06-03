@@ -1,0 +1,37 @@
+---
+- name: Start GitHub Enterprise upgrade
+  command: "ghe-upgrade {{ upgrade_package }}"
+  async: "{{ upgrade_timeout }}"
+  poll: 0
+  register: upgrade_async
+  
+- name: Save upgrade job info
+  copy:
+    content: |
+      Job ID: {{ upgrade_async.ansible_job_id }}
+      Started: {{ ansible_date_time.iso8601 }}
+      Package: {{ upgrade_package }}
+    dest: /tmp/upgrade-job-info
+    
+- name: Log upgrade start
+  lineinfile:
+    path: /tmp/upgrade.log
+    line: "{{ ansible_date_time.iso8601 }}: Upgrade started (Job: {{ upgrade_async.ansible_job_id }})"
+    
+- name: Monitor upgrade progress initially
+  async_status:
+    jid: "{{ upgrade_async.ansible_job_id }}"
+  register: upgrade_result
+  until: upgrade_result.finished
+  retries: 10
+  delay: 60
+  ignore_errors: yes
+  
+- name: Wait for system to become unreachable (reboot)
+  wait_for:
+    host: "{{ inventory_hostname }}"
+    port: "{{ ghe_ssh_port }}"
+    state: stopped
+    timeout: 600
+    delay: 120
+  ignore_errors: yes
