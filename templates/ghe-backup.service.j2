@@ -1,0 +1,20 @@
+[Unit]
+Description=GitHub Enterprise Server Backup
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+User={{ ghe_backup_user }}
+Group={{ ghe_backup_user }}
+WorkingDirectory={{ ghe_backup_home }}/backup-utils
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart={{ ghe_backup_home }}/backup-utils/bin/ghe-backup{% if ghe_verbose_logging %} -v{% endif %}
+StandardOutput=append:{{ ghe_log_dir }}/backup.log
+StandardError=append:{{ ghe_log_dir }}/backup-error.log
+TimeoutStartSec=0
+# Prevent multiple backup jobs from running simultaneously
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
