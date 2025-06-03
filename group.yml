@@ -1,0 +1,42 @@
+---
+# Connection settings
+ansible_port: 122
+ansible_user: admin
+ansible_ssh_private_key_file: ~/.ssh/ghe_key
+
+# GHE specific ports
+ghe_ssh_port: 122
+ghe_admin_port: 8443
+ghe_web_port: 443
+
+# Upgrade settings
+upgrade_package: "/data/user/common/github-enterprise-3.11.0.pkg"
+upgrade_package_path: "/data/user/common"
+upgrade_timeout: 7200
+migration_timeout: 3600
+connection_timeout: 1200
+
+# Environment and verification
+env: "staging"
+
+# Health check settings
+health_check_retries: 15
+health_check_delay: 30
+
+# Logging
+log_file_path: "/var/log/ansible"
+
+# Notification settings
+notify_teams: true
+teams_webhook_url: "{{ vault_teams_webhook }}"
+notify_on_failure: true
+notify_on_success: true
+
+# Azure Snapshot Configuration
+create_azure_snapshots: true
+vm_resource_group: "rg-ghes-production"
+snapshot_prefix: "ghes-upgrade"
+snapshot_required: true
+cleanup_old_snapshots: true
+max_snapshots_per_disk: 3
+azure_subscription_id: "{{ vault_azure_subscription_id }}"
