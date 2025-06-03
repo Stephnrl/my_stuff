@@ -1,0 +1,25 @@
+---
+# Azure Snapshot Configuration
+snapshot_prefix: "snap"
+snapshot_retention_days: 7
+snapshot_incremental: false
+create_os_snapshot: true
+create_data_snapshots: true
+
+# Snapshot naming convention
+snapshot_name_format: "{{ snapshot_prefix }}-{{ ansible_hostname }}-{{ item.name }}-{{ ansible_date_time.epoch }}"
+
+# Azure authentication (can be overridden in group_vars)
+azure_subscription_id: "{{ lookup('env', 'AZURE_SUBSCRIPTION_ID') }}"
+azure_resource_group: "{{ vm_resource_group | default(ansible_resource_group) }}"
+
+# Cleanup settings
+cleanup_old_snapshots: true
+max_snapshots_per_disk: 3
+
+# Tags for snapshots
+snapshot_tags:
+  Purpose: "Upgrade-Backup"
+  Environment: "{{ env | default('production') }}"
+  CreatedBy: "Ansible"
+  Hostname: "{{ ansible_hostname }}"
