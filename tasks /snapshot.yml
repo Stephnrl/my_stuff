@@ -1,0 +1,62 @@
+---
+- name: Create Azure disk snapshots
+  block:
+    - name: Create snapshots for each disk
+      azure.azcollection.azure_rm_snapshot:
+        subscription_id: "{{ azure_subscription_id }}"
+        resource_group: "{{ azure_resource_group }}"
+        name: "{{ snapshot_prefix }}-{{ ansible_hostname }}-{{ item.name }}-{{ ansible_date_time.epoch }}"
+        location: "{{ vm_details.location }}"
+        creation_data:
+          create_option: Copy
+          source_id: "{{ item.id }}"
+        incremental: "{{ snapshot_incremental }}"
+        tags: "{{ snapshot_tags | combine({
+          'DiskName': item.name,
+          'DiskType': item.type,
+          'SourceDiskId': item.id,
+          'SnapshotDate': ansible_date_time.iso8601
+        }) }}"
+        state: present
+      register: snapshot_results
+      loop: "{{ disks_to_snapshot }}"
+      delegate_to: localhost
+
+    - name: Store snapshot information
+      set_fact:
+        created_snapshots: |
+          {%- set snapshots = [] -%}
+          {%- for result in snapshot_results.results -%}
+            {%- set _ = snapshots.append({
+                'disk_name': result.item.name,
+                'disk_type': result.item.type,
+                'snapshot_name': result.state.name,
+                'snapshot_id': result.state.id,
+                'creation_time': ansible_date_time.iso8601,
+                'source_disk_id': result.item.id
+            }) -%}
+          {%- endfor -%}
+          {{ snapshots }}
+
+    - name: Generate snapshot manifest
+      template:
+        src: snapshot_manifest.j2
+        dest: "/tmp/ghes_snapshots_{{ ansible_date_time.epoch }}.json"
+      delegate_to: localhost
+
+    - name: Display created snapshots
+      debug:
+        msg: |
+          Successfully created {{ created_snapshots | length }} snapshots:
+          {% for snapshot in created_snapshots %}
+          - {{ snapshot.snapshot_name }} ({{ snapshot.disk_type }} disk: {{ snapshot.disk_name }})
+          {% endfor %}
+
+  rescue:
+    - name: Log snapshot creation failure
+      debug:
+        msg: "Failed to create snapshot: {{ ansible_failed_result }}"
+      
+    - name: Set failure flag
+      set_fact:
+        snapshot_creation_failed: true
