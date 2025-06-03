@@ -1,0 +1,26 @@
+---
+- name: Enable maintenance mode
+  command: ghe-maintenance -s
+  register: maintenance_enable
+  
+- name: Wait for maintenance mode to be active
+  command: ghe-maintenance -q
+  register: maintenance_status
+  until: "'maintenance mode is on' in maintenance_status.stdout"
+  retries: 10
+  delay: 5
+  
+- name: Create upgrade tracking files
+  file:
+    path: "{{ item }}"
+    state: touch
+    mode: '0644'
+  loop:
+    - /tmp/upgrade-in-progress
+    - /tmp/upgrade-start-{{ ansible_date_time.epoch }}
+    
+- name: Log maintenance mode activation
+  lineinfile:
+    path: /tmp/upgrade.log
+    line: "{{ ansible_date_time.iso8601 }}: Maintenance mode enabled"
+    create: yes
