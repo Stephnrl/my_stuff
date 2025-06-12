@@ -1,0 +1,160 @@
+name: Packer Image Builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      os_selection:
+        description: 'Select OS to build'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - rhel9
+        - ubuntu22
+        - windows2022
+        - windows11
+        - linux-only
+        - windows-only
+      parallel_builds:
+        description: 'Max parallel builds'
+        required: false
+        default: '2'
+        type: choice
+        options:
+        - '1'
+        - '2'
+        - '4'
+
+env:
+  PACKER_LOG: 1
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  determine-builds:
+    runs-on: ubuntu-latest
+    outputs:
+      build-matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    - id: set-matrix
+      run: |
+        case "${{ github.event.inputs.os_selection }}" in
+          "all")
+            echo 'matrix=[
+              {"os":"rhel9","type":"linux","dir":"packer/linux"},
+              {"os":"ubuntu22","type":"linux","dir":"packer/linux"},
+              {"os":"windows2022","type":"windows","dir":"packer/windows"},
+              {"os":"windows11","type":"windows","dir":"packer/windows"}
+            ]' >> $GITHUB_OUTPUT
+            ;;
+          "linux-only")
+            echo 'matrix=[
+              {"os":"rhel9","type":"linux","dir":"packer/linux"},
+              {"os":"ubuntu22","type":"linux","dir":"packer/linux"}
+            ]' >> $GITHUB_OUTPUT
+            ;;
+          "windows-only")
+            echo 'matrix=[
+              {"os":"windows2022","type":"windows","dir":"packer/windows"},
+              {"os":"windows11","type":"windows","dir":"packer/windows"}
+            ]' >> $GITHUB_OUTPUT
+            ;;
+          "rhel9")
+            echo 'matrix=[{"os":"rhel9","type":"linux","dir":"packer/linux"}]' >> $GITHUB_OUTPUT
+            ;;
+          "ubuntu22")
+            echo 'matrix=[{"os":"ubuntu22","type":"linux","dir":"packer/linux"}]' >> $GITHUB_OUTPUT
+            ;;
+          "windows2022")
+            echo 'matrix=[{"os":"windows2022","type":"windows","dir":"packer/windows"}]' >> $GITHUB_OUTPUT
+            ;;
+          "windows11")
+            echo 'matrix=[{"os":"windows11","type":"windows","dir":"packer/windows"}]' >> $GITHUB_OUTPUT
+            ;;
+        esac
+
+  packer-build:
+    needs: determine-builds
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.determine-builds.outputs.build-matrix) }}
+      fail-fast: false
+      max-parallel: ${{ fromJson(github.event.inputs.parallel_builds) }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+    
+    - name: Setup Packer
+      uses: hashicorp/setup-packer@main
+      with:
+        version: "latest"
+    
+    - name: Create build timestamp
+      id: timestamp
+      run: echo "timestamp=$(date +'%Y-%m-%d-%H%M')" >> $GITHUB_OUTPUT
+    
+    - name: Initialize Packer
+      working-directory: ${{ matrix.dir }}
+      run: packer init .
+    
+    - name: Validate Packer template
+      working-directory: ${{ matrix.dir }}
+      run: |
+        packer validate \
+          -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+          -var="sig_subscription_id=${{ secrets.SIG_SUBSCRIPTION_ID }}" \
+          -var="sig_resource_group=${{ secrets.SIG_RESOURCE_GROUP }}" \
+          -var="sig_gallery_name=${{ secrets.SIG_GALLERY_NAME }}" \
+          -var="build_timestamp=${{ steps.timestamp.outputs.timestamp }}" \
+          .
+    
+    - name: Build ${{ matrix.os }} image
+      working-directory: ${{ matrix.dir }}
+      env:
+        # GitHub Actions automatically provides these for OIDC
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+        ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+      run: |
+        packer build \
+          -only="${{ matrix.os }}" \
+          -var="subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}" \
+          -var="sig_subscription_id=${{ secrets.SIG_SUBSCRIPTION_ID }}" \
+          -var="sig_resource_group=${{ secrets.SIG_RESOURCE_GROUP }}" \
+          -var="sig_gallery_name=${{ secrets.SIG_GALLERY_NAME }}" \
+          -var="build_timestamp=${{ steps.timestamp.outputs.timestamp }}" \
+          .
+      timeout-minutes: 120
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: ${{ matrix.os }}-build-artifacts
+        path: |
+          ${{ matrix.dir }}/*.json
+          ${{ matrix.dir }}/packer_log.txt
+        retention-days: 30
+
+  notify-completion:
+    needs: [determine-builds, packer-build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Build Summary
+      run: |
+        echo "## Packer Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**OS Selection:** ${{ github.event.inputs.os_selection }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Build Status:** ${{ needs.packer-build.result }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Timestamp:** $(date)" >> $GITHUB_STEP_SUMMARY
