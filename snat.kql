@@ -1,1 +1,42 @@
 
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| extend BackendHost = tostring(parse_url(RequestUrl).Host)
+| summarize 
+    RequestCount = count(),
+    UniqueBackends = dcount(BackendHost),
+    AvgBackendTime = avg(BackendTime),
+    MaxBackendTime = max(BackendTime),
+    AvgTotalTime = avg(TotalTime)
+    by BackendHost
+| order by RequestCount desc
+
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(4h)
+| where BackendTime > 5000  // Connections taking >5 seconds
+| summarize 
+    SlowConnections = count(),
+    AvgBackendTime = avg(BackendTime),
+    MaxBackendTime = max(BackendTime)
+    by bin(TimeGenerated, 5m)
+| render timechart
+
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(4h)
+| where ResponseCode >= 500
+| summarize 
+    Failures = count(),
+    AvgBackendTime = avg(BackendTime),
+    FailureCodes = make_set(ResponseCode)
+    by bin(TimeGenerated, 5m)
+| render timechart
+
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(1h)
+| extend ConnectionOverhead = BackendTime - (TotalTime - ClientTime)
+| where ConnectionOverhead > 3000  // High connection establishment time
+| summarize count() by bin(TimeGenerated, 1m)
+| render timechart
