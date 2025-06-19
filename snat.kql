@@ -40,3 +40,47 @@ ApiManagementGatewayLogs
 | where ConnectionOverhead > 3000  // High connection establishment time
 | summarize count() by bin(TimeGenerated, 1m)
 | render timechart
+
+
+
+RAW
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| extend BackendHost = tostring(parse_url(RequestUrl).Host)
+| where isempty(BackendHost) or BackendHost == ""
+| take 50
+| project TimeGenerated, RequestUrl, BackendId, Method, ResponseCode, BackendTime, TotalTime
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| extend BackendHost = tostring(parse_url(RequestUrl).Host)
+| where isempty(BackendHost) or BackendHost == ""
+| summarize 
+    Count = count(),
+    SampleUrls = make_set(RequestUrl, 10)
+| project Count, SampleUrls
+
+
+
+BLANK?
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| summarize 
+    RequestCount = count(),
+    AvgBackendTime = avg(BackendTime),
+    MaxBackendTime = max(BackendTime),
+    AvgTotalTime = avg(TotalTime)
+    by BackendId
+| order by RequestCount desc
+
+ApiManagementGatewayLogs
+| where TimeGenerated > ago(24h)
+| where isnotempty(BackendId)  // Only requests with actual backends
+| where ResponseCode < 500 or ResponseCode >= 600  // Exclude server errors for now
+| extend BackendHost = tostring(parse_url(RequestUrl).Host)
+| summarize 
+    RequestCount = count(),
+    AvgBackendTime = avg(BackendTime),
+    MaxBackendTime = max(BackendTime)
+    by BackendHost, BackendId
+| order by RequestCount desc
