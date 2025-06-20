@@ -1,32 +1,16 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Checks for IP address conflicts across Azure VNets before creating a new subnet.
-
-.DESCRIPTION
-    This script validates that a proposed subnet CIDR doesn't conflict with existing
-    VNets and subnets across one or all Azure subscriptions.
+    Simple Azure IP conflict checker using Azure CLI and basic pattern matching.
 
 .PARAMETER NewSubnetCidr
     The CIDR block you want to validate (e.g., "10.42.189.0/24")
 
 .PARAMETER CheckAllSubscriptions
-    Switch to check across all accessible subscriptions instead of just the current one
-
-.PARAMETER SubscriptionId
-    Specific subscription ID to check (optional, uses current if not specified)
-
-.PARAMETER OutputFormat
-    Output format: Table, JSON, or CSV (default: Table)
+    Switch to check across all accessible subscriptions
 
 .EXAMPLE
-    .\Check-AzureIPConflicts.ps1 -NewSubnetCidr "10.42.189.0/24"
-    
-.EXAMPLE
-    .\Check-AzureIPConflicts.ps1 -NewSubnetCidr "10.42.189.0/24" -CheckAllSubscriptions
-
-.EXAMPLE
-    .\Check-AzureIPConflicts.ps1 -NewSubnetCidr "10.42.189.0/24" -OutputFormat JSON
+    .\Simple-IPCheck.ps1 -NewSubnetCidr "10.42.189.0/24"
 #>
 
 param(
@@ -34,222 +18,164 @@ param(
     [string]$NewSubnetCidr,
     
     [Parameter(Mandatory = $false)]
-    [switch]$CheckAllSubscriptions,
-    
-    [Parameter(Mandatory = $false)]
-    [string]$SubscriptionId,
-    
-    [Parameter(Mandatory = $false)]
-    [ValidateSet("Table", "JSON", "CSV")]
-    [string]$OutputFormat = "Table"
+    [switch]$CheckAllSubscriptions
 )
 
-# Function to check if two CIDR blocks overlap
-function Test-CIDROverlap {
-    param(
-        [string]$Cidr1,
-        [string]$Cidr2
-    )
-    
-    try {
-        # Parse CIDR blocks
-        $network1 = [ipaddress]($Cidr1.Split('/')[0])
-        $prefix1 = [int]($Cidr1.Split('/')[1])
-        $network2 = [ipaddress]($Cidr2.Split('/')[0])
-        $prefix2 = [int]($Cidr2.Split('/')[1])
-        
-        # Convert to network addresses
-        $mask1 = [ipaddress](([math]::Pow(2, 32) - [math]::Pow(2, (32 - $prefix1))) -band 0xFFFFFFFF)
-        $mask2 = [ipaddress](([math]::Pow(2, 32) - [math]::Pow(2, (32 - $prefix2))) -band 0xFFFFFFFF)
-        
-        $networkAddr1 = [ipaddress]($network1.Address -band $mask1.Address)
-        $networkAddr2 = [ipaddress]($network2.Address -band $mask2.Address)
-        
-        # Calculate broadcast addresses
-        $broadcast1 = [ipaddress]($networkAddr1.Address -bor (-bnot $mask1.Address -band 0xFFFFFFFF))
-        $broadcast2 = [ipaddress]($networkAddr2.Address -bor (-bnot $mask2.Address -band 0xFFFFFFFF))
-        
-        # Check for overlap
-        return (
-            ($networkAddr1.Address -le $networkAddr2.Address -and $broadcast1.Address -ge $networkAddr2.Address) -or
-            ($networkAddr2.Address -le $networkAddr1.Address -and $broadcast2.Address -ge $networkAddr1.Address)
-        )
-    }
-    catch {
-        Write-Warning "Failed to parse CIDR blocks: $Cidr1, $Cidr2. Error: $($_.Exception.Message)"
-        return $false
-    }
+Write-Host "=== Simple Azure IP Conflict Checker ===" -ForegroundColor Green
+Write-Host "Checking for conflicts with: $NewSubnetCidr" -ForegroundColor Yellow
+
+# Extract the network portion for basic comparison
+$newNetwork = $NewSubnetCidr.Split('/')[0]
+$newPrefix = [int]$NewSubnetCidr.Split('/')[1]
+$newOctets = $newNetwork.Split('.')
+
+# Create search patterns based on prefix length
+$searchPatterns = @()
+if ($newPrefix -ge 8) {
+    $searchPatterns += "$($newOctets[0]).*"
+}
+if ($newPrefix -ge 16) {
+    $searchPatterns += "$($newOctets[0]).$($newOctets[1]).*"
+}
+if ($newPrefix -ge 24) {
+    $searchPatterns += "$($newOctets[0]).$($newOctets[1]).$($newOctets[2]).*"
 }
 
-# Function to get all VNets from a subscription
-function Get-VNetsFromSubscription {
-    param([string]$SubId)
+Write-Host "Search patterns: $($searchPatterns -join ', ')" -ForegroundColor Gray
+
+# Get subscriptions to check
+if ($CheckAllSubscriptions) {
+    Write-Host "Getting all subscriptions..." -ForegroundColor Yellow
+    $subscriptions = az account list --query "[?state=='Enabled'].id" --output tsv
+}
+else {
+    $currentSub = az account show --query "id" --output tsv
+    $subscriptions = @($currentSub)
+}
+
+Write-Host "Checking $($subscriptions.Count) subscription(s)..." -ForegroundColor Cyan
+
+$allConflicts = @()
+
+foreach ($subId in $subscriptions) {
+    Write-Host "  Subscription: $subId" -ForegroundColor Gray
     
-    Write-Host "Checking subscription: $SubId" -ForegroundColor Cyan
+    # Set subscription context
+    az account set --subscription $subId | Out-Null
     
-    try {
-        # Set the subscription context
-        az account set --subscription $SubId | Out-Null
+    # Get all VNets and their address spaces
+    $vnetsJson = az network vnet list --query "[].{name:name, resourceGroup:resourceGroup, addressPrefixes:addressSpace.addressPrefixes, subnets:subnets[].{name:name, addressPrefix:addressPrefix}}" --output json
+    
+    if ($vnetsJson) {
+        $vnets = $vnetsJson | ConvertFrom-Json
         
-        # Get all VNets in the subscription
-        $vnetsJson = az network vnet list --query "[].{name:name, resourceGroup:resourceGroup, addressPrefixes:addressSpace.addressPrefixes, location:location, subnets:subnets[].{name:name, addressPrefix:addressPrefix}}" --output json
-        
-        if ($vnetsJson) {
-            $vnets = $vnetsJson | ConvertFrom-Json
-            
-            $results = @()
-            foreach ($vnet in $vnets) {
-                # Check VNet address spaces
-                foreach ($addressPrefix in $vnet.addressPrefixes) {
-                    $results += [PSCustomObject]@{
-                        SubscriptionId = $SubId
-                        ResourceGroup = $vnet.resourceGroup
-                        VNetName = $vnet.name
-                        ResourceType = "VNet Address Space"
-                        ResourceName = $vnet.name
-                        AddressPrefix = $addressPrefix
-                        Location = $vnet.location
+        foreach ($vnet in $vnets) {
+            # Check VNet address spaces
+            foreach ($addressPrefix in $vnet.addressPrefixes) {
+                if ($addressPrefix) {
+                    # Simple overlap detection
+                    $existingNetwork = $addressPrefix.Split('/')[0]
+                    $existingPrefix = [int]$addressPrefix.Split('/')[1]
+                    
+                    # Check for potential conflicts
+                    $isConflict = $false
+                    
+                    # Exact match
+                    if ($addressPrefix -eq $NewSubnetCidr) {
+                        $isConflict = $true
+                    }
+                    # Check if new subnet falls within existing range
+                    elseif ($existingPrefix -le $newPrefix) {
+                        $existingOctets = $existingNetwork.Split('.')
+                        $octetsToCheck = [math]::Floor($existingPrefix / 8)
+                        
+                        $match = $true
+                        for ($i = 0; $i -lt $octetsToCheck -and $i -lt 4; $i++) {
+                            if ($existingOctets[$i] -ne $newOctets[$i]) {
+                                $match = $false
+                                break
+                            }
+                        }
+                        
+                        if ($match -and $octetsToCheck -lt 4) {
+                            # Check partial octet if needed
+                            $remainingBits = $existingPrefix % 8
+                            if ($remainingBits -gt 0) {
+                                $existingOctet = [int]$existingOctets[$octetsToCheck]
+                                $newOctet = [int]$newOctets[$octetsToCheck]
+                                $mask = (255 -shl (8 - $remainingBits)) -band 255
+                                if (($existingOctet -band $mask) -eq ($newOctet -band $mask)) {
+                                    $match = $true
+                                }
+                                else {
+                                    $match = $false
+                                }
+                            }
+                        }
+                        
+                        if ($match) {
+                            $isConflict = $true
+                        }
+                    }
+                    
+                    if ($isConflict) {
+                        $allConflicts += [PSCustomObject]@{
+                            SubscriptionId = $subId
+                            ResourceGroup = $vnet.resourceGroup
+                            VNetName = $vnet.name
+                            Type = "VNet Address Space"
+                            ConflictingRange = $addressPrefix
+                            ProposedRange = $NewSubnetCidr
+                        }
                     }
                 }
-                
-                # Check individual subnets
-                if ($vnet.subnets) {
-                    foreach ($subnet in $vnet.subnets) {
-                        if ($subnet.addressPrefix) {
-                            $results += [PSCustomObject]@{
-                                SubscriptionId = $SubId
+            }
+            
+            # Check individual subnets
+            if ($vnet.subnets) {
+                foreach ($subnet in $vnet.subnets) {
+                    if ($subnet.addressPrefix) {
+                        # Simple conflict check for subnets
+                        if ($subnet.addressPrefix -eq $NewSubnetCidr -or 
+                            $subnet.addressPrefix.Split('/')[0] -eq $newNetwork) {
+                            
+                            $allConflicts += [PSCustomObject]@{
+                                SubscriptionId = $subId
                                 ResourceGroup = $vnet.resourceGroup
                                 VNetName = $vnet.name
-                                ResourceType = "Subnet"
-                                ResourceName = "$($vnet.name)/$($subnet.name)"
-                                AddressPrefix = $subnet.addressPrefix
-                                Location = $vnet.location
+                                Type = "Subnet: $($subnet.name)"
+                                ConflictingRange = $subnet.addressPrefix
+                                ProposedRange = $NewSubnetCidr
                             }
                         }
                     }
                 }
             }
-            return $results
         }
-        return @()
-    }
-    catch {
-        Write-Warning "Failed to query subscription $SubId`: $($_.Exception.Message)"
-        return @()
-    }
-}
-
-# Main script execution
-Write-Host "=== Azure IP Conflict Checker ===" -ForegroundColor Green
-Write-Host "Checking for conflicts with: $NewSubnetCidr" -ForegroundColor Yellow
-Write-Host ""
-
-# Validate the new subnet CIDR format
-try {
-    $null = [ipaddress]($NewSubnetCidr.Split('/')[0])
-    $null = [int]($NewSubnetCidr.Split('/')[1])
-}
-catch {
-    Write-Error "Invalid CIDR format: $NewSubnetCidr. Please use format like '10.42.189.0/24'"
-    exit 1
-}
-
-# Check if Azure CLI is logged in
-$currentAccount = az account show --output json 2>$null
-if (-not $currentAccount) {
-    Write-Error "Please run 'az login' first to authenticate with Azure."
-    exit 1
-}
-
-$currentAccountObj = $currentAccount | ConvertFrom-Json
-Write-Host "Current account: $($currentAccountObj.user.name)" -ForegroundColor Green
-
-# Determine which subscriptions to check
-$subscriptionsToCheck = @()
-
-if ($CheckAllSubscriptions) {
-    Write-Host "Getting all accessible subscriptions..." -ForegroundColor Yellow
-    $allSubs = az account list --query "[?state=='Enabled'].{id:id, name:name}" --output json | ConvertFrom-Json
-    $subscriptionsToCheck = $allSubs.id
-    Write-Host "Found $($subscriptionsToCheck.Count) enabled subscriptions" -ForegroundColor Green
-}
-elseif ($SubscriptionId) {
-    $subscriptionsToCheck = @($SubscriptionId)
-}
-else {
-    $subscriptionsToCheck = @($currentAccountObj.id)
-}
-
-Write-Host ""
-
-# Collect all existing networks
-$allNetworks = @()
-$subscriptionCount = 0
-
-foreach ($subId in $subscriptionsToCheck) {
-    $subscriptionCount++
-    Write-Progress -Activity "Scanning subscriptions" -Status "Subscription $subscriptionCount of $($subscriptionsToCheck.Count)" -PercentComplete (($subscriptionCount / $subscriptionsToCheck.Count) * 100)
-    
-    $networks = Get-VNetsFromSubscription -SubId $subId
-    $allNetworks += $networks
-    
-    Write-Host "  Found $($networks.Count) network resources in subscription $subId" -ForegroundColor Gray
-}
-
-Write-Progress -Activity "Scanning subscriptions" -Completed
-
-Write-Host ""
-Write-Host "Total network resources found: $($allNetworks.Count)" -ForegroundColor Green
-Write-Host ""
-
-# Check for conflicts
-Write-Host "Checking for IP conflicts..." -ForegroundColor Yellow
-$conflicts = @()
-
-foreach ($network in $allNetworks) {
-    if (Test-CIDROverlap -Cidr1 $NewSubnetCidr -Cidr2 $network.AddressPrefix) {
-        $conflicts += $network
     }
 }
 
 # Display results
 Write-Host ""
-if ($conflicts.Count -eq 0) {
-    Write-Host "✅ SUCCESS: No IP conflicts detected!" -ForegroundColor Green
-    Write-Host "The subnet $NewSubnetCidr is safe to deploy." -ForegroundColor Green
+if ($allConflicts.Count -eq 0) {
+    Write-Host "✅ No obvious conflicts detected!" -ForegroundColor Green
+    Write-Host "The subnet $NewSubnetCidr appears safe to deploy." -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Note: This is a basic check. For production deployments," -ForegroundColor Yellow
+    Write-Host "consider using more sophisticated CIDR overlap detection." -ForegroundColor Yellow
 }
 else {
-    Write-Host "❌ CONFLICTS DETECTED: $($conflicts.Count) overlapping resources found!" -ForegroundColor Red
+    Write-Host "⚠️  POTENTIAL CONFLICTS DETECTED: $($allConflicts.Count) overlapping resources found!" -ForegroundColor Red
     Write-Host ""
     
-    switch ($OutputFormat) {
-        "Table" {
-            $conflicts | Format-Table -Property SubscriptionId, ResourceGroup, VNetName, ResourceType, ResourceName, AddressPrefix, Location -AutoSize
-        }
-        "JSON" {
-            $conflicts | ConvertTo-Json -Depth 3
-        }
-        "CSV" {
-            $conflicts | ConvertTo-Csv -NoTypeInformation
-        }
-    }
+    $allConflicts | Format-Table -Property SubscriptionId, ResourceGroup, VNetName, Type, ConflictingRange -AutoSize
+    
+    Write-Host ""
+    Write-Host "❌ Do not proceed with deployment until conflicts are resolved!" -ForegroundColor Red
 }
 
-# Summary
 Write-Host ""
 Write-Host "=== SUMMARY ===" -ForegroundColor Cyan
-Write-Host "Validated CIDR: $NewSubnetCidr" -ForegroundColor White
-Write-Host "Subscriptions checked: $($subscriptionsToCheck.Count)" -ForegroundColor White
-Write-Host "Total networks scanned: $($allNetworks.Count)" -ForegroundColor White
-Write-Host "Conflicts found: $($conflicts.Count)" -ForegroundColor White
-
-if ($conflicts.Count -gt 0) {
-    Write-Host ""
-    Write-Host "⚠️  Do not proceed with deployment until conflicts are resolved!" -ForegroundColor Red
-    exit 1
-}
-else {
-    Write-Host ""
-    Write-Host "✅ Safe to proceed with subnet deployment!" -ForegroundColor Green
-    exit 0
-}
+Write-Host "Proposed subnet: $NewSubnetCidr" -ForegroundColor White
+Write-Host "Subscriptions checked: $($subscriptions.Count)" -ForegroundColor White
+Write-Host "Potential conflicts: $($allConflicts.Count)" -ForegroundColor White
