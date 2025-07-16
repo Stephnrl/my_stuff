@@ -1,0 +1,29 @@
+{
+  "images": [
+    {
+      "source": "opensource/nodejs/nodejs22:latest",
+      "target": "nodejs22:latest",
+      "description": "Node.js 22 latest"
+    },
+    {
+      "source": "opensource/nodejs/nodejs22:22-slim",
+      "target": "nodejs22:22-slim", 
+      "description": "Node.js 22 slim"
+    },
+    {
+      "source": "opensource/nodejs/nodejs22:22.17.0-slim",
+      "target": "nodejs22:22.17.0-slim",
+      "description": "Node.js 22.17.0 slim"
+    },
+    {
+      "source": "redhat/dotnet-core/dotnet-sdk-8.0-ubi9-slim:latest",
+      "target": "dotnet-sdk-8.0:latest",
+      "description": ".NET SDK 8.0"
+    },
+    {
+      "source": "redhat/dotnet-core/aspnetcore-runtime-8.0:latest", 
+      "target": "aspnetcore-runtime-8.0:latest",
+      "description": "ASP.NET Core Runtime 8.0"
+    }
+  ]
+}
