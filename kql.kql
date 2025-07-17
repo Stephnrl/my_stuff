@@ -1,0 +1,25 @@
+securityresources
+| where type == 'microsoft.security/assessments/subassessments'
+| where id matches regex  '(.+?)/providers/Microsoft.Security/assessments/dbd0cb49-b563-45e7-9724-889e799fa648/'
+| parse id with  registryResourceId '/providers/Microsoft.Security/assessments/' *
+| parse registryResourceId with  * "/providers/Microsoft.ContainerRegistry/registries/" registryName
+| extend imageDigest = tostring(properties.additionalData.imageDigest), repository = tostring(properties.additionalData.repositoryName)
+| where registryName == "devsecopsasb" and repository == "abc/nodejs"
+| project
+    subassessmentKey=name,
+    health = properties.status.code,
+    severity = properties.status.severity,
+    vulnId = properties.id,
+    displayName = properties.displayName,
+    description = properties.description,
+    remediation = properties.remediation,
+    category = properties.category,
+    impact = properties.impact,
+    timeGenerated = properties.timeGenerated,
+    registryName, 
+    repository, 
+    imageDigest, 
+    resourceGroup, 
+    subscriptionId, 
+    tenantId,
+    registryResourceId
