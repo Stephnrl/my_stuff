@@ -1,126 +1,74 @@
-.PHONY: check-vulnerabilities-detailed
-check-vulnerabilities-detailed:
-	@echo "Checking detailed vulnerability scan results..."
-	@jq -r '.images[] | .target' images.json | while read target_image; do \
-		repo_name=$$(echo $$target_image | cut -d':' -f1); \
-		echo "Checking vulnerabilities for repository: $$repo_name"; \
-		$(MAKE) query-repo-vulnerabilities REPO=$$repo_name; \
+.PHONY: check-vulnerabilities-by-repo
+check-vulnerabilities-by-repo:
+	@echo "Checking vulnerabilities by repository..."
+	@jq -r '.images[] | .repository' images.json | sort -u | while read repo; do \
+		echo "=== Checking repository: $$repo ==="; \
+		$(MAKE) query-repo-vulnerabilities REPO=$$repo; \
 		echo ""; \
 	done
 
-.PHONY: query-repo-vulnerabilities
-query-repo-vulnerabilities:
-	@echo "Querying vulnerabilities for repository: $(REPO)"
-	@az graph query \
-		--graph-query "SecurityResources \
-		| where type == 'microsoft.security/assessments' \
-		| where properties.displayName contains 'Azure registry container images should have vulnerabilities resolved' \
-		| summarize by assessmentKey=name \
-		| join kind=inner ( \
-			securityresources \
-			| where type == 'microsoft.security/assessments/subassessments' \
-			| extend assessmentKey = extract('.*assessments/(.+?)/.*',1,  id) \
-		) on assessmentKey \
-		| project assessmentKey, subassessmentKey=name, id, properties, resourceGroup, subscriptionId, tenantId \
-		| extend \
-			description = properties.description, \
-			displayName = properties.displayName, \
-			resourceId = properties.resourceDetails.id, \
-			resourceSource = properties.resourceDetails.source, \
-			category = properties.category, \
-			severity = properties.status.severity, \
-			code = properties.status.code, \
-			timeGenerated = properties.timeGenerated, \
-			remediation = properties.remediation, \
-			impact = properties.impact, \
-			vulnId = properties.id, \
-			additionalData = todynamic(properties.additionalData) \
-		| where isnotempty(additionalData.artifactDetails) \
-		| extend \
-			registryName = tostring(additionalData.artifactDetails.registryHost), \
-			repository = tostring(additionalData.artifactDetails.repositoryName), \
-			imageDigest = tostring(additionalData.artifactDetails.digest) \
-		| where registryName contains '$(ACR_REGISTRY_NAME)' \
-		| where repository == '$(REPO)' \
-		| project registryName, repository, imageDigest, severity, displayName, description, vulnId, timeGenerated \
-		| order by severity desc, timeGenerated desc" \
-		--output table
+.PHONY: cleanup-by-repository
+cleanup-by-repository:
+	@echo "Cleaning up by repository..."
+	@KEEP_COUNT=$$(jq -r '.cleanup.keep_count // 5' images.json); \
+	DRY_RUN=$$(jq -r '.cleanup.dry_run // false' images.json); \
+	jq -r '.images[] | .repository' images.json | sort -u | while read repo; do \
+		echo "Cleaning up repository: $$repo"; \
+		$(MAKE) cleanup-repo REPO=$$repo KEEP_COUNT=$$KEEP_COUNT DRY_RUN=$$DRY_RUN; \
+	done
 
-.PHONY: vulnerability-summary-by-repo
-vulnerability-summary-by-repo:
-	@echo "Vulnerability summary by repository..."
-	@az graph query \
-		--graph-query "SecurityResources \
-		| where type == 'microsoft.security/assessments' \
-		| where properties.displayName contains 'Azure registry container images should have vulnerabilities resolved' \
-		| summarize by assessmentKey=name \
-		| join kind=inner ( \
-			securityresources \
-			| where type == 'microsoft.security/assessments/subassessments' \
-			| extend assessmentKey = extract('.*assessments/(.+?)/.*',1,  id) \
-		) on assessmentKey \
-		| project assessmentKey, subassessmentKey=name, id, properties, resourceGroup, subscriptionId, tenantId \
-		| extend \
-			description = properties.description, \
-			displayName = properties.displayName, \
-			resourceId = properties.resourceDetails.id, \
-			resourceSource = properties.resourceDetails.source, \
-			category = properties.category, \
-			severity = properties.status.severity, \
-			code = properties.status.code, \
-			timeGenerated = properties.timeGenerated, \
-			remediation = properties.remediation, \
-			impact = properties.impact, \
-			vulnId = properties.id, \
-			additionalData = todynamic(properties.additionalData) \
-		| where isnotempty(additionalData.artifactDetails) \
-		| extend \
-			registryName = tostring(additionalData.artifactDetails.registryHost), \
-			repository = tostring(additionalData.artifactDetails.repositoryName), \
-			imageDigest = tostring(additionalData.artifactDetails.digest) \
-		| where registryName contains '$(ACR_REGISTRY_NAME)' \
-		| summarize \
-			Critical = countif(severity == 'High'), \
-			High = countif(severity == 'Medium'), \
-			Medium = countif(severity == 'Low'), \
-			Total = count() \
-		by repository \
-		| order by Critical desc, High desc" \
-		--output table
+.PHONY: list-repositories
+list-repositories:
+	@echo "Repositories in configuration:"
+	@jq -r '.images[] | .repository' images.json | sort -u | while read repo; do \
+		image_count=$$(jq -r --arg repo "$$repo" '.images[] | select(.repository == $$repo) | .target' images.json | wc -l); \
+		echo "  $$repo ($$image_count images)"; \
+	done
 
-.PHONY: export-vulnerability-data
-export-vulnerability-data:
-	@echo "Exporting detailed vulnerability data to JSON..."
-	@az graph query \
-		--graph-query "SecurityResources \
-		| where type == 'microsoft.security/assessments' \
-		| where properties.displayName contains 'Azure registry container images should have vulnerabilities resolved' \
-		| summarize by assessmentKey=name \
-		| join kind=inner ( \
-			securityresources \
-			| where type == 'microsoft.security/assessments/subassessments' \
-			| extend assessmentKey = extract('.*assessments/(.+?)/.*',1,  id) \
-		) on assessmentKey \
-		| project assessmentKey, subassessmentKey=name, id, properties, resourceGroup, subscriptionId, tenantId \
-		| extend \
-			description = properties.description, \
-			displayName = properties.displayName, \
-			resourceId = properties.resourceDetails.id, \
-			resourceSource = properties.resourceDetails.source, \
-			category = properties.category, \
-			severity = properties.status.severity, \
-			code = properties.status.code, \
-			timeGenerated = properties.timeGenerated, \
-			remediation = properties.remediation, \
-			impact = properties.impact, \
-			vulnId = properties.id, \
-			additionalData = todynamic(properties.additionalData) \
-		| where isnotempty(additionalData.artifactDetails) \
-		| extend \
-			registryName = tostring(additionalData.artifactDetails.registryHost), \
-			repository = tostring(additionalData.artifactDetails.repositoryName), \
-			imageDigest = tostring(additionalData.artifactDetails.digest) \
-		| where registryName contains '$(ACR_REGISTRY_NAME)' \
-		| project registryName, repository, imageDigest, severity, displayName, description, vulnId, timeGenerated, remediation, impact" \
-		--output json > vulnerability_report_$(shell date +%Y%m%d_%H%M%S).json
-	@echo "Vulnerability data exported to vulnerability_report_$(shell date +%Y%m%d_%H%M%S).json"
+.PHONY: sync-repository
+sync-repository:
+	@echo "Syncing images for repository: $(REPO)"
+	@jq -r --arg repo "$(REPO)" '.images[] | select(.repository == $$repo) | "\(.source) \(.target)"' images.json | while read source target; do \
+		echo "Processing $$source -> $$target"; \
+		docker pull $(SOURCE_REGISTRY)/$$source; \
+		docker tag $(SOURCE_REGISTRY)/$$source $(TARGET_REGISTRY)/$$target; \
+		docker push $(TARGET_REGISTRY)/$$target; \
+	done
+
+.PHONY: vulnerability-report-by-repo
+vulnerability-report-by-repo:
+	@echo "Generating vulnerability report by repository..."
+	@echo "Repository,Critical,High,Medium,Low,Total" > vulnerability_report.csv
+	@jq -r '.images[] | .repository' images.json | sort -u | while read repo; do \
+		echo "Processing $$repo..."; \
+		RESULT=$$(az graph query \
+			--graph-query "SecurityResources \
+			| where type == 'microsoft.security/assessments' \
+			| where properties.displayName contains 'Azure registry container images should have vulnerabilities resolved' \
+			| summarize by assessmentKey=name \
+			| join kind=inner ( \
+				securityresources \
+				| where type == 'microsoft.security/assessments/subassessments' \
+				| extend assessmentKey = extract('.*assessments/(.+?)/.*',1,  id) \
+			) on assessmentKey \
+			| project properties \
+			| extend \
+				severity = properties.status.severity, \
+				additionalData = todynamic(properties.additionalData) \
+			| where isnotempty(additionalData.artifactDetails) \
+			| extend \
+				registryName = tostring(additionalData.artifactDetails.registryHost), \
+				repository = tostring(additionalData.artifactDetails.repositoryName) \
+			| where registryName contains '$(ACR_REGISTRY_NAME)' \
+			| where repository == '$$repo' \
+			| summarize \
+				Critical = countif(severity == 'High'), \
+				High = countif(severity == 'Medium'), \
+				Medium = countif(severity == 'Low'), \
+				Low = countif(severity == 'Informational'), \
+				Total = count()" \
+			--output tsv --query "data[0]" 2>/dev/null || echo "0	0	0	0	0"); \
+		echo "$$repo,$$RESULT" >> vulnerability_report.csv; \
+	done
+	@echo "Report generated: vulnerability_report.csv"
+	@cat vulnerability_report.csv | column -t -s ','
