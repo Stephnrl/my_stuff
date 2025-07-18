@@ -13,63 +13,36 @@ provider "aws" {
   region = var.aws_region
 }
 
-# Transit Gateway for hub-spoke topology
-resource "aws_ec2_transit_gateway" "main" {
-  description                     = "Hub Transit Gateway"
-  default_route_table_association = "enable"
-  default_route_table_propagation = "enable"
-  
-  tags = merge(var.tags, {
-    Name = "${var.environment}-hub-tgw"
-  })
-}
-
-# Hub VPC with internet access
-module "hub_vpc" {
+# Spoke VPC that routes through Transit Gateway
+module "spoke_vpc" {
   source = "../../"
 
-  vpc_name = "${var.environment}-hub-vpc"
-  vpc_cidr = var.hub_vpc_cidr
+  vpc_name = "${var.environment}-${var.spoke_name}-vpc"
+  vpc_cidr = var.spoke_vpc_cidr
   
   availability_zones    = var.availability_zones
   public_subnet_cidrs   = var.public_subnet_cidrs
   private_subnet_cidrs  = var.private_subnet_cidrs
   
-  # Hub needs internet gateway
-  enable_internet_gateway = true
-  enable_nat_gateway      = true
-  single_nat_gateway      = var.single_nat_gateway
+  # Spoke doesn't need its own internet gateway
+  enable_internet_gateway = false
+  enable_nat_gateway      = false
   
-  # Attach to Transit Gateway
-  enable_transit_gateway = true
-  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  # Connect to Transit Gateway
+  enable_transit_gateway     = true
+  transit_gateway_id         = var.transit_gateway_id
+  transit_gateway_route_table_id = var.spoke_route_table_id
+  route_internet_through_tgw = true
+  auto_accept_shared_attachments = true
   
-  # Don't route internet through TGW (hub provides internet)
-  route_internet_through_tgw = false
-  
-  tags = merge(var.tags, {
-    Type = "hub"
-  })
-}
-
-# Route table for spoke VPCs
-resource "aws_ec2_transit_gateway_route_table" "spokes" {
-  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  # Define networks accessible through TGW
+  hub_cidr_blocks = var.hub_cidr_blocks
   
   tags = merge(var.tags, {
-    Name = "${var.environment}-spokes-rt"
+    Type = "spoke"
+    Spoke = var.spoke_name
   })
 }
-
-# Default route to hub VPC for internet access
-resource "aws_ec2_transit_gateway_route" "spoke_default" {
-  destination_cidr_block         = "0.0.0.0/0"
-  transit_gateway_attachment_id  = module.hub_vpc.transit_gateway_attachment_id
-  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spokes.id
-}
-
-
-
 
 
 
@@ -85,10 +58,16 @@ variable "environment" {
   default     = "production"
 }
 
-variable "hub_vpc_cidr" {
-  description = "CIDR block for hub VPC"
+variable "spoke_name" {
+  description = "Name of this spoke (e.g., app, data, etc.)"
   type        = string
-  default     = "10.0.0.0/16"
+  default     = "app"
+}
+
+variable "spoke_vpc_cidr" {
+  description = "CIDR block for spoke VPC"
+  type        = string
+  default     = "10.1.0.0/16"
 }
 
 variable "availability_zones" {
@@ -98,21 +77,36 @@ variable "availability_zones" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "Public subnet CIDR blocks"
+  description = "Public subnet CIDR blocks (used as transit subnets)"
   type        = list(string)
-  default     = ["10.0.1.0/24", "10.0.2.0/24"]
+  default     = ["10.1.1.0/24", "10.1.2.0/24"]
 }
 
 variable "private_subnet_cidrs" {
   description = "Private subnet CIDR blocks"
   type        = list(string)
-  default     = ["10.0.4.0/24", "10.0.5.0/24"]
+  default     = ["10.1.4.0/24", "10.1.5.0/24"]
 }
 
-variable "single_nat_gateway" {
-  description = "Use single NAT Gateway"
-  type        = bool
-  default     = false
+variable "transit_gateway_id" {
+  description = "Transit Gateway ID from hub"
+  type        = string
+}
+
+variable "spoke_route_table_id" {
+  description = "Spoke route table ID from hub"
+  type        = string
+  default     = ""
+}
+
+variable "hub_cidr_blocks" {
+  description = "CIDR blocks for hub and other spokes"
+  type        = list(string)
+  default = [
+    "10.0.0.0/16",  # Hub VPC
+    "10.2.0.0/16",  # Data spoke
+    "192.168.0.0/16" # On-premises
+  ]
 }
 
 variable "tags" {
@@ -120,37 +114,31 @@ variable "tags" {
   type        = map(string)
   default = {
     Terraform = "true"
-    Purpose   = "hub-spoke-example"
+    Purpose   = "spoke-example"
   }
 }
 
 
 
+# Copy this file to terraform.tfvars and customize
 
+aws_region    = "us-gov-west-1"
+environment   = "production"
+spoke_name    = "application"
+spoke_vpc_cidr = "10.1.0.0/16"
 
-output "hub_vpc_id" {
-  description = "Hub VPC ID"
-  value       = module.hub_vpc.vpc_id
+# Get these from your hub VPC outputs
+transit_gateway_id    = "tgw-1234567890abcdef0"
+spoke_route_table_id = "tgw-rtb-1234567890abcdef0"
+
+hub_cidr_blocks = [
+  "10.0.0.0/16",    # Hub VPC
+  "10.2.0.0/16",    # Data spoke
+  "192.168.0.0/16"  # On-premises network
+]
+
+tags = {
+  Environment = "production"
+  Project     = "my-app"
+  Owner       = "platform-team"
 }
-
-output "transit_gateway_id" {
-  description = "Transit Gateway ID"
-  value       = aws_ec2_transit_gateway.main.id
-}
-
-output "spoke_route_table_id" {
-  description = "Route table ID for spoke VPCs"
-  value       = aws_ec2_transit_gateway_route_table.spokes.id
-}
-
-output "hub_public_subnet_ids" {
-  description = "Hub public subnet IDs"
-  value       = module.hub_vpc.public_subnet_ids
-}
-
-output "hub_private_subnet_ids" {
-  description = "Hub private subnet IDs"
-  value       = module.hub_vpc.private_subnet_ids
-}
-
-
