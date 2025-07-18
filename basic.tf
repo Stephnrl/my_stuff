@@ -11,32 +11,63 @@ terraform {
 
 provider "aws" {
   region = var.aws_region
-
-  default_tags {
-    tags = var.default_tags
-  }
 }
 
-# Basic VPC with Internet Gateway and NAT Gateways
-module "vpc" {
+# Transit Gateway for hub-spoke topology
+resource "aws_ec2_transit_gateway" "main" {
+  description                     = "Hub Transit Gateway"
+  default_route_table_association = "enable"
+  default_route_table_propagation = "enable"
+  
+  tags = merge(var.tags, {
+    Name = "${var.environment}-hub-tgw"
+  })
+}
+
+# Hub VPC with internet access
+module "hub_vpc" {
   source = "../../"
 
-  vpc_name = var.vpc_name
-  vpc_cidr = var.vpc_cidr
+  vpc_name = "${var.environment}-hub-vpc"
+  vpc_cidr = var.hub_vpc_cidr
   
   availability_zones    = var.availability_zones
   public_subnet_cidrs   = var.public_subnet_cidrs
   private_subnet_cidrs  = var.private_subnet_cidrs
   
+  # Hub needs internet gateway
   enable_internet_gateway = true
   enable_nat_gateway      = true
   single_nat_gateway      = var.single_nat_gateway
   
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+  # Attach to Transit Gateway
+  enable_transit_gateway = true
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
   
-  tags = var.tags
+  # Don't route internet through TGW (hub provides internet)
+  route_internet_through_tgw = false
+  
+  tags = merge(var.tags, {
+    Type = "hub"
+  })
 }
+
+# Route table for spoke VPCs
+resource "aws_ec2_transit_gateway_route_table" "spokes" {
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  
+  tags = merge(var.tags, {
+    Name = "${var.environment}-spokes-rt"
+  })
+}
+
+# Default route to hub VPC for internet access
+resource "aws_ec2_transit_gateway_route" "spoke_default" {
+  destination_cidr_block         = "0.0.0.0/0"
+  transit_gateway_attachment_id  = module.hub_vpc.transit_gateway_attachment_id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spokes.id
+}
+
 
 
 
@@ -48,14 +79,14 @@ variable "aws_region" {
   default     = "us-gov-west-1"
 }
 
-variable "vpc_name" {
-  description = "Name of the VPC"
+variable "environment" {
+  description = "Environment name"
   type        = string
-  default     = "basic-vpc-example"
+  default     = "production"
 }
 
-variable "vpc_cidr" {
-  description = "CIDR block for VPC"
+variable "hub_vpc_cidr" {
+  description = "CIDR block for hub VPC"
   type        = string
   default     = "10.0.0.0/16"
 }
@@ -79,26 +110,17 @@ variable "private_subnet_cidrs" {
 }
 
 variable "single_nat_gateway" {
-  description = "Use single NAT Gateway for cost savings"
+  description = "Use single NAT Gateway"
   type        = bool
   default     = false
 }
 
 variable "tags" {
-  description = "Additional tags"
+  description = "Tags for all resources"
   type        = map(string)
   default = {
-    Example     = "basic-vpc"
-    Purpose     = "demonstration"
-  }
-}
-
-variable "default_tags" {
-  description = "Default tags applied to all resources"
-  type        = map(string)
-  default = {
-    Terraform   = "true"
-    Environment = "example"
+    Terraform = "true"
+    Purpose   = "hub-spoke-example"
   }
 }
 
@@ -106,64 +128,29 @@ variable "default_tags" {
 
 
 
-output "vpc_id" {
-  description = "ID of the VPC"
-  value       = module.vpc.vpc_id
+output "hub_vpc_id" {
+  description = "Hub VPC ID"
+  value       = module.hub_vpc.vpc_id
 }
 
-output "vpc_cidr_block" {
-  description = "CIDR block of the VPC"
-  value       = module.vpc.vpc_cidr_block
+output "transit_gateway_id" {
+  description = "Transit Gateway ID"
+  value       = aws_ec2_transit_gateway.main.id
 }
 
-output "public_subnet_ids" {
-  description = "IDs of the public subnets"
-  value       = module.vpc.public_subnet_ids
+output "spoke_route_table_id" {
+  description = "Route table ID for spoke VPCs"
+  value       = aws_ec2_transit_gateway_route_table.spokes.id
 }
 
-output "private_subnet_ids" {
-  description = "IDs of the private subnets"
-  value       = module.vpc.private_subnet_ids
+output "hub_public_subnet_ids" {
+  description = "Hub public subnet IDs"
+  value       = module.hub_vpc.public_subnet_ids
 }
 
-output "internet_gateway_id" {
-  description = "ID of the Internet Gateway"
-  value       = module.vpc.internet_gateway_id
-}
-
-output "nat_gateway_ids" {
-  description = "IDs of the NAT Gateways"
-  value       = module.vpc.nat_gateway_ids
+output "hub_private_subnet_ids" {
+  description = "Hub private subnet IDs"
+  value       = module.hub_vpc.private_subnet_ids
 }
 
 
-
-# Copy this file to terraform.tfvars and customize
-
-aws_region = "us-gov-west-1"
-vpc_name   = "my-basic-vpc"
-vpc_cidr   = "10.0.0.0/16"
-
-availability_zones = [
-  "us-gov-west-1a",
-  "us-gov-west-1b"
-]
-
-public_subnet_cidrs = [
-  "10.0.1.0/24",
-  "10.0.2.0/24"
-]
-
-private_subnet_cidrs = [
-  "10.0.4.0/24",
-  "10.0.5.0/24"
-]
-
-# Set to true for cost savings in dev environments
-single_nat_gateway = false
-
-tags = {
-  Environment = "development"
-  Project     = "my-project"
-  Owner       = "platform-team"
-}
