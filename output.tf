@@ -1,200 +1,117 @@
-# .github/workflows/terraform.yml
-name: Terraform Infrastructure
+# modules/aws-bootstrap/outputs.tf
 
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
+# S3 State Bucket Information
+output "terraform_state_bucket_name" {
+  description = "Name of the S3 bucket for Terraform state"
+  value       = aws_s3_bucket.terraform_state.bucket
+}
 
-env:
-  TF_VERSION: '1.7.0'
-  AWS_REGION: 'us-east-1'
+output "terraform_state_bucket_arn" {
+  description = "ARN of the S3 bucket for Terraform state"
+  value       = aws_s3_bucket.terraform_state.arn
+}
 
-jobs:
-  terraform-plan-nonprod:
-    name: Terraform Plan (Non-Prod)
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' || github.event_name == 'pull_request'
-    environment: nonprod
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+output "terraform_state_bucket_region" {
+  description = "Region of the S3 bucket for Terraform state"
+  value       = aws_s3_bucket.terraform_state.region
+}
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: ${{ github.run_id }}-nonprod-plan
-          aws-region: ${{ env.AWS_REGION }}
+# DynamoDB Lock Table Information
+output "terraform_lock_table_name" {
+  description = "Name of the DynamoDB table for Terraform state locking"
+  value       = aws_dynamodb_table.terraform_locks.name
+}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
+output "terraform_lock_table_arn" {
+  description = "ARN of the DynamoDB table for Terraform state locking"
+  value       = aws_dynamodb_table.terraform_locks.arn
+}
 
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=infrastructure/nonprod/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
-            -backend-config="encrypt=true"
+# GitHub OIDC Provider Information
+output "github_oidc_provider_arn" {
+  description = "ARN of the GitHub OIDC provider"
+  value       = var.create_github_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : var.existing_github_oidc_provider_arn
+}
 
-      - name: Terraform Validate
-        run: terraform validate
+# IAM Role Information
+output "github_actions_role_arn" {
+  description = "ARN of the IAM role for GitHub Actions Terraform execution"
+  value       = aws_iam_role.github_actions_terraform.arn
+}
 
-      - name: Terraform Plan
-        id: plan
-        run: |
-          terraform plan -var-file="environments/nonprod.tfvars" -no-color -out=tfplan
-        continue-on-error: true
+output "github_actions_role_name" {
+  description = "Name of the IAM role for GitHub Actions Terraform execution"
+  value       = aws_iam_role.github_actions_terraform.name
+}
 
-      - name: Update Pull Request
-        uses: actions/github-script@v7
-        if: github.event_name == 'pull_request'
-        env:
-          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const output = `#### Terraform Plan (Non-Prod) 📖\`${{ steps.plan.outcome }}\`
-            
-            <details><summary>Show Plan</summary>
-            
-            \`\`\`\n
-            ${process.env.PLAN}
-            \`\`\`
-            
-            </details>
-            
-            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            })
+# Terraform Backend Configuration
+output "terraform_backend_config" {
+  description = "Terraform backend configuration for use in other projects"
+  value = {
+    bucket         = aws_s3_bucket.terraform_state.bucket
+    key            = "${var.terraform_state_key_prefix}/terraform.tfstate"
+    region         = local.region
+    dynamodb_table = aws_dynamodb_table.terraform_locks.name
+    encrypt        = true
+  }
+}
 
-  terraform-apply-nonprod:
-    name: Terraform Apply (Non-Prod)
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-    environment: nonprod
-    needs: terraform-plan-nonprod
-    permissions:
-      id-token: write
-      contents: read
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+# Complete backend configuration as a formatted string
+output "terraform_backend_config_hcl" {
+  description = "Formatted HCL backend configuration for copying into Terraform files"
+  value = <<-EOT
+    terraform {
+      backend "s3" {
+        bucket         = "${aws_s3_bucket.terraform_state.bucket}"
+        key            = "${var.terraform_state_key_prefix}/terraform.tfstate"
+        region         = "${local.region}"
+        dynamodb_table = "${aws_dynamodb_table.terraform_locks.name}"
+        encrypt        = true
+      }
+    }
+  EOT
+}
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: ${{ github.run_id }}-nonprod-apply
-          aws-region: ${{ env.AWS_REGION }}
+# GitHub Actions Environment Variables
+output "github_actions_env_vars" {
+  description = "Environment variables for GitHub Actions workflows"
+  value = {
+    AWS_ROLE_ARN           = aws_iam_role.github_actions_terraform.arn
+    AWS_ROLE_SESSION_NAME  = "${var.project_name}-github-actions-${var.environment}"
+    TF_STATE_BUCKET        = aws_s3_bucket.terraform_state.bucket
+    TF_STATE_DYNAMODB_TABLE = aws_dynamodb_table.terraform_locks.name
+    TF_STATE_REGION        = local.region
+  }
+}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
+# Account and Region Information
+output "aws_account_id" {
+  description = "AWS Account ID where resources were created"
+  value       = local.account_id
+}
 
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=infrastructure/nonprod/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
-            -backend-config="encrypt=true"
+output "aws_region" {
+  description = "AWS Region where resources were created"
+  value       = local.region
+}
 
-      - name: Terraform Apply
-        run: terraform apply -var-file="environments/nonprod.tfvars" -auto-approve
+# GitHub Environment Information
+output "github_environment_name" {
+  description = "Name of the GitHub environment created"
+  value       = var.manage_github_environments ? github_repository_environment.environment[0].environment : null
+}
 
-  terraform-plan-prod:
-    name: Terraform Plan (Production)
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: prod
-    permissions:
-      id-token: write
-      contents: read
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+output "github_environment_url" {
+  description = "URL to the GitHub environment settings"
+  value       = var.manage_github_environments ? "https://github.com/${var.github_repository_name}/settings/environments/${github_repository_environment.environment[0].environment}" : null
+}
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: ${{ github.run_id }}-prod-plan
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=infrastructure/prod/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
-            -backend-config="encrypt=true"
-
-      - name: Terraform Validate
-        run: terraform validate
-
-      - name: Terraform Plan
-        run: terraform plan -var-file="environments/prod.tfvars" -no-color
-
-  terraform-apply-prod:
-    name: Terraform Apply (Production)
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    environment: prod
-    needs: terraform-plan-prod
-    permissions:
-      id-token: write
-      contents: read
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: ${{ github.run_id }}-prod-apply
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=infrastructure/prod/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}" \
-            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
-            -backend-config="encrypt=true"
-
-      - name: Terraform Apply
-        run: terraform apply -var-file="environments/prod.tfvars" -auto-approve
+output "github_secrets_created" {
+  description = "List of GitHub secrets that were created"
+  value = var.manage_github_environments ? [
+    "AWS_ROLE_ARN",
+    "TF_STATE_BUCKET", 
+    "TF_STATE_DYNAMODB_TABLE",
+    "TF_STATE_REGION"
+  ] : []
+}
