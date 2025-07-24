@@ -97,3 +97,63 @@ variable "terraform_state_key_prefix" {
   type        = string
   default     = "terraform"
 }
+
+# GitHub Environment Management Variables
+variable "manage_github_environments" {
+  description = "Whether to manage GitHub environments and secrets via Terraform"
+  type        = bool
+  default     = false
+}
+
+variable "github_repository_name" {
+  description = "GitHub repository name in format 'owner/repo' (required if manage_github_environments is true)"
+  type        = string
+  default     = ""
+  
+  validation {
+    condition = !var.manage_github_environments || can(regex("^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", var.github_repository_name))
+    error_message = "GitHub repository must be in format 'owner/repo' when manage_github_environments is true."
+  }
+}
+
+variable "github_reviewers" {
+  description = "GitHub users and teams that can approve deployments (applied to prod environment)"
+  type = object({
+    users = optional(list(string), [])
+    teams = optional(list(string), [])
+  })
+  default = {
+    users = []
+    teams = []
+  }
+}
+
+variable "github_protected_branches" {
+  description = "Enable protected branches policy for GitHub environment"
+  type        = bool
+  default     = true
+}
+
+variable "github_custom_branch_policies" {
+  description = "Enable custom branch policies for GitHub environment"
+  type        = bool
+  default     = false
+}
+
+variable "github_wait_timer_minutes" {
+  description = "Wait timer in minutes before deployment (0 to disable, applied to prod environment)"
+  type        = number
+  default     = 0
+  
+  validation {
+    condition     = var.github_wait_timer_minutes >= 0 && var.github_wait_timer_minutes <= 43200
+    error_message = "Wait timer must be between 0 and 43200 minutes (30 days)."
+  }
+}
+
+variable "additional_github_secrets" {
+  description = "Additional secrets to add to the GitHub environment"
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}
