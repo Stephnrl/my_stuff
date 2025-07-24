@@ -1,139 +1,200 @@
-# examples/bootstrap/main.tf
-# This file should be run first to bootstrap your AWS infrastructure
+# .github/workflows/terraform.yml
+name: Terraform Infrastructure
 
-terraform {
-  required_version = ">= 1.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
 
-provider "aws" {
-  region = var.aws_region
-  
-  default_tags {
-    tags = {
-      Project     = var.project_name
-      Environment = var.environment
-      ManagedBy   = "terraform"
-      Purpose     = "bootstrap"
-    }
-  }
-}
+env:
+  TF_VERSION: '1.7.0'
+  AWS_REGION: 'us-east-1'
 
-# Production Environment Bootstrap
-module "bootstrap_prod" {
-  source = "../../modules/aws-bootstrap"
+jobs:
+  terraform-plan-nonprod:
+    name: Terraform Plan (Non-Prod)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' || github.event_name == 'pull_request'
+    environment: nonprod
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-  project_name        = var.project_name
-  environment         = "prod"
-  github_repositories = var.github_repositories
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: ${{ github.run_id }}-nonprod-plan
+          aws-region: ${{ env.AWS_REGION }}
 
-  # Security settings for production
-  force_destroy_state_bucket              = false
-  enable_state_lifecycle                  = true
-  state_version_expiration_days           = 365  # Keep versions longer in prod
-  enable_dynamodb_point_in_time_recovery  = true
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-  # Use existing OIDC provider if you already have one
-  create_github_oidc_provider = true
-  
-  # Production typically needs more restrictive permissions
-  additional_terraform_policies = [
-    "arn:aws:iam::aws:policy/PowerUserAccess",
-    # Add more specific policies as needed
-  ]
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=infrastructure/nonprod/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
 
-  tags = {
-    CostCenter = "engineering"
-    Owner      = "devops-team"
-  }
-}
+      - name: Terraform Validate
+        run: terraform validate
 
-# Non-Production Environment Bootstrap
-module "bootstrap_nonprod" {
-  source = "../../modules/aws-bootstrap"
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -var-file="environments/nonprod.tfvars" -no-color -out=tfplan
+        continue-on-error: true
 
-  project_name        = var.project_name
-  environment         = "nonprod"
-  github_repositories = var.github_repositories
+      - name: Update Pull Request
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Plan (Non-Prod) 📖\`${{ steps.plan.outcome }}\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`\n
+            ${process.env.PLAN}
+            \`\`\`
+            
+            </details>
+            
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
 
-  # More relaxed settings for non-prod
-  force_destroy_state_bucket              = true   # Allow cleanup in dev/staging
-  enable_state_lifecycle                  = true
-  state_version_expiration_days           = 90     # Shorter retention
-  enable_dynamodb_point_in_time_recovery  = false  # Cost optimization
+  terraform-apply-nonprod:
+    name: Terraform Apply (Non-Prod)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment: nonprod
+    needs: terraform-plan-nonprod
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-  # Reuse the OIDC provider from prod
-  create_github_oidc_provider       = false
-  existing_github_oidc_provider_arn = module.bootstrap_prod.github_oidc_provider_arn
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: ${{ github.run_id }}-nonprod-apply
+          aws-region: ${{ env.AWS_REGION }}
 
-  # Non-prod might need broader permissions for experimentation
-  additional_terraform_policies = [
-    "arn:aws:iam::aws:policy/PowerUserAccess",
-  ]
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-  tags = {
-    CostCenter = "engineering"
-    Owner      = "devops-team"
-  }
-}
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=infrastructure/nonprod/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
 
-# Variables
-variable "project_name" {
-  description = "Name of the project"
-  type        = string
-  default     = "myproject"  # Change this to your project name
-}
+      - name: Terraform Apply
+        run: terraform apply -var-file="environments/nonprod.tfvars" -auto-approve
 
-variable "aws_region" {
-  description = "AWS region for resources"
-  type        = string
-  default     = "us-east-1"
-}
+  terraform-plan-prod:
+    name: Terraform Plan (Production)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-variable "github_repositories" {
-  description = "List of GitHub repositories that can assume the roles"
-  type        = list(string)
-  default = [
-    "your-org/your-infrastructure-repo",
-    "your-org/your-application-repo"
-  ]
-}
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: ${{ github.run_id }}-prod-plan
+          aws-region: ${{ env.AWS_REGION }}
 
-# Outputs
-output "prod_environment" {
-  description = "Production environment configuration"
-  value = {
-    role_arn                = module.bootstrap_prod.github_actions_role_arn
-    state_bucket           = module.bootstrap_prod.terraform_state_bucket_name
-    lock_table             = module.bootstrap_prod.terraform_lock_table_name
-    backend_config         = module.bootstrap_prod.terraform_backend_config
-    github_env_vars        = module.bootstrap_prod.github_actions_env_vars
-  }
-}
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-output "nonprod_environment" {
-  description = "Non-production environment configuration"
-  value = {
-    role_arn                = module.bootstrap_nonprod.github_actions_role_arn
-    state_bucket           = module.bootstrap_nonprod.terraform_state_bucket_name
-    lock_table             = module.bootstrap_nonprod.terraform_lock_table_name
-    backend_config         = module.bootstrap_nonprod.terraform_backend_config
-    github_env_vars        = module.bootstrap_nonprod.github_actions_env_vars
-  }
-}
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=infrastructure/prod/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
 
-# Output the backend configurations as formatted strings for easy copying
-output "prod_backend_config_hcl" {
-  description = "Formatted Terraform backend configuration for production"
-  value       = module.bootstrap_prod.terraform_backend_config_hcl
-}
+      - name: Terraform Validate
+        run: terraform validate
 
-output "nonprod_backend_config_hcl" {
-  description = "Formatted Terraform backend configuration for non-production"
-  value       = module.bootstrap_nonprod.terraform_backend_config_hcl
-}
+      - name: Terraform Plan
+        run: terraform plan -var-file="environments/prod.tfvars" -no-color
+
+  terraform-apply-prod:
+    name: Terraform Apply (Production)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: prod
+    needs: terraform-plan-prod
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: ${{ github.run_id }}-prod-apply
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=infrastructure/prod/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="dynamodb_table=${{ secrets.TF_STATE_DYNAMODB_TABLE }}" \
+            -backend-config="encrypt=true"
+
+      - name: Terraform Apply
+        run: terraform apply -var-file="environments/prod.tfvars" -auto-approve
