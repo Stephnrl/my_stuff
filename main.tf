@@ -7,6 +7,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.0"
+    }
   }
 }
 
@@ -263,4 +267,85 @@ resource "aws_iam_role_policy_attachment" "terraform_additional_policies" {
   
   role       = aws_iam_role.github_actions_terraform.name
   policy_arn = each.value
+}
+
+# GitHub Environment Management (optional)
+resource "github_repository_environment" "environment" {
+  count = var.manage_github_environments ? 1 : 0
+  
+  repository  = var.github_repository_name
+  environment = var.environment
+
+  # Production environment protection rules
+  dynamic "deployment_policy" {
+    for_each = var.environment == "prod" ? [1] : []
+    content {
+      protected_branches     = var.github_protected_branches
+      custom_branch_policies = var.github_custom_branch_policies
+    }
+  }
+
+  # Reviewers for production environment
+  dynamic "reviewers" {
+    for_each = var.environment == "prod" && length(var.github_reviewers) > 0 ? [1] : []
+    content {
+      users = var.github_reviewers.users
+      teams = var.github_reviewers.teams
+    }
+  }
+
+  # Wait timer for production (optional)
+  dynamic "wait_timer" {
+    for_each = var.environment == "prod" && var.github_wait_timer_minutes > 0 ? [1] : []
+    content {
+      wait_timer = var.github_wait_timer_minutes
+    }
+  }
+}
+
+# GitHub Environment Secrets
+resource "github_actions_environment_secret" "aws_role_arn" {
+  count = var.manage_github_environments ? 1 : 0
+  
+  repository      = var.github_repository_name
+  environment     = github_repository_environment.environment[0].environment
+  secret_name     = "AWS_ROLE_ARN"
+  plaintext_value = aws_iam_role.github_actions_terraform.arn
+}
+
+resource "github_actions_environment_secret" "tf_state_bucket" {
+  count = var.manage_github_environments ? 1 : 0
+  
+  repository      = var.github_repository_name
+  environment     = github_repository_environment.environment[0].environment
+  secret_name     = "TF_STATE_BUCKET"
+  plaintext_value = aws_s3_bucket.terraform_state.bucket
+}
+
+resource "github_actions_environment_secret" "tf_state_dynamodb_table" {
+  count = var.manage_github_environments ? 1 : 0
+  
+  repository      = var.github_repository_name
+  environment     = github_repository_environment.environment[0].environment
+  secret_name     = "TF_STATE_DYNAMODB_TABLE"
+  plaintext_value = aws_dynamodb_table.terraform_locks.name
+}
+
+resource "github_actions_environment_secret" "tf_state_region" {
+  count = var.manage_github_environments ? 1 : 0
+  
+  repository      = var.github_repository_name
+  environment     = github_repository_environment.environment[0].environment
+  secret_name     = "TF_STATE_REGION"
+  plaintext_value = local.region
+}
+
+# Additional custom environment secrets
+resource "github_actions_environment_secret" "custom_secrets" {
+  for_each = var.manage_github_environments ? var.additional_github_secrets : {}
+  
+  repository      = var.github_repository_name
+  environment     = github_repository_environment.environment[0].environment
+  secret_name     = each.key
+  plaintext_value = each.value
 }
