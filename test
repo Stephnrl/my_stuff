@@ -1,0 +1,24 @@
+- name: Configure Git authentication
+  run: |
+    # Disable interactive prompts
+    git config --global credential.helper ""
+    git config --global credential.helper store
+    git config --global credential.useHttpPath true
+    
+    # Create credentials file
+    echo "https://${{ secrets.GH_TOKEN }}:x-oauth-basic@github.com" > ~/.git-credentials
+    
+    # Set URL rewriting
+    git config --global url."https://${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+    
+    # Prevent prompting
+    git config --global core.askPass ""
+  env:
+    GIT_TERMINAL_PROMPT: 0
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Terraform Init
+  run: terraform init
+  env:
+    GIT_TERMINAL_PROMPT: 0
+    GIT_ASKPASS: /bin/true
