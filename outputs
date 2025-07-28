@@ -1,0 +1,181 @@
+################################################################################
+# VPC
+################################################################################
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = try(aws_vpc.this[0].id, null)
+}
+
+output "vpc_arn" {
+  description = "The ARN of the VPC"
+  value       = try(aws_vpc.this[0].arn, null)
+}
+
+output "vpc_cidr_block" {
+  description = "The CIDR block of the VPC"
+  value       = try(aws_vpc.this[0].cidr_block, null)
+}
+
+output "vpc_instance_tenancy" {
+  description = "Tenancy of instances spin up within VPC"
+  value       = try(aws_vpc.this[0].instance_tenancy, null)
+}
+
+output "vpc_enable_dns_support" {
+  description = "Whether or not the VPC has DNS support"
+  value       = try(aws_vpc.this[0].enable_dns_support, null)
+}
+
+output "vpc_enable_dns_hostnames" {
+  description = "Whether or not the VPC has DNS hostname support"
+  value       = try(aws_vpc.this[0].enable_dns_hostnames, null)
+}
+
+output "vpc_main_route_table_id" {
+  description = "The ID of the main route table associated with this VPC"
+  value       = try(aws_vpc.this[0].main_route_table_id, null)
+}
+
+output "vpc_default_network_acl_id" {
+  description = "The ID of the default network ACL"
+  value       = try(aws_vpc.this[0].default_network_acl_id, null)
+}
+
+output "vpc_default_security_group_id" {
+  description = "The ID of the security group created by default on VPC creation"
+  value       = try(aws_vpc.this[0].default_security_group_id, null)
+}
+
+output "vpc_default_route_table_id" {
+  description = "The ID of the default route table"
+  value       = try(aws_vpc.this[0].default_route_table_id, null)
+}
+
+output "vpc_owner_id" {
+  description = "The ID of the AWS account that owns the VPC"
+  value       = try(aws_vpc.this[0].owner_id, null)
+}
+
+################################################################################
+# Subnets
+################################################################################
+
+output "private_subnets" {
+  description = "List of IDs of private subnets"
+  value       = aws_subnet.private[*].id
+}
+
+output "private_subnet_arns" {
+  description = "List of ARNs of private subnets"
+  value       = aws_subnet.private[*].arn
+}
+
+output "private_subnets_cidr_blocks" {
+  description = "List of CIDR blocks of the private subnets"
+  value       = compact(aws_subnet.private[*].cidr_block)
+}
+
+output "public_subnets" {
+  description = "List of IDs of public subnets"
+  value       = aws_subnet.public[*].id
+}
+
+output "public_subnet_arns" {
+  description = "List of ARNs of public subnets"
+  value       = aws_subnet.public[*].arn
+}
+
+output "public_subnets_cidr_blocks" {
+  description = "List of CIDR blocks of the public subnets"
+  value       = compact(aws_subnet.public[*].cidr_block)
+}
+
+################################################################################
+# Internet Gateway
+################################################################################
+
+output "igw_id" {
+  description = "The ID of the Internet Gateway"
+  value       = try(aws_internet_gateway.this[0].id, null)
+}
+
+output "igw_arn" {
+  description = "The ARN of the Internet Gateway"
+  value       = try(aws_internet_gateway.this[0].arn, null)
+}
+
+################################################################################
+# NAT Gateway
+################################################################################
+
+output "nat_ids" {
+  description = "List of IDs of the NAT Gateways"
+  value       = aws_nat_gateway.this[*].id
+}
+
+output "nat_public_ips" {
+  description = "List of public Elastic IPs associated with NAT Gateways"
+  value       = aws_eip.nat[*].public_ip
+}
+
+output "natgw_ids" {
+  description = "List of IDs of the NAT Gateways"
+  value       = aws_nat_gateway.this[*].id
+}
+
+################################################################################
+# Route Tables
+################################################################################
+
+output "private_route_table_ids" {
+  description = "List of IDs of the private route tables"
+  value       = aws_route_table.private[*].id
+}
+
+output "public_route_table_ids" {
+  description = "List of IDs of the public route tables"
+  value       = aws_route_table.public[*].id
+}
+
+################################################################################
+# Transit Gateway
+################################################################################
+
+output "tgw_attachment_id" {
+  description = "ID of the Transit Gateway VPC attachment"
+  value       = try(aws_ec2_transit_gateway_vpc_attachment.this[0].id, null)
+}
+
+output "tgw_attachment_arn" {
+  description = "ARN of the Transit Gateway VPC attachment"
+  value       = try(aws_ec2_transit_gateway_vpc_attachment.this[0].arn, null)
+}
+
+output "tgw_attachment_state" {
+  description = "State of the Transit Gateway VPC attachment"
+  value       = try(aws_ec2_transit_gateway_vpc_attachment.this[0].state, null)
+}
+
+output "tgw_attachment_vpc_owner_id" {
+  description = "Identifier of the AWS account that owns the VPC"
+  value       = try(aws_ec2_transit_gateway_vpc_attachment.this[0].vpc_owner_id, null)
+}
+
+################################################################################
+# Availability Zones
+################################################################################
+
+output "azs" {
+  description = "A list of availability zones specified as argument to this module"
+  value       = var.azs
+}
+
+################################################################################
+# Default Security Group
+################################################################################
+
+output "default_security_group_id" {
+  description = "The ID of the security group created by default on VPC creation"
+  value       = try(aws_default_security_group.this[0].id, aws_vpc.this[0].default_security_group_id, null)
+}
