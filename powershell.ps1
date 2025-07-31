@@ -27,3 +27,15 @@ foreach ($path in $logPaths) {
         Select-Object Name, @{Name="Size(MB)";Expression={[math]::Round($_.Length/1MB,2)}} -First 10
     }
 }
+
+
+
+Get-ChildItem -Path "D:\" -Directory | 
+ForEach-Object {
+    $size = (Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | 
+             Measure-Object -Property Length -Sum).Sum
+    [PSCustomObject]@{
+        Directory = $_.Name
+        SizeGB = [math]::Round($size / 1GB, 2)
+    }
+} | Sort-Object SizeGB -Descending
