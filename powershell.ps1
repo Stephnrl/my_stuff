@@ -52,3 +52,22 @@ ForEach-Object {
         SizeGB = [math]::Round($size / 1GB, 2)
     }
 } | Sort-Object SizeGB -Descending
+
+
+
+
+Get-ChildItem -Path "D:\Logs\DMS" -Directory | 
+ForEach-Object {
+    $size = (Get-ChildItem -Path $_.FullName -Recurse -File -ErrorAction SilentlyContinue | 
+             Measure-Object -Property Length -Sum).Sum
+    [PSCustomObject]@{
+        Directory = $_.Name
+        SizeGB = [math]::Round($size / 1GB, 2)
+    }
+} | Sort-Object SizeGB -Descending
+
+
+
+Get-ChildItem -Path "D:\Logs\DMS" -File -Recurse -ErrorAction SilentlyContinue | 
+Sort-Object Length -Descending | 
+Select-Object Name, Directory, @{Name="SizeGB";Expression={[math]::Round($_.Length/1GB,2)}}, LastWriteTime -First 20
