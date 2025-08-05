@@ -1,0 +1,172 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyNetworkingInfrastructure",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CreateVpc",
+        "ec2:DeleteVpc",
+        "ec2:ModifyVpcAttribute",
+        "ec2:CreateDefaultVpc",
+        "ec2:CreateInternetGateway",
+        "ec2:DeleteInternetGateway",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:CreateNatGateway",
+        "ec2:DeleteNatGateway",
+        "ec2:CreateSubnet",
+        "ec2:DeleteSubnet",
+        "ec2:ModifySubnetAttribute",
+        "ec2:CreateRouteTable",
+        "ec2:DeleteRouteTable",
+        "ec2:CreateRoute",
+        "ec2:DeleteRoute",
+        "ec2:ReplaceRoute",
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:ReplaceRouteTableAssociation",
+        "ec2:CreateNetworkAcl",
+        "ec2:DeleteNetworkAcl",
+        "ec2:CreateNetworkAclEntry",
+        "ec2:DeleteNetworkAclEntry",
+        "ec2:ReplaceNetworkAclEntry",
+        "ec2:ReplaceNetworkAclAssociation",
+        "ec2:CreateVpcPeeringConnection",
+        "ec2:DeleteVpcPeeringConnection",
+        "ec2:AcceptVpcPeeringConnection",
+        "ec2:RejectVpcPeeringConnection",
+        "ec2:CreateTransitGateway",
+        "ec2:DeleteTransitGateway",
+        "ec2:ModifyTransitGateway",
+        "ec2:CreateTransitGatewayVpcAttachment",
+        "ec2:DeleteTransitGatewayVpcAttachment",
+        "ec2:CreateTransitGatewayRouteTable",
+        "ec2:DeleteTransitGatewayRouteTable",
+        "ec2:CreateDhcpOptions",
+        "ec2:DeleteDhcpOptions",
+        "ec2:AssociateDhcpOptions",
+        "ec2:CreateVpnConnection",
+        "ec2:DeleteVpnConnection",
+        "ec2:CreateVpnGateway",
+        "ec2:DeleteVpnGateway",
+        "directconnect:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyIAMManagement",
+      "Effect": "Deny",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:UpdateRole",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:CreateUser",
+        "iam:DeleteUser",
+        "iam:CreateGroup",
+        "iam:DeleteGroup",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:AttachUserPolicy",
+        "iam:DetachUserPolicy",
+        "iam:AttachGroupPolicy",
+        "iam:DetachGroupPolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:PutUserPolicy",
+        "iam:DeleteUserPolicy",
+        "iam:PutGroupPolicy",
+        "iam:DeleteGroupPolicy",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:CreateOpenIDConnectProvider",
+        "iam:DeleteOpenIDConnectProvider",
+        "iam:UpdateOpenIDConnectProviderThumbprint",
+        "iam:CreateSAMLProvider",
+        "iam:UpdateSAMLProvider",
+        "iam:DeleteSAMLProvider"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyOrganizationManagement",
+      "Effect": "Deny",
+      "Action": [
+        "organizations:*",
+        "account:*",
+        "billing:*",
+        "budgets:*",
+        "ce:*",
+        "cur:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyCrossAccountSharing",
+      "Effect": "Deny",
+      "Action": [
+        "ram:*",
+        "resource-groups:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenySecurityBypass",
+      "Effect": "Deny",
+      "Action": [
+        "cloudtrail:StopLogging",
+        "cloudtrail:DeleteTrail",
+        "cloudtrail:UpdateTrail",
+        "config:DeleteConfigRule",
+        "config:DeleteConfigurationRecorder",
+        "config:DeleteDeliveryChannel",
+        "config:StopConfigurationRecorder",
+        "guardduty:DeleteDetector",
+        "guardduty:UpdateDetector",
+        "securityhub:DisableSecurityHub",
+        "securityhub:DeleteMembers",
+        "ssm:UpdateDocumentDefaultVersion",
+        "ssm:ModifyDocumentPermission"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RequireEncryption",
+      "Effect": "Deny",
+      "Action": [
+        "s3:PutObject",
+        "s3:PutObjectAcl"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": ["AES256", "aws:kms"]
+        }
+      }
+    },
+    {
+      "Sid": "RequireEBSEncryption",
+      "Effect": "Deny",
+      "Action": [
+        "ec2:CreateVolume",
+        "ec2:RunInstances"
+      ],
+      "Resource": [
+        "arn:aws:ec2:*:*:volume/*",
+        "arn:aws:ec2:*:*:instance/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "ec2:Encrypted": "false"
+        }
+      }
+    }
+  ]
+}
