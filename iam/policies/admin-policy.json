@@ -1,0 +1,52 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AdminAccessRestricted",
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+      %{ if vpc_id != null ~}
+      ,"Condition": {
+        "StringEquals": {
+          "ec2:vpc": "${vpc_id}"
+        }
+      }
+      %{ endif ~}
+    }
+    %{ if enable_cost_controls ~}
+    ,{
+      "Sid": "RestrictInstanceTypes",
+      "Effect": "Deny",
+      "Action": ["ec2:RunInstances"],
+      "Resource": ["arn:aws:ec2:*:*:instance/*"],
+      "Condition": {
+        "ForAnyValue:StringNotLike": {
+          "ec2:InstanceType": ${jsonencode(allowed_instance_types)}
+        }
+      }
+    }
+    %{ endif ~}
+    %{ if length(allowed_regions) > 0 ~}
+    ,{
+      "Sid": "RestrictRegions",
+      "Effect": "Deny",
+      "Action": ["*"],
+      "Resource": ["*"],
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": ${jsonencode(allowed_regions)},
+          "aws:Service": [
+            "iam",
+            "cloudfront",
+            "route53",
+            "waf",
+            "support",
+            "trustedadvisor"
+          ]
+        }
+      }
+    }
+    %{ endif ~}
+  ]
+}
