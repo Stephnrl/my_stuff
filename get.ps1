@@ -1,32 +1,28 @@
-function Get-KeyVaultCredentials {
+function Test-KeyVaultCredentials {
     <#
     .SYNOPSIS
-        Retrieves credentials from Azure Gov Key Vault where Security ID is the vault name
+        Tests if credentials can be retrieved from a Key Vault
     
     .DESCRIPTION
-        Uses Azure CLI to retrieve credentials from Key Vault. 
-        The Security ID (e.g., 622, 1211) IS the Key Vault name.
-        Returns JSON payload with admin user and password.
+        Validates Azure authentication, Key Vault access, and JSON format 
+        without returning or exposing credentials
     
     .PARAMETER SecurityId
-        The security ID which is also the Key Vault name (e.g., 622, 1211)
+        The security ID (Key Vault name) to test
     
     .PARAMETER SecretName
-        Name of the secret within the Key Vault (default: "credentials")
+        Name of the secret to test (default: "credentials")
     
-    .PARAMETER SetEnvironmentVariables
-        Set credentials as environment variables for current session
-    
-    .PARAMETER MaskValues
-        Add credentials to GitHub Actions masked values for security
+    .PARAMETER Detailed
+        Show detailed test results including auth context
     
     .EXAMPLE
-        $creds = Get-KeyVaultCredentials -SecurityId "622"
-        Write-Host "Admin User: $($creds.adminUser)"
+        Test-KeyVaultCredentials -SecurityId "622"
+        # Returns $true if successful, $false otherwise
     
     .EXAMPLE
-        Get-KeyVaultCredentials -SecurityId "622" -SetEnvironmentVariables -MaskValues
-        # Now available as $env:ADMIN_USER and $env:ADMIN_PASSWORD
+        Test-KeyVaultCredentials -SecurityId "622" -Detailed
+        # Shows detailed information about the test
     #>
     [CmdletBinding()]
     param(
@@ -36,68 +32,111 @@ function Get-KeyVaultCredentials {
         [Parameter(Mandatory = $false)]
         [string]$SecretName = "credentials",
         
-        [switch]$SetEnvironmentVariables,
-        
-        [switch]$MaskValues
+        [switch]$Detailed
     )
     
-    begin {
-        Write-Verbose "Retrieving credentials from Key Vault: $SecurityId"
-        
-        # Use private helper to check GitHub Actions environment
-        $isGitHubActions = Test-GitHubActionsEnvironment
-        
-        if ($isGitHubActions) {
-            Write-Host "::group::Retrieving Key Vault Credentials (Security ID: $SecurityId)"
-        }
+    $testResults = @{
+        Success = $false
+        AuthenticationValid = $false
+        VaultAccessible = $false
+        SecretExists = $false
+        JsonValid = $false
+        RequiredPropertiesExist = $false
+        ErrorMessage = ""
     }
     
-    process {
+    try {
+        # Test 1: Azure CLI Authentication
+        Write-Verbose "Testing Azure CLI authentication..."
+        $authContext = Get-AzureCliAuthContext
+        
+        if ($authContext) {
+            $testResults.AuthenticationValid = $true
+            if ($Detailed) {
+                Write-Host "✓ Authentication: $($authContext.DisplayName) [$($authContext.AuthType)]"
+            }
+        } else {
+            $testResults.ErrorMessage = "Not authenticated to Azure CLI"
+            throw $testResults.ErrorMessage
+        }
+        
+        # Test 2: Key Vault Access
+        Write-Verbose "Testing Key Vault accessibility..."
+        $vaultExists = Test-KeyVaultExists -VaultName $SecurityId
+        
+        if ($vaultExists) {
+            $testResults.VaultAccessible = $true
+            if ($Detailed) {
+                Write-Host "✓ Key Vault '$SecurityId' is accessible"
+            }
+        } else {
+            $testResults.ErrorMessage = "Key Vault '$SecurityId' not found or not accessible"
+            throw $testResults.ErrorMessage
+        }
+        
+        # Test 3: Secret Retrieval
+        Write-Verbose "Testing secret retrieval..."
+        $secretJson = Get-KeyVaultSecretValue -VaultName $SecurityId -SecretName $SecretName -SuppressError
+        
+        if ($secretJson) {
+            $testResults.SecretExists = $true
+            if ($Detailed) {
+                Write-Host "✓ Secret '$SecretName' exists in vault"
+            }
+        } else {
+            $testResults.ErrorMessage = "Secret '$SecretName' not found in Key Vault '$SecurityId'"
+            throw $testResults.ErrorMessage
+        }
+        
+        # Test 4: JSON Validation
+        Write-Verbose "Testing JSON structure..."
         try {
-            # Use private helper to verify authentication
-            $authContext = Assert-AzureCliAuthentication
-            Write-Verbose "Authenticated as: $($authContext.DisplayName) in $($authContext.Environment)"
-            
-            # Use private helper to retrieve secret
-            $secretJson = Get-KeyVaultSecretValue -VaultName $SecurityId -SecretName $SecretName
-            
-            # Parse and validate the JSON payload
-            $credentials = ConvertFrom-KeyVaultJson -JsonString $secretJson
-            
-            Write-Host "✅ Successfully retrieved credentials from Security ID: $SecurityId"
-            
-            # Mask values in GitHub Actions logs if requested
-            if ($MaskValues -and $isGitHubActions) {
-                Add-GitHubSecretMask -Value $credentials.adminUser
-                Add-GitHubSecretMask -Value $credentials.adminPassword
-                Write-Verbose "Added credentials to masked values"
+            $parsed = $secretJson | ConvertFrom-Json
+            $testResults.JsonValid = $true
+            if ($Detailed) {
+                Write-Host "✓ Secret contains valid JSON"
             }
-            
-            # Set as environment variables if requested
-            if ($SetEnvironmentVariables) {
-                Set-CredentialEnvironmentVariables `
-                    -AdminUser $credentials.adminUser `
-                    -AdminPassword $credentials.adminPassword `
-                    -SecurityId $SecurityId
-                
-                Write-Host "✅ Set environment variables: ADMIN_USER, ADMIN_PASSWORD, SECURITY_ID"
-            }
-            
-            # Return the credentials object
-            return $credentials
+        } catch {
+            $testResults.ErrorMessage = "Secret does not contain valid JSON"
+            throw $testResults.ErrorMessage
         }
-        catch {
-            if ($isGitHubActions) {
-                Write-Host "::error::Failed to retrieve credentials from Security ID $SecurityId`: $_"
+        
+        # Test 5: Required Properties
+        Write-Verbose "Testing required properties..."
+        if ($parsed.adminUser -and $parsed.adminPassword) {
+            $testResults.RequiredPropertiesExist = $true
+            if ($Detailed) {
+                Write-Host "✓ Required properties (adminUser, adminPassword) exist"
             }
-            Write-Error "Failed to retrieve Key Vault credentials: $_"
-            throw
+        } else {
+            $testResults.ErrorMessage = "Secret missing required properties (adminUser and/or adminPassword)"
+            throw $testResults.ErrorMessage
         }
+        
+        # All tests passed
+        $testResults.Success = $true
+        
+        if (-not $Detailed) {
+            Write-Host "✅ Key Vault '$SecurityId' is properly configured and accessible"
+        } else {
+            Write-Host "`n✅ All tests passed for Security ID: $SecurityId"
+        }
+        
+        return $true
     }
-    
-    end {
-        if ($isGitHubActions) {
-            Write-Host "::endgroup::"
+    catch {
+        if ($Detailed) {
+            Write-Host "`n❌ Test failed: $($testResults.ErrorMessage)" -ForegroundColor Red
+            Write-Host "`nTest Results:" -ForegroundColor Yellow
+            Write-Host "  Authentication Valid: $($testResults.AuthenticationValid)"
+            Write-Host "  Vault Accessible: $($testResults.VaultAccessible)"
+            Write-Host "  Secret Exists: $($testResults.SecretExists)"
+            Write-Host "  JSON Valid: $($testResults.JsonValid)"
+            Write-Host "  Required Properties: $($testResults.RequiredPropertiesExist)"
+        } else {
+            Write-Warning "Test failed for Key Vault '$SecurityId': $($testResults.ErrorMessage)"
         }
+        
+        return $false
     }
 }
