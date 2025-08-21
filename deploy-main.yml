@@ -1,256 +1,95 @@
-# .github/workflows/bootstrap-workflow.yml
-name: Bootstrap Infrastructure
+# .github/workflows/deploy-main.yml
+name: 🚀 Deploy Landing Zone
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       environment:
+        description: 'Environment to deploy'
         required: true
-        type: string
+        type: choice
+        options:
+          - nonprod
+          - prod
+          - sandbox
+          - all-environments
+      component:
+        description: 'Component to deploy'
+        required: true
+        type: choice
+        options:
+          - all
+          - bootstrap-only
+          - shared-infrastructure
+          - teams-only
       action:
+        description: 'Terraform action'
         required: true
-        type: string
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
       dry_run:
+        description: 'Dry run mode (plan only)'
         required: false
         type: boolean
         default: true
-    outputs:
-      account_id:
-        description: "AWS Account ID"
-        value: ${{ jobs.bootstrap-accounts.outputs.account_id }}
-      deployment_status:
-        description: "Overall deployment status"
-        value: ${{ jobs.deployment-summary.outputs.status }}
-
-env:
-  AWS_REGION: "us-east-1"
 
 jobs:
-  # Bootstrap Accounts
-  bootstrap-accounts:
+  setup:
     runs-on: ubuntu-latest
     outputs:
-      account_id: ${{ steps.deploy-accounts.outputs.account_id }}
-      exit_code: ${{ steps.deploy-accounts.outputs.exit_code }}
+      environments: ${{ steps.matrix.outputs.environments }}
+      deploy_bootstrap: ${{ steps.flags.outputs.bootstrap }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          
-      - name: Make deploy script executable
-        run: chmod +x scripts/tf_deploy.sh
-        
-      - name: Deploy Account Bootstrap
-        id: deploy-accounts
+      - name: Set environment matrix
+        id: matrix
         run: |
-          # Determine action based on inputs
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            SCRIPT_ACTION="plan"
+          if [[ "${{ inputs.environment }}" == "all-environments" ]]; then
+            echo "environments=[\"nonprod\",\"sandbox\",\"prod\"]" >> $GITHUB_OUTPUT
           else
-            SCRIPT_ACTION="${{ inputs.action }}"
+            echo "environments=[\"${{ inputs.environment }}\"]" >> $GITHUB_OUTPUT
           fi
           
-          echo "🚀 Deploying accounts for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
-          
-          # Call your existing script
-          ./scripts/tf_deploy.sh bootstrap \
-            --dar bootstrap/infrastructure/initialize \
-            --action $SCRIPT_ACTION \
-            --tfvars bootstrap/accounts/poc/${{ inputs.environment }}.tfvars \
-            --tfvars bootstrap/accounts/poc/common.tfvars
-          
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-          
-          # Capture account ID if successful (adjust this based on your script output)
-          if [[ $EXIT_CODE -eq 0 && "$SCRIPT_ACTION" == "apply" ]]; then
-            # Assuming your script outputs account ID somehow - adjust as needed
-            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
-            echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
-          fi
-          
-          exit $EXIT_CODE
-
-  # Bootstrap Shared VPC
-  bootstrap-shared-vpc:
-    runs-on: ubuntu-latest
-    needs: bootstrap-accounts
-    if: needs.bootstrap-accounts.outputs.exit_code == '0'
-    outputs:
-      exit_code: ${{ steps.deploy-vpc.outputs.exit_code }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          
-      - name: Make deploy script executable
-        run: chmod +x scripts/tf_deploy.sh
-        
-      - name: Deploy Shared VPC
-        id: deploy-vpc
+      - name: Set component flags  
+        id: flags
         run: |
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            SCRIPT_ACTION="plan"
-          else
-            SCRIPT_ACTION="${{ inputs.action }}"
-          fi
-          
-          echo "🌐 Deploying shared VPC for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
-          
-          ./scripts/tf_deploy.sh shared-vpc \
-            --dar bootstrap/shared-vpc/initialize \
-            --action $SCRIPT_ACTION \
-            --tfvars bootstrap/shared-vpc/${{ inputs.environment }}/terraform.tfvars \
-            --tfvars bootstrap/shared-vpc/common.tfvars
-          
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-          exit $EXIT_CODE
+          case "${{ inputs.component }}" in
+            "all"|"bootstrap-only")
+              echo "bootstrap=true" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "bootstrap=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
 
-  # Bootstrap Shared EKS
-  bootstrap-shared-eks:
-    runs-on: ubuntu-latest
-    needs: bootstrap-shared-vpc
-    if: needs.bootstrap-shared-vpc.outputs.exit_code == '0'
-    outputs:
-      exit_code: ${{ steps.deploy-eks.outputs.exit_code }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          
-      - name: Make deploy script executable
-        run: chmod +x scripts/tf_deploy.sh
-        
-      - name: Deploy Shared EKS
-        id: deploy-eks
-        run: |
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            SCRIPT_ACTION="plan"
-          else
-            SCRIPT_ACTION="${{ inputs.action }}"
-          fi
-          
-          echo "⚙️ Deploying shared EKS for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
-          
-          ./scripts/tf_deploy.sh shared-eks \
-            --dar bootstrap/shared-eks/initialize \
-            --action $SCRIPT_ACTION \
-            --tfvars bootstrap/shared-eks/${{ inputs.environment }}/terraform.tfvars \
-            --tfvars bootstrap/shared-eks/common.tfvars
-          
-          EXIT_CODE=$?
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-          exit $EXIT_CODE
-
-  # Bootstrap Teams (parallel deployment)
-  bootstrap-teams:
-    runs-on: ubuntu-latest
-    needs: bootstrap-accounts
-    if: needs.bootstrap-accounts.outputs.exit_code == '0'
+  # Bootstrap deployment using your tf_deploy.sh script
+  deploy-bootstrap:
+    needs: setup
+    if: needs.setup.outputs.deploy_bootstrap == 'true'
     strategy:
       matrix:
-        team: [platform-team, payments-team, frontend-team]  # Adjust to your actual teams
+        environment: ${{ fromJson(needs.setup.outputs.environments) }}
       fail-fast: false
-      max-parallel: 3
-    outputs:
-      all_teams_exit_code: ${{ steps.aggregate-results.outputs.overall_exit_code }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          
-      - name: Make deploy script executable
-        run: chmod +x scripts/tf_deploy.sh
-        
-      - name: Deploy Team Bootstrap
-        id: deploy-team
-        run: |
-          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
-            SCRIPT_ACTION="plan"
-          else
-            SCRIPT_ACTION="${{ inputs.action }}"
-          fi
-          
-          echo "👥 Deploying ${{ matrix.team }} bootstrap for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
-          
-          ./scripts/tf_deploy.sh teams \
-            --dar bootstrap/teams/${{ matrix.team }}/initialize \
-            --action $SCRIPT_ACTION \
-            --tfvars bootstrap/teams/${{ matrix.team }}/${{ inputs.environment }}.tfvars \
-            --tfvars bootstrap/teams/${{ matrix.team }}/common.tfvars
-          
-          EXIT_CODE=$?
-          echo "Team ${{ matrix.team }} deployment exit code: $EXIT_CODE"
-          exit $EXIT_CODE
+      max-parallel: 1  # Deploy environments sequentially
+    uses: ./.github/workflows/bootstrap-workflow.yml
+    with:
+      environment: ${{ matrix.environment }}
+      action: ${{ inputs.action }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
 
-  # Deployment Summary
-  deployment-summary:
-    runs-on: ubuntu-latest
-    needs: [bootstrap-accounts, bootstrap-shared-vpc, bootstrap-shared-eks, bootstrap-teams]
+  summary:
+    needs: [setup, deploy-bootstrap]
     if: always()
-    outputs:
-      status: ${{ steps.summary.outputs.status }}
+    runs-on: ubuntu-latest
     steps:
-      - name: Generate Deployment Summary
-        id: summary
+      - name: Final Summary
         run: |
-          echo "## 🏗️ Bootstrap Deployment Summary for ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Component:** ${{ inputs.component }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment(s):** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Dry Run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Component Results" >> $GITHUB_STEP_SUMMARY
-          
-          # Check results and determine overall status
-          ACCOUNTS_RESULT="${{ needs.bootstrap-accounts.result }}"
-          VPC_RESULT="${{ needs.bootstrap-shared-vpc.result }}"
-          EKS_RESULT="${{ needs.bootstrap-shared-eks.result }}"
-          TEAMS_RESULT="${{ needs.bootstrap-teams.result }}"
-          
-          echo "- **Accounts:** $ACCOUNTS_RESULT" >> $GITHUB_STEP_SUMMARY
-          echo "- **Shared VPC:** $VPC_RESULT" >> $GITHUB_STEP_SUMMARY
-          echo "- **Shared EKS:** $EKS_RESULT" >> $GITHUB_STEP_SUMMARY
-          echo "- **Team Bootstrap:** $TEAMS_RESULT" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Determine overall status
-          if [[ "$ACCOUNTS_RESULT" == "success" && "$VPC_RESULT" == "success" && "$EKS_RESULT" == "success" && "$TEAMS_RESULT" == "success" ]]; then
-            echo "status=success" >> $GITHUB_OUTPUT
-            echo "✅ **Overall Status:** SUCCESS" >> $GITHUB_STEP_SUMMARY
-          elif [[ "$ACCOUNTS_RESULT" == "skipped" && "$VPC_RESULT" == "skipped" && "$EKS_RESULT" == "skipped" && "$TEAMS_RESULT" == "skipped" ]]; then
-            echo "status=skipped" >> $GITHUB_OUTPUT
-            echo "⏭️ **Overall Status:** SKIPPED" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "status=failure" >> $GITHUB_OUTPUT
-            echo "❌ **Overall Status:** FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [[ "${{ needs.bootstrap-accounts.outputs.account_id }}" != "" ]]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Account ID:** ${{ needs.bootstrap-accounts.outputs.account_id }}" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "**Bootstrap Result:** ${{ needs.deploy-bootstrap.result }}" >> $GITHUB_STEP_SUMMARY
