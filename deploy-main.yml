@@ -1,0 +1,160 @@
+# .github/workflows/deploy-main.yml
+name: 🚀 Deploy Landing Zone
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - nonprod
+          - prod
+          - sandbox
+          - all-environments
+      component:
+        description: 'Component to deploy'
+        required: true
+        type: choice
+        options:
+          - all
+          - bootstrap-only
+          - shared-infrastructure
+          - teams-only
+      action:
+        description: 'Terraform action'
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+      dry_run:
+        description: 'Dry run mode (plan only, regardless of action)'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  TF_VERSION: "1.5.7"
+
+jobs:
+  # Determine which environments to deploy
+  setup-deployment:
+    runs-on: ubuntu-latest
+    outputs:
+      environments: ${{ steps.env-matrix.outputs.environments }}
+      deploy_bootstrap: ${{ steps.components.outputs.bootstrap }}
+      deploy_shared: ${{ steps.components.outputs.shared }}
+      deploy_teams: ${{ steps.components.outputs.teams }}
+    steps:
+      - name: Set environment matrix
+        id: env-matrix
+        run: |
+          if [[ "${{ inputs.environment }}" == "all-environments" ]]; then
+            echo "environments=[\"nonprod\",\"prod\",\"sandbox\"]" >> $GITHUB_OUTPUT
+          else
+            echo "environments=[\"${{ inputs.environment }}\"]" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Set component flags
+        id: components
+        run: |
+          case "${{ inputs.component }}" in
+            "all")
+              echo "bootstrap=true" >> $GITHUB_OUTPUT
+              echo "shared=true" >> $GITHUB_OUTPUT
+              echo "teams=true" >> $GITHUB_OUTPUT
+              ;;
+            "bootstrap-only")
+              echo "bootstrap=true" >> $GITHUB_OUTPUT
+              echo "shared=false" >> $GITHUB_OUTPUT
+              echo "teams=false" >> $GITHUB_OUTPUT
+              ;;
+            "shared-infrastructure")
+              echo "bootstrap=false" >> $GITHUB_OUTPUT
+              echo "shared=true" >> $GITHUB_OUTPUT
+              echo "teams=false" >> $GITHUB_OUTPUT
+              ;;
+            "teams-only")
+              echo "bootstrap=false" >> $GITHUB_OUTPUT
+              echo "shared=false" >> $GITHUB_OUTPUT
+              echo "teams=true" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+  # Deploy Bootstrap (for each environment)
+  deploy-bootstrap:
+    needs: setup-deployment
+    if: needs.setup-deployment.outputs.deploy_bootstrap == 'true'
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.setup-deployment.outputs.environments) }}
+      fail-fast: false
+      max-parallel: 1  # Deploy environments sequentially for safety
+    uses: ./.github/workflows/bootstrap-workflow.yml
+    with:
+      environment: ${{ matrix.environment }}
+      action: ${{ inputs.action }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  # Deploy Shared Infrastructure (depends on bootstrap)
+  deploy-shared-infrastructure:
+    needs: [setup-deployment, deploy-bootstrap]
+    if: |
+      always() && 
+      needs.setup-deployment.outputs.deploy_shared == 'true' &&
+      (needs.deploy-bootstrap.result == 'success' || needs.deploy-bootstrap.result == 'skipped')
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.setup-deployment.outputs.environments) }}
+      fail-fast: false
+      max-parallel: 1
+    uses: ./.github/workflows/shared-infrastructure-workflow.yml
+    with:
+      environment: ${{ matrix.environment }}
+      action: ${{ inputs.action }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  # Deploy Teams (depends on shared infrastructure)
+  deploy-teams:
+    needs: [setup-deployment, deploy-shared-infrastructure]
+    if: |
+      always() && 
+      needs.setup-deployment.outputs.deploy_teams == 'true' &&
+      (needs.deploy-shared-infrastructure.result == 'success' || needs.deploy-shared-infrastructure.result == 'skipped')
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.setup-deployment.outputs.environments) }}
+      fail-fast: false
+      max-parallel: 2
+    uses: ./.github/workflows/team-applications-workflow.yml
+    with:
+      environment: ${{ matrix.environment }}
+      action: ${{ inputs.action }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
+  # Summary job
+  deployment-summary:
+    needs: [deploy-bootstrap, deploy-shared-infrastructure, deploy-teams]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment(s):** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Component:** ${{ inputs.component }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Bootstrap: ${{ needs.deploy-bootstrap.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Shared Infrastructure: ${{ needs.deploy-shared-infrastructure.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Teams: ${{ needs.deploy-teams.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
