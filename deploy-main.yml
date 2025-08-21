@@ -18,30 +18,24 @@ on:
       account_id:
         description: "AWS Account ID"
         value: ${{ jobs.bootstrap-accounts.outputs.account_id }}
-      vpc_id:
-        description: "Shared VPC ID"
-        value: ${{ jobs.bootstrap-shared-vpc.outputs.vpc_id }}
+      deployment_status:
+        description: "Overall deployment status"
+        value: ${{ jobs.deployment-summary.outputs.status }}
 
 env:
-  TF_VERSION: "1.5.7"
   AWS_REGION: "us-east-1"
 
 jobs:
-  # Step 1: Account-level bootstrap
+  # Bootstrap Accounts
   bootstrap-accounts:
     runs-on: ubuntu-latest
     outputs:
-      account_id: ${{ steps.terraform-accounts.outputs.account_id }}
+      account_id: ${{ steps.deploy-accounts.outputs.account_id }}
+      exit_code: ${{ steps.deploy-accounts.outputs.exit_code }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -49,55 +43,51 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
           
-      - name: Terraform Init (Accounts)
-        working-directory: ./landing-zone/accounts
+      - name: Make deploy script executable
+        run: chmod +x scripts/tf_deploy.sh
+        
+      - name: Deploy Account Bootstrap
+        id: deploy-accounts
         run: |
-          terraform init \
-            -backend-config="../../bootstrap/accounts/${{ inputs.environment }}/backend.tfvars" \
-            -reconfigure
-            
-      - name: Terraform Execute (Accounts)
-        id: terraform-accounts
-        working-directory: ./landing-zone/accounts
-        run: |
-          if [[ "${{ inputs.action }}" == "plan" || "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "📋 Planning accounts for ${{ inputs.environment }}..."
-            terraform plan \
-              -var-file="../../bootstrap/accounts/${{ inputs.environment }}/terraform.tfvars" \
-              -out="accounts-${{ inputs.environment }}.tfplan"
-          elif [[ "${{ inputs.action }}" == "apply" ]]; then
-            echo "🚀 Applying accounts for ${{ inputs.environment }}..."
-            terraform apply \
-              -var-file="../../bootstrap/accounts/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
-              
-            # Capture account ID for downstream jobs
-            ACCOUNT_ID=$(terraform output -raw account_id 2>/dev/null || echo "unknown")
-            echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
-          elif [[ "${{ inputs.action }}" == "destroy" ]]; then
-            echo "💥 Destroying accounts for ${{ inputs.environment }}..."
-            terraform destroy \
-              -var-file="../../bootstrap/accounts/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
+          # Determine action based on inputs
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            SCRIPT_ACTION="plan"
+          else
+            SCRIPT_ACTION="${{ inputs.action }}"
           fi
+          
+          echo "🚀 Deploying accounts for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
+          
+          # Call your existing script
+          ./scripts/tf_deploy.sh bootstrap \
+            --dar bootstrap/infrastructure/initialize \
+            --action $SCRIPT_ACTION \
+            --tfvars bootstrap/accounts/poc/${{ inputs.environment }}.tfvars \
+            --tfvars bootstrap/accounts/poc/common.tfvars
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # Capture account ID if successful (adjust this based on your script output)
+          if [[ $EXIT_CODE -eq 0 && "$SCRIPT_ACTION" == "apply" ]]; then
+            # Assuming your script outputs account ID somehow - adjust as needed
+            ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
+            echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          fi
+          
+          exit $EXIT_CODE
 
-  # Step 2: Shared VPC bootstrap
+  # Bootstrap Shared VPC
   bootstrap-shared-vpc:
     runs-on: ubuntu-latest
     needs: bootstrap-accounts
-    if: needs.bootstrap-accounts.result == 'success' || needs.bootstrap-accounts.result == 'skipped'
+    if: needs.bootstrap-accounts.outputs.exit_code == '0'
     outputs:
-      vpc_id: ${{ steps.terraform-vpc.outputs.vpc_id }}
+      exit_code: ${{ steps.deploy-vpc.outputs.exit_code }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -105,53 +95,41 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
           
-      - name: Terraform Init (Shared VPC)
-        working-directory: ./landing-zone/shared-vpc
+      - name: Make deploy script executable
+        run: chmod +x scripts/tf_deploy.sh
+        
+      - name: Deploy Shared VPC
+        id: deploy-vpc
         run: |
-          terraform init \
-            -backend-config="../../bootstrap/shared-vpc/${{ inputs.environment }}/backend.tfvars" \
-            -reconfigure
-            
-      - name: Terraform Execute (Shared VPC)
-        id: terraform-vpc
-        working-directory: ./landing-zone/shared-vpc
-        run: |
-          if [[ "${{ inputs.action }}" == "plan" || "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "📋 Planning shared VPC for ${{ inputs.environment }}..."
-            terraform plan \
-              -var-file="../../bootstrap/shared-vpc/${{ inputs.environment }}/terraform.tfvars" \
-              -out="shared-vpc-${{ inputs.environment }}.tfplan"
-          elif [[ "${{ inputs.action }}" == "apply" ]]; then
-            echo "🚀 Applying shared VPC for ${{ inputs.environment }}..."
-            terraform apply \
-              -var-file="../../bootstrap/shared-vpc/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
-              
-            # Capture VPC ID for downstream jobs
-            VPC_ID=$(terraform output -raw vpc_id 2>/dev/null || echo "unknown")
-            echo "vpc_id=$VPC_ID" >> $GITHUB_OUTPUT
-          elif [[ "${{ inputs.action }}" == "destroy" ]]; then
-            echo "💥 Destroying shared VPC for ${{ inputs.environment }}..."
-            terraform destroy \
-              -var-file="../../bootstrap/shared-vpc/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            SCRIPT_ACTION="plan"
+          else
+            SCRIPT_ACTION="${{ inputs.action }}"
           fi
+          
+          echo "🌐 Deploying shared VPC for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
+          
+          ./scripts/tf_deploy.sh shared-vpc \
+            --dar bootstrap/shared-vpc/initialize \
+            --action $SCRIPT_ACTION \
+            --tfvars bootstrap/shared-vpc/${{ inputs.environment }}/terraform.tfvars \
+            --tfvars bootstrap/shared-vpc/common.tfvars
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
 
-  # Step 3: Shared EKS bootstrap
+  # Bootstrap Shared EKS
   bootstrap-shared-eks:
     runs-on: ubuntu-latest
     needs: bootstrap-shared-vpc
-    if: needs.bootstrap-shared-vpc.result == 'success' || needs.bootstrap-shared-vpc.result == 'skipped'
+    if: needs.bootstrap-shared-vpc.outputs.exit_code == '0'
+    outputs:
+      exit_code: ${{ steps.deploy-eks.outputs.exit_code }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -159,53 +137,46 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
           
-      - name: Terraform Init (Shared EKS)
-        working-directory: ./landing-zone/shared-eks
+      - name: Make deploy script executable
+        run: chmod +x scripts/tf_deploy.sh
+        
+      - name: Deploy Shared EKS
+        id: deploy-eks
         run: |
-          terraform init \
-            -backend-config="../../bootstrap/shared-eks/${{ inputs.environment }}/backend.tfvars" \
-            -reconfigure
-            
-      - name: Terraform Execute (Shared EKS)
-        working-directory: ./landing-zone/shared-eks
-        run: |
-          if [[ "${{ inputs.action }}" == "plan" || "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "📋 Planning shared EKS for ${{ inputs.environment }}..."
-            terraform plan \
-              -var-file="../../bootstrap/shared-eks/${{ inputs.environment }}/terraform.tfvars" \
-              -out="shared-eks-${{ inputs.environment }}.tfplan"
-          elif [[ "${{ inputs.action }}" == "apply" ]]; then
-            echo "🚀 Applying shared EKS for ${{ inputs.environment }}..."
-            terraform apply \
-              -var-file="../../bootstrap/shared-eks/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
-          elif [[ "${{ inputs.action }}" == "destroy" ]]; then
-            echo "💥 Destroying shared EKS for ${{ inputs.environment }}..."
-            terraform destroy \
-              -var-file="../../bootstrap/shared-eks/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            SCRIPT_ACTION="plan"
+          else
+            SCRIPT_ACTION="${{ inputs.action }}"
           fi
+          
+          echo "⚙️ Deploying shared EKS for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
+          
+          ./scripts/tf_deploy.sh shared-eks \
+            --dar bootstrap/shared-eks/initialize \
+            --action $SCRIPT_ACTION \
+            --tfvars bootstrap/shared-eks/${{ inputs.environment }}/terraform.tfvars \
+            --tfvars bootstrap/shared-eks/common.tfvars
+          
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
 
-  # Step 4: Team-specific bootstrap (IAM roles/policies with "bootstrap" prefix)
+  # Bootstrap Teams (parallel deployment)
   bootstrap-teams:
     runs-on: ubuntu-latest
     needs: bootstrap-accounts
-    if: needs.bootstrap-accounts.result == 'success' || needs.bootstrap-accounts.result == 'skipped'
+    if: needs.bootstrap-accounts.outputs.exit_code == '0'
     strategy:
       matrix:
-        team: [platform-team, payments-team, frontend-team]  # Adjust to your teams
+        team: [platform-team, payments-team, frontend-team]  # Adjust to your actual teams
       fail-fast: false
       max-parallel: 3
+    outputs:
+      all_teams_exit_code: ${{ steps.aggregate-results.outputs.overall_exit_code }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-          
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -213,29 +184,73 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
           
-      - name: Terraform Init (Team Bootstrap)
-        working-directory: ./landing-zone/teams
+      - name: Make deploy script executable
+        run: chmod +x scripts/tf_deploy.sh
+        
+      - name: Deploy Team Bootstrap
+        id: deploy-team
         run: |
-          terraform init \
-            -backend-config="../../bootstrap/teams/${{ matrix.team }}/${{ inputs.environment }}/backend.tfvars" \
-            -reconfigure
-            
-      - name: Terraform Execute (Team Bootstrap)
-        working-directory: ./landing-zone/teams
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            SCRIPT_ACTION="plan"
+          else
+            SCRIPT_ACTION="${{ inputs.action }}"
+          fi
+          
+          echo "👥 Deploying ${{ matrix.team }} bootstrap for ${{ inputs.environment }} with action: $SCRIPT_ACTION"
+          
+          ./scripts/tf_deploy.sh teams \
+            --dar bootstrap/teams/${{ matrix.team }}/initialize \
+            --action $SCRIPT_ACTION \
+            --tfvars bootstrap/teams/${{ matrix.team }}/${{ inputs.environment }}.tfvars \
+            --tfvars bootstrap/teams/${{ matrix.team }}/common.tfvars
+          
+          EXIT_CODE=$?
+          echo "Team ${{ matrix.team }} deployment exit code: $EXIT_CODE"
+          exit $EXIT_CODE
+
+  # Deployment Summary
+  deployment-summary:
+    runs-on: ubuntu-latest
+    needs: [bootstrap-accounts, bootstrap-shared-vpc, bootstrap-shared-eks, bootstrap-teams]
+    if: always()
+    outputs:
+      status: ${{ steps.summary.outputs.status }}
+    steps:
+      - name: Generate Deployment Summary
+        id: summary
         run: |
-          if [[ "${{ inputs.action }}" == "plan" || "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "📋 Planning ${{ matrix.team }} bootstrap for ${{ inputs.environment }}..."
-            terraform plan \
-              -var-file="../../bootstrap/teams/${{ matrix.team }}/${{ inputs.environment }}/terraform.tfvars" \
-              -out="${{ matrix.team }}-${{ inputs.environment }}.tfplan"
-          elif [[ "${{ inputs.action }}" == "apply" ]]; then
-            echo "🚀 Applying ${{ matrix.team }} bootstrap for ${{ inputs.environment }}..."
-            terraform apply \
-              -var-file="../../bootstrap/teams/${{ matrix.team }}/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
-          elif [[ "${{ inputs.action }}" == "destroy" ]]; then
-            echo "💥 Destroying ${{ matrix.team }} bootstrap for ${{ inputs.environment }}..."
-            terraform destroy \
-              -var-file="../../bootstrap/teams/${{ matrix.team }}/${{ inputs.environment }}/terraform.tfvars" \
-              -auto-approve
+          echo "## 🏗️ Bootstrap Deployment Summary for ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Dry Run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Component Results" >> $GITHUB_STEP_SUMMARY
+          
+          # Check results and determine overall status
+          ACCOUNTS_RESULT="${{ needs.bootstrap-accounts.result }}"
+          VPC_RESULT="${{ needs.bootstrap-shared-vpc.result }}"
+          EKS_RESULT="${{ needs.bootstrap-shared-eks.result }}"
+          TEAMS_RESULT="${{ needs.bootstrap-teams.result }}"
+          
+          echo "- **Accounts:** $ACCOUNTS_RESULT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Shared VPC:** $VPC_RESULT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Shared EKS:** $EKS_RESULT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Team Bootstrap:** $TEAMS_RESULT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine overall status
+          if [[ "$ACCOUNTS_RESULT" == "success" && "$VPC_RESULT" == "success" && "$EKS_RESULT" == "success" && "$TEAMS_RESULT" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ **Overall Status:** SUCCESS" >> $GITHUB_STEP_SUMMARY
+          elif [[ "$ACCOUNTS_RESULT" == "skipped" && "$VPC_RESULT" == "skipped" && "$EKS_RESULT" == "skipped" && "$TEAMS_RESULT" == "skipped" ]]; then
+            echo "status=skipped" >> $GITHUB_OUTPUT
+            echo "⏭️ **Overall Status:** SKIPPED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "❌ **Overall Status:** FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.bootstrap-accounts.outputs.account_id }}" != "" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Account ID:** ${{ needs.bootstrap-accounts.outputs.account_id }}" >> $GITHUB_STEP_SUMMARY
           fi
