@@ -1,0 +1,23 @@
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=Username,AttributeValue=first.last-az@account \
+  --start-time 2024-01-01 \
+  --end-time 2024-01-31 \
+  --query 'Events[?
+    (contains(EventName, `Create`) || contains(EventName, `Run`) || contains(EventName, `Launch`) || contains(EventName, `Put`)) &&
+    !contains(EventName, `AssumeRole`) &&
+    !contains(EventName, `GetSessionToken`) &&
+    !contains(EventName, `Describe`) &&
+    !contains(EventName, `List`) &&
+    !contains(EventName, `Get`) &&
+    !contains(EventName, `PutBucketLogging`) &&
+    !contains(EventName, `PutObject`) &&
+    EventSource != `sts.amazonaws.com` &&
+    EventSource != `cloudtrail.amazonaws.com`
+  ].{
+    Time:EventTime,
+    Service:EventSource,
+    Action:EventName,
+    Resource:Resources[0].ResourceName,
+    Type:Resources[0].ResourceType
+  }' \
+  --output table
