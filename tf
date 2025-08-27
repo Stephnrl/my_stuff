@@ -1,246 +1,192 @@
-# terraform-module-aws-eks-landing-zone/modules/team-iam-role/main.tf
+# terraform-module-aws-eks-landing-zone/modules/team-iam-role/variables.tf
 
-# Get current AWS account ID and region
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
-locals {
-  account_id = data.aws_caller_identity.current.account_id
-  region     = data.aws_region.current.name
+# Required Variables
+variable "team_name" {
+  description = "Name of the team (used for naming resources and namespaces)"
+  type        = string
   
-  # Generate GitHub repo subject conditions based on input
-  github_subjects = flatten([
-    # Allow all repos matching pattern
-    [for repo in var.github_repositories : "repo:${var.github_org}/${repo}:*"],
+  validation {
+    condition     = can(regex("^[a-z0-9-]+$", var.team_name)) && length(var.team_name) <= 32
+    error_message = "Team name must be lowercase alphanumeric with hyphens only, max 32 characters."
+  }
+}
+
+variable "github_org" {
+  description = "GitHub organization name"
+  type        = string
+}
+
+variable "github_repositories" {
+  description = "List of GitHub repository names that can assume this role"
+  type        = list(string)
+  
+  validation {
+    condition     = length(var.github_repositories) > 0
+    error_message = "At least one GitHub repository must be specified."
+  }
+}
+
+variable "oidc_provider_arn" {
+  description = "ARN of the GitHub OIDC provider"
+  type        = string
+  
+  validation {
+    condition     = can(regex("^arn:aws:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$", var.oidc_provider_arn))
+    error_message = "OIDC provider ARN must be valid GitHub Actions provider."
+  }
+}
+
+# GitHub Configuration
+variable "github_environments" {
+  description = "List of GitHub environments that can assume this role (optional, allows any if not specified)"
+  type        = list(string)
+  default     = null
+}
+
+# Console Access Configuration
+variable "enable_console_access" {
+  description = "Whether to allow AWS Console access to this role"
+  type        = bool
+  default     = true
+}
+
+variable "require_mfa" {
+  description = "Whether to require MFA for console access"
+  type        = bool
+  default     = true
+}
+
+variable "required_principal_tags" {
+  description = "Required principal tags for console access"
+  type        = map(string)
+  default = {
+    Department = "engineering"
+  }
+}
+
+variable "max_session_duration" {
+  description = "Maximum session duration in seconds (1 hour to 12 hours)"
+  type        = number
+  default     = 3600  # 1 hour
+  
+  validation {
+    condition     = var.max_session_duration >= 3600 && var.max_session_duration <= 43200
+    error_message = "Session duration must be between 1 hour (3600) and 12 hours (43200) seconds."
+  }
+}
+
+# EKS Configuration
+variable "cluster_arn" {
+  description = "EKS cluster ARN (optional, will use wildcard if not provided)"
+  type        = string
+  default     = null
+}
+
+# AWS Services Access
+variable "enable_ecr_access" {
+  description = "Whether to grant ECR access"
+  type        = bool
+  default     = true
+}
+
+variable "ecr_repositories" {
+  description = "List of ECR repository names to grant access to"
+  type        = list(string)
+  default     = []
+  
+  # Auto-generate team-specific repos if not provided
+  validation {
+    condition = length(var.ecr_repositories) > 0 || !var.enable_ecr_access
+    error_message = "ECR repositories must be specified when ECR access is enabled."
+  }
+}
+
+variable "s3_buckets" {
+  description = "List of S3 bucket names to grant access to"
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_cloudwatch_logs" {
+  description = "Whether to grant CloudWatch Logs access"
+  type        = bool
+  default     = false
+}
+
+# Custom Policies
+variable "custom_policies" {
+  description = "Map of custom IAM policies to attach (name -> policy JSON)"
+  type        = map(string)
+  default     = {}
+}
+
+variable "managed_policy_arns" {
+  description = "List of AWS managed policy ARNs to attach"
+  type        = list(string)
+  default     = []
+}
+
+# Advanced Configuration
+variable "path" {
+  description = "Path for the IAM role"
+  type        = string
+  default     = "/"
+  
+  validation {
+    condition     = can(regex("^/.*/$", var.path)) || var.path == "/"
+    error_message = "Path must begin and end with '/' or be just '/'."
+  }
+}
+
+variable "permissions_boundary_arn" {
+  description = "ARN of the permissions boundary policy (optional)"
+  type        = string
+  default     = null
+}
+
+# Tagging
+variable "tags" {
+  description = "A map of tags to assign to the resources"
+  type        = map(string)
+  default     = {}
+}
+
+# Feature Flags
+variable "enable_assume_role_policy_validation" {
+  description = "Whether to validate assume role policy conditions"
+  type        = bool
+  default     = true
+}
+
+# AWS Services Integration
+variable "additional_aws_services" {
+  description = "Additional AWS services configuration"
+  type = object({
+    secrets_manager = optional(object({
+      enabled = bool
+      secrets = optional(list(string), [])
+    }), { enabled = false })
     
-    # Allow environment-specific deployments if environments are specified
-    var.github_environments != null ? flatten([
-      for repo in var.github_repositories : [
-        for env in var.github_environments : 
-        "repo:${var.github_org}/${repo}:environment:${env}"
-      ]
-    ]) : []
-  ])
-}
-
-# IAM Role with dual trust (GitHub OIDC + Console)
-resource "aws_iam_role" "team_role" {
-  name                 = "${var.team_name}-eks-namespace-role"
-  description          = "EKS namespace access role for ${var.team_name} team"
-  max_session_duration = var.max_session_duration
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = concat(
-      # GitHub OIDC trust relationship
-      [{
-        Sid    = "GitHubActionsOIDC"
-        Effect = "Allow"
-        Principal = {
-          Federated = var.oidc_provider_arn
-        }
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Condition = {
-          StringEquals = {
-            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = local.github_subjects
-          }
-        }
-      }],
-      # AWS Console access (conditional)
-      var.enable_console_access ? [{
-        Sid    = "ConsoleAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${local.account_id}:root"
-        }
-        Action = "sts:AssumeRole"
-        Condition = merge(
-          # MFA requirement (conditional)
-          var.require_mfa ? {
-            Bool = {
-              "aws:MultiFactorAuthPresent" = "true"
-            }
-          } : {},
-          # Principal tag requirements (conditional)
-          length(var.required_principal_tags) > 0 ? {
-            StringEquals = {
-              for key, value in var.required_principal_tags : 
-              "aws:PrincipalTag/${key}" => value
-            }
-          } : {}
-        )
-      }] : []
-    )
+    ssm = optional(object({
+      enabled    = bool
+      parameters = optional(list(string), [])
+    }), { enabled = false })
+    
+    rds = optional(object({
+      enabled    = bool
+      db_clusters = optional(list(string), [])
+    }), { enabled = false })
   })
-  
-  tags = merge(
-    var.tags,
-    {
-      Name           = "${var.team_name}-eks-namespace-role"
-      Team           = var.team_name
-      Purpose        = "eks-namespace-access"
-      GitHubOrg      = var.github_org
-      GitHubRepos    = join(",", var.github_repositories)
-      ConsoleAccess  = var.enable_console_access ? "enabled" : "disabled"
-      MFARequired    = var.require_mfa ? "yes" : "no"
-    }
-  )
+  default = {}
 }
 
-# Core EKS access policy
-resource "aws_iam_role_policy" "eks_access" {
-  name = "eks-cluster-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EKSClusterAccess"
-        Effect = "Allow"
-        Action = [
-          "eks:DescribeCluster",
-          "eks:ListClusters"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "EKSAPIAccess"
-        Effect = "Allow"
-        Action = [
-          "eks:AccessKubernetesApi"
-        ]
-        Resource = var.cluster_arn != null ? var.cluster_arn : 
-                  "arn:aws:eks:${local.region}:${local.account_id}:cluster/*"
-      }
-    ]
-  })
-}
-
-# ECR access policy (conditional)
-resource "aws_iam_role_policy" "ecr_access" {
-  count = var.enable_ecr_access ? 1 : 0
-  
-  name = "ecr-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "ECRTokenAccess"
-        Effect = "Allow"
-        Action = [
-          "ecr:GetAuthorizationToken"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "ECRRepositoryAccess"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:DescribeRepositories",
-          "ecr:ListImages",
-          "ecr:DescribeImages"
-        ]
-        Resource = [
-          for repo in var.ecr_repositories : 
-          "arn:aws:ecr:${local.region}:${local.account_id}:repository/${repo}"
-        ]
-      }
-    ]
-  })
-}
-
-# S3 access policy (conditional)
-resource "aws_iam_role_policy" "s3_access" {
-  count = length(var.s3_buckets) > 0 ? 1 : 0
-  
-  name = "s3-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "S3BucketAccess"
-        Effect = "Allow"
-        Action = [
-          "s3:ListBucket",
-          "s3:GetBucketLocation"
-        ]
-        Resource = [
-          for bucket in var.s3_buckets : 
-          "arn:aws:s3:::${bucket}"
-        ]
-      },
-      {
-        Sid    = "S3ObjectAccess"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:GetObjectVersion"
-        ]
-        Resource = [
-          for bucket in var.s3_buckets : 
-          "arn:aws:s3:::${bucket}/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Custom IAM policies (optional)
-resource "aws_iam_role_policy" "custom_policies" {
-  for_each = var.custom_policies
-  
-  name   = each.key
-  role   = aws_iam_role.team_role.id
-  policy = each.value
-}
-
-# Attach managed policies (optional)
-resource "aws_iam_role_policy_attachment" "managed_policies" {
-  for_each = toset(var.managed_policy_arns)
-  
-  role       = aws_iam_role.team_role.name
-  policy_arn = each.value
-}
-
-# CloudWatch Logs access for troubleshooting (conditional)
-resource "aws_iam_role_policy" "cloudwatch_logs" {
-  count = var.enable_cloudwatch_logs ? 1 : 0
-  
-  name = "cloudwatch-logs-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "CloudWatchLogsAccess"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogGroups",
-          "logs:DescribeLogStreams"
-        ]
-        Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/eks/${var.team_name}/*"
-      }
-    ]
-  })
+# Environment-specific settings
+variable "environment_config" {
+  description = "Environment-specific configuration"
+  type = map(object({
+    max_session_duration = optional(number)
+    additional_policies  = optional(map(string), {})
+    tags                = optional(map(string), {})
+  }))
+  default = {}
 }
