@@ -1,397 +1,676 @@
-# Bottlerocket x86_64 FIPS: Our Container Security Strategy
+# EKS Multi-Tenant Namespace Strategy & RBAC Implementation
 
 ## Overview
 
-This document explains our decision to adopt **AWS Bottlerocket x86_64 FIPS** as the operating system for our EKS worker nodes, instead of traditional Amazon Linux 2 (AL2) or Amazon Linux 2023 (AL2023).
+This document outlines the implementation of a secure multi-tenant architecture for our shared EKS cluster using namespace isolation, RBAC, and GitHub OIDC authentication. Each team receives dedicated namespaces with IAM roles that can be assumed from both GitHub Actions (for CI/CD) and AWS Console (for manual operations), while maintaining strict security boundaries through Kubernetes RBAC.
 
-## Operating System Comparison
+## Architecture
 
-### Amazon Linux 2 / Amazon Linux 2023 (Traditional Approach)
-
-**Characteristics:**
-- General-purpose Linux distribution
-- Full package manager (yum/dnf)
-- SSH access enabled by default
-- Supports wide variety of workloads
-- Traditional mutable infrastructure
-- 1,000+ installed packages
-
-**Security Posture:**
-- ⚠️ **Large Attack Surface**: Hundreds of unnecessary packages and services
-- ⚠️ **Mutable System**: Files can be modified at runtime
-- ⚠️ **Package Management**: Requires ongoing security patching
-- ⚠️ **SSH Access**: Additional attack vector
-- ⚠️ **Multi-purpose Design**: Not optimized for container security
-
-### AWS Bottlerocket x86_64 FIPS ⭐ **Our Choice**
-
-**Characteristics:**
-- Purpose-built container-optimized Linux
-- Minimal package set (~50 packages vs 1,000+)
-- No SSH access by default
-- API-driven configuration
-- Immutable infrastructure design
-- FIPS 140-2 validated cryptographic modules
-
-**Security Posture:**
-- ✅ **Minimal Attack Surface**: Only container runtime and essential components
-- ✅ **Immutable System**: Cannot be modified at runtime
-- ✅ **No Package Manager**: Eliminates package-based attack vectors
-- ✅ **Secure by Default**: Hardened configuration out of the box
-- ✅ **FIPS Compliance**: Government-grade cryptographic security
-
-## Security Advantages
-
-### 1. **Drastically Reduced Attack Surface**
-
-| Component | AL2/AL2023 | Bottlerocket FIPS |
-|-----------|------------|-------------------|
-| **Installed Packages** | 1,000+ | ~50 |
-| **Running Services** | 20-30 | 5-8 |
-| **Network Ports** | Multiple | Minimal |
-| **System Binaries** | 500+ | <100 |
-| **SSH Access** | Enabled | Disabled |
-
-**Attack Surface Comparison:**
 ```
-AL2/AL2023: [SSH][Package Manager][System Tools][Libraries][Services][Container Runtime]
-                    ↑ Multiple potential entry points
-
-Bottlerocket: [Essential Services][Container Runtime]
-                    ↑ Minimal, hardened entry points only
+┌─────────────────────────────────────────────────────────────────┐
+│                         GitHub Organization                      │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│  │  Team A     │  │  Team B     │  │  Team C     │            │
+│  │  Repository │  │  Repository │  │  Repository │            │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘            │
+│         │                 │                 │                    │
+│      GitHub            GitHub            GitHub                 │
+│      Actions          Actions          Actions                  │
+└─────────┴─────────────────┴─────────────────┴──────────────────┘
+          │                 │                 │
+          │              OIDC Trust           │
+          ▼                 ▼                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        AWS Account                               │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│  │  Team A     │  │  Team B     │  │  Team C     │            │
+│  │  IAM Role   │  │  IAM Role   │  │  IAM Role   │            │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘            │
+│         │                 │                 │                    │
+│      EKS Access        EKS Access       EKS Access              │
+│        Entry             Entry            Entry                  │
+└─────────┴─────────────────┴─────────────────┴──────────────────┘
+          │                 │                 │
+          ▼                 ▼                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Shared EKS Cluster                          │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │  Namespace:  │  │  Namespace:  │  │  Namespace:  │         │
+│  │   team-a-*   │  │   team-b-*   │  │   team-c-*   │         │
+│  │              │  │              │  │              │         │
+│  │  • RBAC      │  │  • RBAC      │  │  • RBAC      │         │
+│  │  • Quotas    │  │  • Quotas    │  │  • Quotas    │         │
+│  │  • Limits    │  │  • Limits    │  │  • Limits    │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2. **Immutable Infrastructure Security**
+## Implementation Components
 
-**Traditional Linux (AL2/AL2023):**
-```bash
-# Mutable system - files can be changed
-$ sudo vi /etc/ssh/sshd_config
-$ sudo systemctl restart sshd
-$ sudo yum install malicious-package
-# ⚠️ System state can drift and be compromised
-```
+### 1. **GitHub OIDC Provider Setup**
 
-**Bottlerocket:**
-```bash
-# Immutable system - core OS cannot be modified
-$ sudo vi /etc/ssh/sshd_config  # File doesn't exist
-$ sudo yum install anything      # No package manager
-$ sudo systemctl edit anything   # Limited system access
-# ✅ System integrity maintained
-```
-
-### 3. **FIPS 140-2 Cryptographic Compliance**
-
-**Why FIPS Matters:**
-- **Government Requirements**: Mandatory for federal systems
-- **Regulatory Compliance**: Required in finance, healthcare, defense
-- **Enhanced Cryptography**: Validated cryptographic modules
-- **Security Assurance**: Rigorous testing and certification
-
-**FIPS Components in Bottlerocket:**
-```bash
-# FIPS-validated cryptographic modules
-OpenSSL FIPS Provider      # Cryptographic operations
-Linux Kernel Crypto API    # Kernel-level cryptography  
-containerd                 # Container runtime security
-kubelet                    # Kubernetes node security
-```
-
-### 4. **Container-Optimized Security**
-
-**What's Included (Security-Focused):**
-- Container runtime (containerd)
-- Kubernetes components (kubelet, kube-proxy)
-- Essential system services only
-- AWS integrations (CloudWatch, SSM)
-- Network security tools
-
-**What's Excluded (Attack Surface Reduction):**
-- Package managers (yum, apt, dnf)
-- Development tools (gcc, make, git)
-- Text editors (vi, nano, emacs)
-- SSH server and clients
-- Unnecessary system utilities
-
-## Operational Security Benefits
-
-### 1. **Image-Based Updates**
-
-**Traditional OS Updates (AL2/AL2023):**
-```bash
-# Package-by-package updates
-sudo yum update kernel           # Potential for partial failures
-sudo yum update openssh         # Complex dependency chains
-sudo yum update docker          # Service restart required
-# ⚠️ System can end up in inconsistent state
-```
-
-**Bottlerocket Atomic Updates:**
-```bash
-# Complete image replacement
-apiclient update apply          # Atomic operation
-# ✅ Either fully updated or unchanged - no partial states
-# ✅ Automatic rollback on failure
-# ✅ Consistent, predictable outcomes
-```
-
-### 2. **Configuration as Code**
-
-**Traditional Configuration:**
-```bash
-# Manual, error-prone configuration
-sudo vi /etc/kubernetes/kubelet/kubelet-config.json
-sudo systemctl restart kubelet
-sudo vi /etc/docker/daemon.json
-# ⚠️ Configuration drift over time
-```
-
-**Bottlerocket API-Driven Configuration:**
-```bash
-# Declarative, version-controlled configuration
-apiclient set kubernetes.cluster-name=my-cluster
-apiclient set kernel.lockdown=integrity
-# ✅ Configuration is auditable and repeatable
-# ✅ No manual system modifications
-```
-
-### 3. **Enhanced Monitoring and Compliance**
-
-```bash
-# Built-in security monitoring
-apiclient get system.uptime        # System integrity checks
-apiclient get kernel.version       # Immutable version tracking
-apiclient get security.fips-mode   # FIPS compliance status
-
-# Integration with AWS security services
-# ✅ CloudWatch for system metrics
-# ✅ Systems Manager for compliance
-# ✅ GuardDuty for threat detection
-```
-
-## Threat Model Analysis
-
-### Common Container Security Threats
-
-| Threat Vector | AL2/AL2023 Risk | Bottlerocket FIPS Risk |
-|---------------|-----------------|------------------------|
-| **Container Escape** | High - Many services to exploit | Low - Minimal services |
-| **Privilege Escalation** | High - Complex system | Low - Hardened, minimal |
-| **Persistent Backdoors** | High - Mutable filesystem | Very Low - Immutable |
-| **Package Tampering** | High - Package manager present | None - No package manager |
-| **SSH Compromise** | High - SSH enabled | None - No SSH access |
-| **Cryptographic Attacks** | Medium - Standard crypto | Very Low - FIPS validated |
-
-### Real-World Security Scenarios
-
-**Scenario 1: Container Breakout Attempt**
-```bash
-# Attacker gains container access and tries to escalate
-
-# On AL2/AL2023:
-attacker@container:$ ls /usr/bin/     # 500+ binaries available
-attacker@container:$ sudo su -        # Multiple escalation paths
-attacker@container:$ yum install tool # Can install malicious packages
-
-# On Bottlerocket:
-attacker@container:$ ls /usr/bin/     # <50 essential binaries only
-attacker@container:$ sudo su -        # Limited system access
-attacker@container:$ yum install      # Command not found
-```
-
-**Scenario 2: Persistence Attempt**
-```bash
-# Attacker tries to maintain access
-
-# On AL2/AL2023:
-attacker@host:$ echo "backdoor" >> /etc/bashrc    # ✅ File modified
-attacker@host:$ systemctl enable backdoor.service # ✅ Persistence achieved
-
-# On Bottlerocket:
-attacker@host:$ echo "backdoor" >> /etc/bashrc    # ❌ Read-only filesystem
-attacker@host:$ systemctl enable backdoor         # ❌ Limited systemd access
-```
-
-## Compliance and Regulatory Benefits
-
-### FIPS 140-2 Compliance Requirements
-
-**Industries Requiring FIPS:**
-- Federal Government
-- Defense Contractors
-- Financial Services
-- Healthcare (HIPAA)
-- Critical Infrastructure
-
-**Bottlerocket FIPS Certification:**
-```bash
-# Validated cryptographic modules
-$ apiclient get security.fips-mode
-true
-
-# Certified components:
-- OpenSSL FIPS Provider (Certificate #4282)
-- Linux Kernel Crypto API (Certificate #4283)
-- AWS cryptographic libraries
-```
-
-### Audit and Compliance Benefits
-
-**Compliance Advantages:**
-- ✅ **Minimal Software Inventory**: Easier to audit and certify
-- ✅ **Immutable Infrastructure**: Predictable compliance state
-- ✅ **Automated Updates**: Consistent security posture
-- ✅ **API-Driven**: All changes are logged and auditable
-
-## Performance and Resource Benefits
-
-### Resource Utilization
-
-| Metric | AL2/AL2023 | Bottlerocket FIPS |
-|--------|------------|-------------------|
-| **Boot Time** | 30-60 seconds | 10-20 seconds |
-| **Memory Footprint** | 500-800 MB | 150-300 MB |
-| **Disk Usage** | 2-4 GB | 500 MB - 1 GB |
-| **CPU Overhead** | 5-10% | 1-3% |
-
-### Container Performance
-
-```bash
-# More resources available for workloads
-Available Memory: AL2 (7.2GB) vs Bottlerocket (7.8GB) on 8GB instance
-Available CPU: AL2 (90-95%) vs Bottlerocket (97-99%) for containers
-Disk I/O: Reduced contention from system services
-```
-
-## Implementation Strategy
-
-### EKS Node Group Configuration
+First, establish the OIDC trust relationship between GitHub and AWS:
 
 ```hcl
-# Bottlerocket FIPS node group
-resource "aws_eks_node_group" "bottlerocket_fips" {
-  cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "bottlerocket-fips-nodes"
-  node_role_arn   = aws_iam_role.nodes.arn
-  subnet_ids      = var.private_subnets
+# terraform/github-oidc-provider.tf
+data "tls_certificate" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+resource "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
   
-  # Bottlerocket FIPS AMI
-  ami_type       = "BOTTLEROCKET_x86_64_FIPS"
-  capacity_type  = "ON_DEMAND"
-  instance_types = ["m5.large", "m5.xlarge"]
+  client_id_list = ["sts.amazonaws.com"]
   
-  # Security-focused configuration
-  remote_access {
-    ec2_ssh_key = null  # No SSH access
-  }
-  
-  # Immutable updates
-  update_config {
-    max_unavailable_percentage = 25
-  }
+  thumbprint_list = [data.tls_certificate.github.certificates[0].sha1_fingerprint]
   
   tags = {
-    Security     = "FIPS-Compliant"
-    OS          = "Bottlerocket"
-    Compliance  = "FedRAMP-Ready"
+    Name        = "github-actions-oidc"
+    Purpose     = "eks-deployment"
+    ManagedBy   = "platform-team"
   }
 }
 ```
 
-### Security Configuration
+### 2. **Team IAM Roles with Dual Trust**
 
-```bash
-# Bottlerocket configuration via user data
-[settings.kubernetes]
-cluster-name = "production-cluster"
+Create IAM roles that can be assumed from both GitHub Actions and AWS Console:
 
-[settings.kernel]
-lockdown = "integrity"  # Enhanced kernel security
+```hcl
+# terraform/team-iam-roles.tf
+locals {
+  github_org = "your-org-name"
+  account_id = data.aws_caller_identity.current.account_id
+}
 
-[settings.security]
-fips-mode = true       # Enable FIPS 140-2 mode
+resource "aws_iam_role" "team_a_eks_access" {
+  name = "team-a-eks-namespace-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Trust for GitHub Actions from team repo
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:${local.github_org}/team-a-*:*",
+              "repo:${local.github_org}/team-a-app:environment:development",
+              "repo:${local.github_org}/team-a-app:environment:staging",
+              "repo:${local.github_org}/team-a-app:environment:production"
+            ]
+          }
+        }
+      },
+      {
+        # Trust for AWS Console users (with MFA required)
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${local.account_id}:root"
+        }
+        Action = "sts:AssumeRole"
+        Condition = {
+          Bool = {
+            "aws:MultiFactorAuthPresent" = "true"
+          }
+          StringEquals = {
+            "aws:PrincipalTag/Team" = "team-a"
+            "aws:PrincipalTag/Department" = "engineering"
+          }
+        }
+      }
+    ]
+  })
+  
+  # Session policy for additional security
+  max_session_duration = 3600  # 1 hour
+  
+  tags = {
+    Team        = "team-a"
+    Purpose     = "eks-namespace-access"
+    GitHubRepo  = "${local.github_org}/team-a-*"
+    ManagedBy   = "platform-team"
+  }
+}
 
-[settings.network]
-https-proxy = "https://corporate-proxy:8080"  # Corporate security
+# Attach minimal EKS access policy
+resource "aws_iam_role_policy" "team_a_eks_access" {
+  name = "eks-cluster-access"
+  role = aws_iam_role.team_a_eks_access.id
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "eks:DescribeCluster",
+          "eks:ListClusters"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "eks:AccessKubernetesApi"
+        ]
+        Resource = "arn:aws:eks:${var.region}:${local.account_id}:cluster/${var.cluster_name}"
+      }
+    ]
+  })
+}
+
+# Optional: Attach policies for AWS services the team needs
+resource "aws_iam_role_policy" "team_a_aws_services" {
+  name = "team-a-aws-services"
+  role = aws_iam_role.team_a_eks_access.id
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid = "S3Access"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          "arn:aws:s3:::team-a-*/*"
+        ]
+      },
+      {
+        Sid = "ECRAccess"
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+        Resource = [
+          "arn:aws:ecr:${var.region}:${local.account_id}:repository/team-a-*"
+        ]
+      }
+    ]
+  })
+}
 ```
 
-## Migration Considerations
+### 3. **GitHub Repository Setup**
 
-### From AL2/AL2023 to Bottlerocket
+Configure GitHub environments and secrets:
 
-**Migration Benefits:**
-- ✅ **Enhanced Security**: Immediate attack surface reduction
-- ✅ **Compliance**: FIPS 140-2 certification
-- ✅ **Operational Simplicity**: No package management
-- ✅ **Performance**: Better resource utilization
-
-**Migration Challenges:**
-- 🔄 **Debugging Changes**: No SSH access (use Systems Manager Session Manager)
-- 🔄 **Monitoring Adaptation**: Different system metrics
-- 🔄 **Tooling Updates**: API-based configuration instead of files
-
-### Operational Adaptations
-
-**Traditional Debugging (AL2/AL2023):**
-```bash
-# SSH-based troubleshooting
-ssh ec2-user@node
-sudo journalctl -u kubelet
-sudo docker logs container-id
+```yaml
+# .github/environments/development/secrets
+# Add these as GitHub Environment Secrets
+AWS_ROLE_ARN: arn:aws:iam::123456789012:role/team-a-eks-namespace-role
+AWS_REGION: us-gov-west-1
+EKS_CLUSTER_NAME: shared-eks-cluster
+NAMESPACE: team-a-dev
 ```
 
-**Bottlerocket Debugging:**
-```bash
-# Systems Manager Session Manager
-aws ssm start-session --target i-1234567890abcdef0
-apiclient get services.kubelet.enabled
-apiclient get logs.kubelet
+GitHub Actions workflow example:
+
+```yaml
+# .github/workflows/deploy-to-eks.yml
+name: Deploy to EKS
+
+on:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-${{ github.repository }}-${{ github.run_id }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ secrets.AWS_REGION }} \
+            --name ${{ secrets.EKS_CLUSTER_NAME }}
+      
+      - name: Verify namespace access
+        run: |
+          # This should work - team has access to their namespace
+          kubectl get pods -n ${{ secrets.NAMESPACE }}
+          
+          # This should fail - no access to other namespaces
+          kubectl get pods -n team-b-dev || echo "Expected: Access denied to other team's namespace"
+      
+      - name: Deploy application
+        run: |
+          kubectl apply -f k8s/deployment.yaml -n ${{ secrets.NAMESPACE }}
+          kubectl rollout status deployment/my-app -n ${{ secrets.NAMESPACE }}
 ```
 
-## Cost Implications
+### 4. **EKS Access Entries Configuration**
 
-### Security ROI Analysis
+Map the IAM roles to Kubernetes permissions with namespace restrictions:
 
-**Cost Savings:**
-- ❌ **Reduced Security Incidents**: Fewer vulnerabilities to exploit
-- ❌ **Lower Maintenance**: No package management overhead  
-- ❌ **Faster Updates**: Atomic updates reduce maintenance windows
-- ❌ **Compliance**: Built-in FIPS compliance reduces audit costs
+```hcl
+# terraform/eks-access-entries.tf
+resource "aws_eks_access_entry" "team_a" {
+  cluster_name      = var.cluster_name
+  principal_arn     = aws_iam_role.team_a_eks_access.arn
+  kubernetes_groups = ["team-a-users"]
+  type             = "STANDARD"
+  
+  tags = {
+    Team = "team-a"
+  }
+}
 
-**Investment Areas:**
-- ✅ **Training**: Team adaptation to API-based management
-- ✅ **Tooling**: Integration with Bottlerocket APIs
-- ✅ **Monitoring**: Adaptation to new metrics and logging
+# Development namespace access
+resource "aws_eks_access_policy_association" "team_a_dev" {
+  cluster_name  = var.cluster_name
+  principal_arn = aws_iam_role.team_a_eks_access.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSEditPolicy"
+  
+  access_scope {
+    type       = "namespace"
+    namespaces = ["team-a-dev"]
+  }
+}
 
-## Conclusion
+# Staging namespace access (more restricted)
+resource "aws_eks_access_policy_association" "team_a_staging" {
+  cluster_name  = var.cluster_name
+  principal_arn = aws_iam_role.team_a_eks_access.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+  
+  access_scope {
+    type       = "namespace"
+    namespaces = ["team-a-staging"]
+  }
+}
 
-**Bottlerocket x86_64 FIPS represents a paradigm shift toward security-first container infrastructure**, offering:
+# Production namespace access (view only by default)
+resource "aws_eks_access_policy_association" "team_a_prod" {
+  cluster_name  = var.cluster_name
+  principal_arn = aws_iam_role.team_a_eks_access.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+  
+  access_scope {
+    type       = "namespace"
+    namespaces = ["team-a-prod"]
+  }
+}
+```
 
-### Security Benefits:
-1. **90% Attack Surface Reduction**: From 1,000+ to ~50 packages
-2. **Immutable Infrastructure**: Cannot be modified at runtime
-3. **FIPS 140-2 Compliance**: Government-grade cryptographic security
-4. **Zero SSH Attack Vector**: No remote access by default
+### 5. **Kubernetes RBAC for Fine-Grained Control**
 
-### Operational Benefits:
-1. **Atomic Updates**: All-or-nothing update process
-2. **API-Driven Configuration**: Infrastructure as Code friendly
-3. **Better Performance**: More resources for workloads
-4. **Simplified Management**: No package management complexity
+Define specific permissions within namespaces:
 
-### Compliance Benefits:
-1. **Built-in FIPS**: No additional configuration required
-2. **Auditable**: Minimal, well-documented software inventory
-3. **Predictable**: Immutable infrastructure ensures consistent state
-
-For security-conscious organizations, especially those with compliance requirements, **Bottlerocket FIPS is the clear choice** for container infrastructure.
+```yaml
+# k8s/rbac/team-a-rbac.yaml
+---
+# Development environment - full access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: team-a-developer
+  namespace: team-a-dev
+rules:
+  # Deployment management
+  - apiGroups: ["apps", ""]
+    resources: ["deployments", "replicasets", "pods", "pods/log", "pods/exec", "pods/portforward"]
+    verbs: ["*"]
+  
+  # Service and networking
+  - apiGroups: ["", "networking.k8s.io"]
+    resources: ["services", "endpoints", "ingresses"]
+    verbs: ["*"]
+  
+  # Configuration
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "serviceaccounts"]
+    verbs: ["*"]
+  
+  # Autoscaling
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["*"]
+  
+  # Jobs
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["*"]
 
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: team-a-developer-binding
+  namespace: team-a-dev
+subjects:
+  - kind: Group
+    name: team-a-users
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: team-a-developer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Production environment - restricted access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: team-a-prod-deployer
+  namespace: team-a-prod
+rules:
+  # Can update deployments but not delete
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  
+  # Can view but not modify services
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  
+  # Can update specific configmaps/secrets
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+    resourceNames: ["app-config", "app-secrets"]  # Only specific resources
+  
+  # Can scale but not delete
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "update", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: team-a-prod-deployer-binding
+  namespace: team-a-prod
+subjects:
+  - kind: Group
+    name: team-a-users
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: team-a-prod-deployer
+  apiGroup: rbac.authorization.k8s.io
+```
+
+### 6. **Resource Quotas and Limits**
+
+Prevent resource overconsumption:
+
+```yaml
+# k8s/resource-management/team-a-quotas.yaml
+---
+# Development - moderate limits
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-a-dev-quota
+  namespace: team-a-dev
+spec:
+  hard:
+    requests.cpu: "10"
+    requests.memory: "20Gi"
+    limits.cpu: "20"
+    limits.memory: "40Gi"
+    persistentvolumeclaims: "5"
+    services.loadbalancers: "1"
+    pods: "50"
+
+---
+# Production - higher limits
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: team-a-prod-quota
+  namespace: team-a-prod
+spec:
+  hard:
+    requests.cpu: "50"
+    requests.memory: "100Gi"
+    limits.cpu: "100"
+    limits.memory: "200Gi"
+    persistentvolumeclaims: "20"
+    services.loadbalancers: "3"
+    pods: "200"
+
+---
+# LimitRange for pod defaults
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: team-a-dev-limits
+  namespace: team-a-dev
+spec:
+  limits:
+  - type: Container
+    default:
+      cpu: "1"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+  - type: Pod
+    max:
+      cpu: "8"
+      memory: "16Gi"
+```
+
+### 7. **Network Policies (Optional)**
+
+Isolate namespace traffic:
+
+```yaml
+# k8s/network-policies/team-a-network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: team-a-network-policy
+  namespace: team-a-dev
+spec:
+  podSelector: {}  # Apply to all pods in namespace
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow traffic from same namespace
+  - from:
+    - podSelector: {}
+  # Allow traffic from ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  # Allow traffic within namespace
+  - to:
+    - podSelector: {}
+  # Allow external traffic (can be restricted further)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+```
+
+## Console Access for Teams
+
+Team members can access their namespaces via AWS Console:
+
+1. **Assume the team role** via AWS Console:
+   - Switch Role → Enter account ID and role name
+   - MFA will be required (enforced by trust policy)
+
+2. **Access EKS cluster**:
+   ```bash
+   # After assuming role in console or CLI
+   aws eks update-kubeconfig --region us-gov-west-1 --name shared-eks-cluster
+   
+   # Verify access
+   kubectl get pods -n team-a-dev  # ✓ Works
+   kubectl get pods -n team-b-dev  # ✗ Access denied
+   ```
+
+## Security Considerations
+
+### What Teams CAN Do:
+- ✅ Deploy applications to their assigned namespaces
+- ✅ Manage their own ConfigMaps and Secrets
+- ✅ Scale their deployments within resource quotas
+- ✅ View logs and exec into their own pods
+- ✅ Create services and ingresses in their namespaces
+
+### What Teams CANNOT Do:
+- ❌ Access other teams' namespaces
+- ❌ Exceed resource quotas
+- ❌ Create cluster-wide resources
+- ❌ Modify RBAC policies
+- ❌ Access the underlying nodes
+- ❌ Deploy privileged containers (blocked by PSP/PSS)
+
+## Monitoring and Compliance
+
+### Audit Logging
+```bash
+# View authentication attempts
+aws eks describe-audit-configuration --cluster-name shared-eks-cluster
+
+# Check CloudTrail for AssumeRole events
+aws cloudtrail lookup-events \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --max-items 10
+```
+
+### Resource Usage Monitoring
+```bash
+# Check quota usage
+kubectl describe resourcequota -n team-a-dev
+
+# View current resource consumption
+kubectl top pods -n team-a-dev
+kubectl top nodes
+```
+
+## Onboarding New Teams
+
+1. **Create GitHub Repository**:
+   ```bash
+   gh repo create ${GITHUB_ORG}/team-${TEAM_NAME}-app --private
+   ```
+
+2. **Provision IAM Role**:
+   ```bash
+   terraform apply -var="team_name=${TEAM_NAME}"
+   ```
+
+3. **Create Namespaces**:
+   ```bash
+   kubectl apply -f namespaces/team-${TEAM_NAME}-namespaces.yaml
+   ```
+
+4. **Configure EKS Access**:
+   ```bash
+   aws eks create-access-entry \
+     --cluster-name shared-eks-cluster \
+     --principal-arn arn:aws:iam::${ACCOUNT_ID}:role/team-${TEAM_NAME}-eks-namespace-role
+   ```
+
+5. **Apply RBAC and Quotas**:
+   ```bash
+   kubectl apply -f rbac/team-${TEAM_NAME}-rbac.yaml
+   kubectl apply -f resource-management/team-${TEAM_NAME}-quotas.yaml
+   ```
+
+6. **Configure GitHub Secrets**:
+   ```bash
+   gh secret set AWS_ROLE_ARN \
+     --env development \
+     --repo ${GITHUB_ORG}/team-${TEAM_NAME}-app \
+     --body "arn:aws:iam::${ACCOUNT_ID}:role/team-${TEAM_NAME}-eks-namespace-role"
+   ```
+
+## Troubleshooting
+
+### Common Issues
+
+**1. GitHub Actions authentication failures:**
+```bash
+# Verify OIDC provider thumbprint
+aws iam get-open-id-connect-provider \
+  --open-id-connect-provider-arn arn:aws:iam::${ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com
+```
+
+**2. Namespace access denied:**
+```bash
+# Check EKS access entry
+aws eks describe-access-entry \
+  --cluster-name shared-eks-cluster \
+  --principal-arn ${ROLE_ARN}
+
+# Verify RBAC bindings
+kubectl get rolebindings -n ${NAMESPACE} -o yaml
+```
+
+**3. Resource quota exceeded:**
+```bash
+# Check current usage vs limits
+kubectl describe resourcequota -n ${NAMESPACE}
+kubectl get pods -n ${NAMESPACE} --field-selector=status.phase=Pending
+```
 
 ## References
 
-- [AWS Bottlerocket Security Guide](https://github.com/bottlerocket-os/bottlerocket/blob/develop/SECURITY_GUIDANCE.md)
-- [FIPS 140-2 Compliance Documentation](https://aws.amazon.com/compliance/fips/)
-- [Bottlerocket vs Traditional Linux Comparison](https://aws.amazon.com/bottlerocket/)
-- [EKS Security Best Practices](https://aws.github.io/aws-eks-best-practices/security/docs/)
+- [EKS Access Management](https://docs.aws.amazon.com/eks/latest/userguide/access-entries.html)
+- [GitHub OIDC with AWS](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
+- [Kubernetes RBAC](https://kubernetes.io/docs/reference/access-authn-authz/rbac/)
+- [Resource Quotas](https://kubernetes.io/docs/concepts/policy/resource-quotas/)
+- [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
