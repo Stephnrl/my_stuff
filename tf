@@ -1,560 +1,339 @@
-# terraform-module-aws-eks-landing-zone/modules/k8s-namespace/network-policy.tf
+# terraform-module-aws-eks-landing-zone/modules/k8s-namespace/outputs.tf
 
-# Default deny-all NetworkPolicy for namespace isolation
-resource "kubernetes_network_policy_v1" "default_deny_all" {
-  count = var.enable_network_policy && var.default_deny_all ? 1 : 0
-  
-  metadata {
-    name      = "${var.namespace_name}-default-deny-all"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-default-deny-all"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "deny-all"
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "default-deny-all"
-      "platform.company.com/description" = "Denies all ingress and egress traffic by default"
-    }
-  }
-  
-  spec {
-    # Apply to all pods in the namespace
-    pod_selector {}
-    
-    # Block both ingress and egress by default
-    policy_types = ["Ingress", "Egress"]
-    
-    # Empty ingress/egress blocks = deny all
-    # Specific allow rules are defined in separate policies below
+# Primary Namespace Information
+output "namespace_name" {
+  description = "Name of the created namespace"
+  value       = kubernetes_namespace_v1.namespace.metadata[0].name
+}
+
+output "namespace_uid" {
+  description = "UID of the created namespace"
+  value       = kubernetes_namespace_v1.namespace.metadata[0].uid
+}
+
+output "namespace_labels" {
+  description = "Labels applied to the namespace"
+  value       = kubernetes_namespace_v1.namespace.metadata[0].labels
+}
+
+output "namespace_annotations" {
+  description = "Annotations applied to the namespace"
+  value       = kubernetes_namespace_v1.namespace.metadata[0].annotations
+}
+
+# Team and Environment Information
+output "team_name" {
+  description = "Team that owns this namespace"
+  value       = var.team_name
+}
+
+output "environment" {
+  description = "Environment for this namespace"
+  value       = var.environment
+}
+
+output "pod_security_standard" {
+  description = "Pod Security Standard enforced in this namespace"
+  value       = var.pod_security_standard
+}
+
+# Service Accounts
+output "default_service_account_name" {
+  description = "Name of the default service account (if created)"
+  value       = var.create_default_service_account ? kubernetes_service_account_v1.default[0].metadata[0].name : null
+}
+
+output "additional_service_accounts" {
+  description = "Names of additional service accounts created"
+  value = {
+    for name, sa in kubernetes_service_account_v1.additional : 
+    name => sa.metadata[0].name
   }
 }
 
-# Allow ingress from ingress controllers
-resource "kubernetes_network_policy_v1" "allow_ingress_controller" {
-  count = var.enable_network_policy && var.allow_ingress_controller ? 1 : 0
-  
-  metadata {
-    name      = "${var.namespace_name}-allow-ingress-controller"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-allow-ingress-controller"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "allow-ingress"
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "ingress-controller"
-      "platform.company.com/description" = "Allows traffic from ingress controllers"
-    }
+output "service_account_role_arn" {
+  description = "IAM role ARN associated with service accounts"
+  value       = var.service_account_role_arn
+}
+
+# Secrets and ConfigMaps
+output "secrets" {
+  description = "Names of secrets created in the namespace"
+  value = {
+    for name, secret in kubernetes_secret_v1.secrets : 
+    name => secret.metadata[0].name
   }
-  
-  spec {
-    pod_selector {}
-    
-    policy_types = ["Ingress"]
-    
-    # Allow traffic from ingress controller namespaces
-    dynamic "ingress" {
-      for_each = var.ingress_controller_namespaces
-      content {
-        from {
-          namespace_selector {
-            match_labels = {
-              name = ingress.value
-            }
-          }
-        }
-      }
-    }
-    
-    # Allow traffic from pods with specific labels (like ALB ingress controller)
-    dynamic "ingress" {
-      for_each = var.ingress_controller_selectors
-      content {
-        from {
-          pod_selector {
-            match_labels = ingress.value
-          }
-        }
-      }
-    }
+  sensitive = true
+}
+
+output "config_maps" {
+  description = "Names of ConfigMaps created in the namespace"
+  value = {
+    for name, cm in kubernetes_config_map_v1.config_maps : 
+    name => cm.metadata[0].name
   }
 }
 
-# Allow intra-namespace communication
-resource "kubernetes_network_policy_v1" "allow_intra_namespace" {
-  count = var.enable_network_policy && var.allow_intra_namespace ? 1 : 0
-  
-  metadata {
-    name      = "${var.namespace_name}-allow-intra-namespace"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-allow-intra-namespace"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "allow-internal"
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "intra-namespace"
-      "platform.company.com/description" = "Allows communication within the namespace"
-    }
-  }
-  
-  spec {
-    pod_selector {}
-    
-    policy_types = ["Ingress", "Egress"]
-    
-    # Allow ingress from same namespace
-    ingress {
-      from {
-        pod_selector {}
-      }
-    }
-    
-    # Allow egress to same namespace
-    egress {
-      to {
-        pod_selector {}
-      }
+# Resource Quota Information
+output "resource_quota_enabled" {
+  description = "Whether resource quotas are enabled"
+  value       = var.enable_resource_quota
+}
+
+output "primary_resource_quota_name" {
+  description = "Name of the primary resource quota (if created)"
+  value       = var.enable_resource_quota ? kubernetes_resource_quota_v1.main[0].metadata[0].name : null
+}
+
+output "resource_quota_spec" {
+  description = "Resource quota specifications applied"
+  value       = var.enable_resource_quota ? local.resource_quota_spec : {}
+}
+
+output "storage_quota_enabled" {
+  description = "Whether storage quotas are enabled"
+  value       = var.enable_storage_quota
+}
+
+output "storage_quota_name" {
+  description = "Name of the storage quota (if created)"
+  value       = var.enable_storage_quota ? kubernetes_resource_quota_v1.storage[0].metadata[0].name : null
+}
+
+output "object_count_quota_enabled" {
+  description = "Whether object count quotas are enabled"
+  value       = var.enable_object_count_quota
+}
+
+output "priority_quotas" {
+  description = "Priority-based resource quotas created"
+  value = {
+    for name, quota in kubernetes_resource_quota_v1.compute_priority : 
+    name => {
+      name = quota.metadata[0].name
+      spec = quota.spec[0].hard
     }
   }
 }
 
-# Allow DNS resolution
-resource "kubernetes_network_policy_v1" "allow_dns" {
-  count = var.enable_network_policy && var.allow_dns ? 1 : 0
-  
-  metadata {
-    name      = "${var.namespace_name}-allow-dns"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-allow-dns"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "allow-dns"
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "dns"
-      "platform.company.com/description" = "Allows DNS resolution"
-    }
-  }
-  
-  spec {
-    pod_selector {}
-    
-    policy_types = ["Egress"]
-    
-    # Allow DNS queries to kube-system namespace
-    egress {
-      to {
-        namespace_selector {
-          match_labels = {
-            name = "kube-system"
-          }
-        }
-      }
-      
-      ports {
-        protocol = "TCP"
-        port     = "53"
-      }
-      
-      ports {
-        protocol = "UDP"
-        port     = "53"
-      }
-    }
-    
-    # Allow DNS queries to system pods
-    egress {
-      to {
-        namespace_selector {
-          match_labels = {
-            name = "kube-system"
-          }
-        }
-        
-        pod_selector {
-          match_labels = {
-            k8s-app = "kube-dns"
-          }
-        }
-      }
-      
-      ports {
-        protocol = "TCP"
-        port     = "53"
-      }
-      
-      ports {
-        protocol = "UDP"
-        port     = "53"
-      }
-    }
+# LimitRange Information
+output "limit_range_enabled" {
+  description = "Whether limit ranges are enabled"
+  value       = var.enable_limit_range
+}
+
+output "container_limit_range_name" {
+  description = "Name of the container limit range (if created)"
+  value       = var.enable_limit_range ? kubernetes_limit_range_v1.container_limits[0].metadata[0].name : null
+}
+
+output "limit_range_spec" {
+  description = "Limit range specifications applied"
+  value       = var.enable_limit_range ? local.limit_range_spec : {}
+}
+
+output "pod_limit_range_enabled" {
+  description = "Whether pod-level limit ranges are enabled"
+  value       = var.enable_pod_limit_range
+}
+
+output "pvc_limit_range_enabled" {
+  description = "Whether PVC limit ranges are enabled"
+  value       = var.enable_pvc_limit_range
+}
+
+# Network Policy Information
+output "network_policy_enabled" {
+  description = "Whether network policies are enabled"
+  value       = var.enable_network_policy
+}
+
+output "default_deny_all_enabled" {
+  description = "Whether default deny-all policy is enabled"
+  value       = var.enable_network_policy && var.default_deny_all
+}
+
+output "network_policies_created" {
+  description = "List of network policies created"
+  value = compact([
+    var.enable_network_policy && var.default_deny_all ? kubernetes_network_policy_v1.default_deny_all[0].metadata[0].name : "",
+    var.enable_network_policy && var.allow_ingress_controller ? kubernetes_network_policy_v1.allow_ingress_controller[0].metadata[0].name : "",
+    var.enable_network_policy && var.allow_intra_namespace ? kubernetes_network_policy_v1.allow_intra_namespace[0].metadata[0].name : "",
+    var.enable_network_policy && var.allow_dns ? kubernetes_network_policy_v1.allow_dns[0].metadata[0].name : "",
+    var.enable_network_policy && var.allow_monitoring ? kubernetes_network_policy_v1.allow_monitoring[0].metadata[0].name : "",
+    var.enable_network_policy && var.allow_external_egress ? kubernetes_network_policy_v1.allow_external_egress[0].metadata[0].name : ""
+  ])
+}
+
+output "cross_namespace_policies" {
+  description = "Cross-namespace network policies created"
+  value = {
+    for name, policy in kubernetes_network_policy_v1.allow_cross_namespace : 
+    name => policy.metadata[0].name
   }
 }
 
-# Allow monitoring (Prometheus, metrics collection)
-resource "kubernetes_network_policy_v1" "allow_monitoring" {
-  count = var.enable_network_policy && var.allow_monitoring ? 1 : 0
-  
-  metadata {
-    name      = "${var.namespace_name}-allow-monitoring"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-allow-monitoring"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "allow-monitoring"
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "monitoring"
-      "platform.company.com/description" = "Allows monitoring systems to scrape metrics"
-    }
-  }
-  
-  spec {
-    pod_selector {}
-    
-    policy_types = ["Ingress"]
-    
-    # Allow monitoring from specific namespaces
-    dynamic "ingress" {
-      for_each = var.monitoring_namespaces
-      content {
-        from {
-          namespace_selector {
-            match_labels = {
-              name = ingress.value
-            }
-          }
-        }
-        
-        ports {
-          protocol = "TCP"
-          port     = "8080"  # Common metrics port
-        }
-        
-        ports {
-          protocol = "TCP" 
-          port     = "9090"  # Prometheus metrics
-        }
-        
-        ports {
-          protocol = "TCP"
-          port     = "3000"  # Grafana
-        }
-      }
-    }
-    
-    # Allow monitoring from pods with specific labels
-    dynamic "ingress" {
-      for_each = var.monitoring_selectors
-      content {
-        from {
-          pod_selector {
-            match_labels = ingress.value
-          }
-        }
-        
-        ports {
-          protocol = "TCP"
-          port     = "8080"
-        }
-        
-        ports {
-          protocol = "TCP"
-          port     = "9090"
-        }
-      }
-    }
+output "application_network_policies" {
+  description = "Application-specific network policies created"
+  value = {
+    for name, policy in kubernetes_network_policy_v1.application_specific : 
+    name => policy.metadata[0].name
   }
 }
 
-# Allow egress to external services
-resource "kubernetes_network_policy_v1" "allow_external_egress" {
-  count = var.enable_network_policy && var.allow_external_egress ? 1 : 0
-  
-  metadata {
-    name      = "${var.namespace_name}-allow-external-egress"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-allow-external-egress"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "allow-external"
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "external-egress"
-      "platform.company.com/description" = "Allows egress to external services and APIs"
-    }
-  }
-  
-  spec {
-    pod_selector {}
-    
-    policy_types = ["Egress"]
-    
-    # Allow HTTPS traffic to external services
-    egress {
-      ports {
-        protocol = "TCP"
-        port     = "443"
-      }
-    }
-    
-    # Allow HTTP traffic to external services (if enabled)
-    dynamic "egress" {
-      for_each = var.allow_http_egress ? [1] : []
-      content {
-        ports {
-          protocol = "TCP"
-          port     = "80"
-        }
-      }
-    }
-    
-    # Allow specific external IP ranges
-    dynamic "egress" {
-      for_each = var.allowed_external_cidrs
-      content {
-        to {
-          ip_block {
-            cidr   = egress.value.cidr
-            except = lookup(egress.value, "except", [])
-          }
-        }
-        
-        dynamic "ports" {
-          for_each = lookup(egress.value, "ports", [])
-          content {
-            protocol = ports.value.protocol
-            port     = ports.value.port
-          }
-        }
-      }
-    }
+# Security Configuration Summary
+output "security_configuration" {
+  description = "Summary of security configuration applied"
+  value = {
+    pod_security_standard     = var.pod_security_standard
+    resource_quota_enabled    = var.enable_resource_quota
+    limit_range_enabled       = var.enable_limit_range
+    network_policy_enabled    = var.enable_network_policy
+    default_deny_all          = var.enable_network_policy && var.default_deny_all
+    service_account_token_automount = var.automount_service_account_token
   }
 }
 
-# Allow communication with specific namespaces (cross-namespace)
-resource "kubernetes_network_policy_v1" "allow_cross_namespace" {
-  for_each = var.allowed_namespaces
-  
-  metadata {
-    name      = "${var.namespace_name}-allow-${each.key}"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-allow-${each.key}"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "cross-namespace"
-        "target-namespace"            = each.key
-      }
-    )
-    
-    annotations = {
-      "platform.company.com/policy-type" = "cross-namespace"
-      "platform.company.com/target-namespace" = each.key
-      "platform.company.com/description" = "Allows communication with ${each.key} namespace"
-    }
-  }
-  
-  spec {
-    pod_selector {}
-    
-    policy_types = each.value.direction == "both" ? ["Ingress", "Egress"] : [title(each.value.direction)]
-    
-    # Configure ingress rules
-    dynamic "ingress" {
-      for_each = contains(["ingress", "both"], each.value.direction) ? [1] : []
-      content {
-        from {
-          namespace_selector {
-            match_labels = {
-              name = each.key
-            }
-          }
-        }
-        
-        dynamic "ports" {
-          for_each = each.value.ports
-          content {
-            protocol = ports.value.protocol
-            port     = ports.value.port
-          }
-        }
-      }
-    }
-    
-    # Configure egress rules
-    dynamic "egress" {
-      for_each = contains(["egress", "both"], each.value.direction) ? [1] : []
-      content {
-        to {
-          namespace_selector {
-            match_labels = {
-              name = each.key
-            }
-          }
-        }
-        
-        dynamic "ports" {
-          for_each = each.value.ports
-          content {
-            protocol = ports.value.protocol
-            port     = ports.value.port
-          }
-        }
-      }
-    }
+# Resource Limits Summary
+output "resource_limits_summary" {
+  description = "Summary of resource limits and quotas"
+  value = {
+    max_pods           = var.max_pods
+    max_services       = var.max_services
+    max_deployments    = var.max_deployments
+    max_load_balancers = var.max_load_balancers
+    resource_quota     = var.enable_resource_quota ? local.resource_quota_spec : {}
+    container_limits   = var.enable_limit_range ? local.limit_range_spec.container : {}
   }
 }
 
-# Application-specific network policies
-resource "kubernetes_network_policy_v1" "application_specific" {
-  for_each = var.application_network_policies
-  
-  metadata {
-    name      = "${var.namespace_name}-${each.key}"
-    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
-    
-    labels = merge(
-      local.common_labels,
-      each.value.labels,
+# Monitoring Information
+output "monitoring_enabled" {
+  description = "Whether monitoring is enabled for this namespace"
+  value       = var.enable_monitoring
+}
+
+output "monitoring_quota_enabled" {
+  description = "Whether monitoring quotas are enabled"
+  value       = var.enable_monitoring_quota
+}
+
+# Integration Information for Other Modules
+output "integration_info" {
+  description = "Information for integrating with other modules"
+  value = {
+    namespace_name          = kubernetes_namespace_v1.namespace.metadata[0].name
+    team_name              = var.team_name
+    environment            = var.environment
+    labels                 = local.common_labels
+    resource_quota_enabled = var.enable_resource_quota
+    network_policy_enabled = var.enable_network_policy
+    pod_security_standard  = var.pod_security_standard
+  }
+}
+
+# RBAC Integration
+output "rbac_integration" {
+  description = "Information for RBAC module integration"
+  value = {
+    namespace           = kubernetes_namespace_v1.namespace.metadata[0].name
+    kubernetes_group    = "${var.team_name}-users"
+    service_accounts    = merge(
+      var.create_default_service_account ? {
+        "default" = kubernetes_service_account_v1.default[0].metadata[0].name
+      } : {},
       {
-        "app.kubernetes.io/name"      = "${var.namespace_name}-${each.key}"
-        "app.kubernetes.io/component" = "network-policy"
-        "policy-type"                 = "application-specific"
-        "application"                 = each.key
-      }
-    )
-    
-    annotations = merge(
-      each.value.annotations,
-      {
-        "platform.company.com/policy-type" = "application-specific"
-        "platform.company.com/application" = each.key
+        for name, sa in kubernetes_service_account_v1.additional : 
+        name => sa.metadata[0].name
       }
     )
   }
-  
-  spec {
-    pod_selector {
-      match_labels = each.value.pod_selector
-    }
+}
+
+# Monitoring Integration
+output "monitoring_integration" {
+  description = "Information for monitoring system integration"
+  value = {
+    namespace     = kubernetes_namespace_v1.namespace.metadata[0].name
+    team          = var.team_name
+    environment   = var.environment
+    labels        = local.common_labels
+    enabled       = var.enable_monitoring
+    quota_enabled = var.enable_monitoring_quota
+  }
+}
+
+# Network Policy Integration
+output "network_policy_integration" {
+  description = "Information for network policy management"
+  value = {
+    namespace              = kubernetes_namespace_v1.namespace.metadata[0].name
+    team                   = var.team_name
+    environment            = var.environment
+    enabled                = var.enable_network_policy
+    default_deny_all       = var.default_deny_all
+    allowed_namespaces     = keys(var.allowed_namespaces)
+    ingress_controller_access = var.allow_ingress_controller
+    monitoring_access      = var.allow_monitoring
+    external_egress        = var.allow_external_egress
+  }
+}
+
+# Configuration Validation
+output "configuration_validation" {
+  description = "Configuration validation summary"
+  value = {
+    namespace_created       = kubernetes_namespace_v1.namespace.metadata[0].name != ""
+    quotas_applied         = var.enable_resource_quota ? length(keys(local.resource_quota_spec)) > 0 : false
+    limits_applied         = var.enable_limit_range ? length(keys(local.limit_range_spec)) > 0 : false
+    network_policies_count = length(compact([
+      var.enable_network_policy && var.default_deny_all ? "deny-all" : "",
+      var.enable_network_policy && var.allow_ingress_controller ? "ingress" : "",
+      var.enable_network_policy && var.allow_intra_namespace ? "intra" : "",
+      var.enable_network_policy && var.allow_dns ? "dns" : "",
+      var.enable_network_policy && var.allow_monitoring ? "monitoring" : "",
+      var.enable_network_policy && var.allow_external_egress ? "external" : ""
+    ]))
+    service_accounts_count = (var.create_default_service_account ? 1 : 0) + length(var.additional_service_accounts)
+    secrets_count          = length(var.secrets)
+    config_maps_count      = length(var.config_maps)
+  }
+}
+
+# Troubleshooting Information
+output "troubleshooting_info" {
+  description = "Information for troubleshooting namespace issues"
+  value = {
+    namespace_name        = kubernetes_namespace_v1.namespace.metadata[0].name
+    namespace_uid         = kubernetes_namespace_v1.namespace.metadata[0].uid
+    pod_security_standard = var.pod_security_standard
+    prevent_destroy       = var.prevent_destroy
     
-    policy_types = each.value.policy_types
+    # Resource constraints
+    resource_quota = var.enable_resource_quota ? {
+      enabled = true
+      name    = kubernetes_resource_quota_v1.main[0].metadata[0].name
+      spec    = local.resource_quota_spec
+    } : { enabled = false }
     
-    # Dynamic ingress rules
-    dynamic "ingress" {
-      for_each = each.value.ingress_rules
-      content {
-        dynamic "from" {
-          for_each = ingress.value.from
-          content {
-            dynamic "namespace_selector" {
-              for_each = lookup(from.value, "namespace_selector", null) != null ? [from.value.namespace_selector] : []
-              content {
-                match_labels = namespace_selector.value.match_labels
-              }
-            }
-            
-            dynamic "pod_selector" {
-              for_each = lookup(from.value, "pod_selector", null) != null ? [from.value.pod_selector] : []
-              content {
-                match_labels = pod_selector.value.match_labels
-              }
-            }
-            
-            dynamic "ip_block" {
-              for_each = lookup(from.value, "ip_block", null) != null ? [from.value.ip_block] : []
-              content {
-                cidr   = ip_block.value.cidr
-                except = lookup(ip_block.value, "except", [])
-              }
-            }
-          }
-        }
-        
-        dynamic "ports" {
-          for_each = ingress.value.ports
-          content {
-            protocol = ports.value.protocol
-            port     = ports.value.port
-          }
-        }
-      }
-    }
+    limit_range = var.enable_limit_range ? {
+      enabled = true
+      name    = kubernetes_limit_range_v1.container_limits[0].metadata[0].name
+      spec    = local.limit_range_spec
+    } : { enabled = false }
     
-    # Dynamic egress rules
-    dynamic "egress" {
-      for_each = each.value.egress_rules
-      content {
-        dynamic "to" {
-          for_each = egress.value.to
-          content {
-            dynamic "namespace_selector" {
-              for_each = lookup(to.value, "namespace_selector", null) != null ? [to.value.namespace_selector] : []
-              content {
-                match_labels = namespace_selector.value.match_labels
-              }
-            }
-            
-            dynamic "pod_selector" {
-              for_each = lookup(to.value, "pod_selector", null) != null ? [to.value.pod_selector] : []
-              content {
-                match_labels = pod_selector.value.match_labels
-              }
-            }
-            
-            dynamic "ip_block" {
-              for_each = lookup(to.value, "ip_block", null) != null ? [to.value.ip_block] : []
-              content {
-                cidr   = ip_block.value.cidr
-                except = lookup(ip_block.value, "except", [])
-              }
-            }
-          }
-        }
-        
-        dynamic "ports" {
-          for_each = egress.value.ports
-          content {
-            protocol = ports.value.protocol
-            port     = ports.value.port
-          }
-        }
-      }
-    }
+    # Network restrictions
+    network_policies = var.enable_network_policy ? {
+      enabled          = true
+      default_deny_all = var.default_deny_all
+      policies_count   = length(compact([
+        var.default_deny_all ? "deny-all" : "",
+        var.allow_ingress_controller ? "ingress" : "",
+        var.allow_intra_namespace ? "intra" : "",
+        var.allow_dns ? "dns" : "",
+        var.allow_monitoring ? "monitoring" : "",
+        var.allow_external_egress ? "external" : ""
+      ]))
+    } : { enabled = false }
   }
 }
