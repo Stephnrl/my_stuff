@@ -1,246 +1,225 @@
-# terraform-module-aws-eks-landing-zone/modules/team-iam-role/main.tf
+# terraform-module-aws-eks-landing-zone/modules/k8s-namespace/resource-quota.tf
 
-# Get current AWS account ID and region
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
-locals {
-  account_id = data.aws_caller_identity.current.account_id
-  region     = data.aws_region.current.name
+# Primary ResourceQuota for the namespace
+resource "kubernetes_resource_quota_v1" "main" {
+  count = var.enable_resource_quota ? 1 : 0
   
-  # Generate GitHub repo subject conditions based on input
-  github_subjects = flatten([
-    # Allow all repos matching pattern
-    [for repo in var.github_repositories : "repo:${var.github_org}/${repo}:*"],
+  metadata {
+    name      = "${var.namespace_name}-quota"
+    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
     
-    # Allow environment-specific deployments if environments are specified
-    var.github_environments != null ? flatten([
-      for repo in var.github_repositories : [
-        for env in var.github_environments : 
-        "repo:${var.github_org}/${repo}:environment:${env}"
-      ]
-    ]) : []
-  ])
-}
-
-# IAM Role with dual trust (GitHub OIDC + Console)
-resource "aws_iam_role" "team_role" {
-  name                 = "${var.team_name}-eks-namespace-role"
-  description          = "EKS namespace access role for ${var.team_name} team"
-  max_session_duration = var.max_session_duration
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = concat(
-      # GitHub OIDC trust relationship
-      [{
-        Sid    = "GitHubActionsOIDC"
-        Effect = "Allow"
-        Principal = {
-          Federated = var.oidc_provider_arn
-        }
-        Action = "sts:AssumeRoleWithWebIdentity"
-        Condition = {
-          StringEquals = {
-            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          }
-          StringLike = {
-            "token.actions.githubusercontent.com:sub" = local.github_subjects
-          }
-        }
-      }],
-      # AWS Console access (conditional)
-      var.enable_console_access ? [{
-        Sid    = "ConsoleAccess"
-        Effect = "Allow"
-        Principal = {
-          AWS = "arn:aws:iam::${local.account_id}:root"
-        }
-        Action = "sts:AssumeRole"
-        Condition = merge(
-          # MFA requirement (conditional)
-          var.require_mfa ? {
-            Bool = {
-              "aws:MultiFactorAuthPresent" = "true"
-            }
-          } : {},
-          # Principal tag requirements (conditional)
-          length(var.required_principal_tags) > 0 ? {
-            StringEquals = {
-              for key, value in var.required_principal_tags : 
-              "aws:PrincipalTag/${key}" => value
-            }
-          } : {}
-        )
-      }] : []
+    labels = merge(
+      local.common_labels,
+      {
+        "app.kubernetes.io/name"      = "${var.namespace_name}-quota"
+        "app.kubernetes.io/component" = "resource-quota"
+      }
     )
-  })
-  
-  tags = merge(
-    var.tags,
-    {
-      Name           = "${var.team_name}-eks-namespace-role"
-      Team           = var.team_name
-      Purpose        = "eks-namespace-access"
-      GitHubOrg      = var.github_org
-      GitHubRepos    = join(",", var.github_repositories)
-      ConsoleAccess  = var.enable_console_access ? "enabled" : "disabled"
-      MFARequired    = var.require_mfa ? "yes" : "no"
+    
+    annotations = {
+      "platform.company.com/quota-type" = "primary"
+      "platform.company.com/environment" = var.environment
     }
-  )
-}
-
-# Core EKS access policy
-resource "aws_iam_role_policy" "eks_access" {
-  name = "eks-cluster-access"
-  role = aws_iam_role.team_role.id
+  }
   
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "EKSClusterAccess"
-        Effect = "Allow"
-        Action = [
-          "eks:DescribeCluster",
-          "eks:ListClusters"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "EKSAPIAccess"
-        Effect = "Allow"
-        Action = [
-          "eks:AccessKubernetesApi"
-        ]
-        Resource = var.cluster_arn != null ? var.cluster_arn : 
-                  "arn:aws:eks:${local.region}:${local.account_id}:cluster/*"
+  spec {
+    hard = local.resource_quota_spec
+    
+    # Scope selectors for fine-grained control
+    dynamic "scope_selector" {
+      for_each = var.quota_scope_selectors
+      content {
+        dynamic "match_expression" {
+          for_each = scope_selector.value.match_expressions
+          content {
+            operator   = match_expression.value.operator
+            scope_name = match_expression.value.scope_name
+            values     = match_expression.value.values
+          }
+        }
       }
-    ]
-  })
+    }
+  }
 }
 
-# ECR access policy (conditional)
-resource "aws_iam_role_policy" "ecr_access" {
-  count = var.enable_ecr_access ? 1 : 0
+# Storage-specific ResourceQuota (if enabled)
+resource "kubernetes_resource_quota_v1" "storage" {
+  count = var.enable_storage_quota ? 1 : 0
   
-  name = "ecr-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
+  metadata {
+    name      = "${var.namespace_name}-storage-quota"
+    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
+    
+    labels = merge(
+      local.common_labels,
       {
-        Sid    = "ECRTokenAccess"
-        Effect = "Allow"
-        Action = [
-          "ecr:GetAuthorizationToken"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "ECRRepositoryAccess"
-        Effect = "Allow"
-        Action = [
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:PutImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:DescribeRepositories",
-          "ecr:ListImages",
-          "ecr:DescribeImages"
-        ]
-        Resource = [
-          for repo in var.ecr_repositories : 
-          "arn:aws:ecr:${local.region}:${local.account_id}:repository/${repo}"
-        ]
+        "app.kubernetes.io/name"      = "${var.namespace_name}-storage-quota"
+        "app.kubernetes.io/component" = "storage-quota"
       }
-    ]
-  })
+    )
+    
+    annotations = {
+      "platform.company.com/quota-type" = "storage"
+      "platform.company.com/environment" = var.environment
+    }
+  }
+  
+  spec {
+    hard = var.storage_quota_spec
+  }
 }
 
-# S3 access policy (conditional)
-resource "aws_iam_role_policy" "s3_access" {
-  count = length(var.s3_buckets) > 0 ? 1 : 0
+# Compute-specific ResourceQuota for different priority classes
+resource "kubernetes_resource_quota_v1" "compute_priority" {
+  for_each = var.compute_priority_quotas
   
-  name = "s3-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
+  metadata {
+    name      = "${var.namespace_name}-${each.key}-quota"
+    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
+    
+    labels = merge(
+      local.common_labels,
       {
-        Sid    = "S3BucketAccess"
-        Effect = "Allow"
-        Action = [
-          "s3:ListBucket",
-          "s3:GetBucketLocation"
-        ]
-        Resource = [
-          for bucket in var.s3_buckets : 
-          "arn:aws:s3:::${bucket}"
-        ]
-      },
-      {
-        Sid    = "S3ObjectAccess"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:GetObjectVersion"
-        ]
-        Resource = [
-          for bucket in var.s3_buckets : 
-          "arn:aws:s3:::${bucket}/*"
-        ]
+        "app.kubernetes.io/name"      = "${var.namespace_name}-${each.key}-quota"
+        "app.kubernetes.io/component" = "priority-quota"
+        "priority-class"              = each.key
       }
-    ]
-  })
-}
-
-# Custom IAM policies (optional)
-resource "aws_iam_role_policy" "custom_policies" {
-  for_each = var.custom_policies
+    )
+    
+    annotations = {
+      "platform.company.com/quota-type" = "priority-class"
+      "platform.company.com/priority-class" = each.key
+    }
+  }
   
-  name   = each.key
-  role   = aws_iam_role.team_role.id
-  policy = each.value
-}
-
-# Attach managed policies (optional)
-resource "aws_iam_role_policy_attachment" "managed_policies" {
-  for_each = toset(var.managed_policy_arns)
-  
-  role       = aws_iam_role.team_role.name
-  policy_arn = each.value
-}
-
-# CloudWatch Logs access for troubleshooting (conditional)
-resource "aws_iam_role_policy" "cloudwatch_logs" {
-  count = var.enable_cloudwatch_logs ? 1 : 0
-  
-  name = "cloudwatch-logs-access"
-  role = aws_iam_role.team_role.id
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "CloudWatchLogsAccess"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "logs:DescribeLogGroups",
-          "logs:DescribeLogStreams"
-        ]
-        Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/eks/${var.team_name}/*"
+  spec {
+    hard = each.value.limits
+    
+    scope_selector {
+      match_expression {
+        operator   = "In"
+        scope_name = "PriorityClass"
+        values     = [each.key]
       }
-    ]
-  })
+    }
+  }
+}
+
+# Environment-specific quota adjustments
+resource "kubernetes_resource_quota_v1" "environment_specific" {
+  count = var.enable_environment_quota && contains(["staging", "prod"], var.environment) ? 1 : 0
+  
+  metadata {
+    name      = "${var.namespace_name}-${var.environment}-quota"
+    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
+    
+    labels = merge(
+      local.common_labels,
+      {
+        "app.kubernetes.io/name"      = "${var.namespace_name}-${var.environment}-quota"
+        "app.kubernetes.io/component" = "environment-quota"
+      }
+    )
+    
+    annotations = {
+      "platform.company.com/quota-type" = "environment-specific"
+      "platform.company.com/environment" = var.environment
+    }
+  }
+  
+  spec {
+    hard = var.environment == "prod" ? var.production_quota_overrides : var.staging_quota_overrides
+    
+    # Apply to specific resource types only
+    scopes = var.environment_quota_scopes
+  }
+}
+
+# Object count quotas (separate from resource quotas for clarity)
+resource "kubernetes_resource_quota_v1" "object_count" {
+  count = var.enable_object_count_quota ? 1 : 0
+  
+  metadata {
+    name      = "${var.namespace_name}-object-count-quota"
+    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
+    
+    labels = merge(
+      local.common_labels,
+      {
+        "app.kubernetes.io/name"      = "${var.namespace_name}-object-count-quota"
+        "app.kubernetes.io/component" = "object-count-quota"
+      }
+    )
+    
+    annotations = {
+      "platform.company.com/quota-type" = "object-count"
+      "platform.company.com/description" = "Limits the number of Kubernetes objects"
+    }
+  }
+  
+  spec {
+    hard = {
+      # Core objects
+      "pods"                         = var.max_pods
+      "services"                     = var.max_services
+      "secrets"                      = var.max_secrets
+      "configmaps"                   = var.max_configmaps
+      "persistentvolumeclaims"       = var.max_pvcs
+      
+      # Workload objects  
+      "deployments.apps"             = var.max_deployments
+      "statefulsets.apps"            = var.max_statefulsets
+      "jobs.batch"                   = var.max_jobs
+      "cronjobs.batch"               = var.max_cronjobs
+      
+      # Networking objects
+      "services.loadbalancers"       = var.max_load_balancers
+      "ingresses.networking.k8s.io"  = var.max_ingresses
+      
+      # RBAC objects (if teams can create them)
+      "roles.rbac.authorization.k8s.io"        = var.max_roles
+      "rolebindings.rbac.authorization.k8s.io" = var.max_role_bindings
+      
+      # Custom Resource limits (if using operators)
+      "horizontalpodautoscalers.autoscaling" = var.max_hpas
+      "verticalpodautoscalers.autoscaling.k8s.io" = var.max_vpas
+    }
+  }
+}
+
+# Monitoring ResourceQuota usage with custom resources (if monitoring is enabled)
+resource "kubernetes_resource_quota_v1" "monitoring" {
+  count = var.enable_monitoring_quota && var.enable_monitoring ? 1 : 0
+  
+  metadata {
+    name      = "${var.namespace_name}-monitoring-quota"
+    namespace = kubernetes_namespace_v1.namespace.metadata[0].name
+    
+    labels = merge(
+      local.common_labels,
+      {
+        "app.kubernetes.io/name"      = "${var.namespace_name}-monitoring-quota"
+        "app.kubernetes.io/component" = "monitoring-quota"
+      }
+    )
+    
+    annotations = {
+      "platform.company.com/quota-type" = "monitoring"
+      "platform.company.com/description" = "Limits monitoring-related resources"
+    }
+  }
+  
+  spec {
+    hard = {
+      # Prometheus-related resources
+      "prometheuses.monitoring.coreos.com"        = "1"
+      "servicemonitors.monitoring.coreos.com"     = var.max_service_monitors
+      "podmonitors.monitoring.coreos.com"         = var.max_pod_monitors
+      "prometheusrules.monitoring.coreos.com"     = var.max_prometheus_rules
+      
+      # Grafana-related resources  
+      "grafanadashboards.integreatly.org"         = var.max_grafana_dashboards
+      "grafanadatasources.integreatly.org"        = var.max_grafana_datasources
+    }
+  }
 }
