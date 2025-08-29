@@ -1,101 +1,31 @@
-      - name: Create GitHub Release
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          $tagName = "${{ steps.version.outputs.VERSION_TAG }}"
-          $releaseName = "${{ env.MODULE_NAME }} ${{ steps.version.outputs.VERSION }}"
-          
-          # Check if release already exists
-          $existingRelease = gh release view $tagName 2>$null
-          
-          if (-not $existingRelease) {
-            # Create release notes
-            $releaseNotes = @"
-          ## 📦 Module: ${{ env.MODULE_NAME }} v${{ steps.version.outputs.VERSION }}
-          
-          ### Installation
-          ``````powershell
-          # Register GitHub Packages (one-time setup)
-          Register-PSRepository -Name GitHubPackages ``
-            -SourceLocation "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" ``
-            -InstallationPolicy Trusted
-          
-          # Install module
-          Install-Module -Name ${{ env.MODULE_NAME }} ``
-            -Repository GitHubPackages ``
-            -RequiredVersion '${{ steps.version.outputs.VERSION }}'
-          ``````
-          
-          ### Recent Changes
-          $(git log --oneline -n 10 --pretty=format:"- %s")
-          
-          ### Package URL
-          https://github.com/${{ github.repository }}/packages
-          "@
-            
-            # Create GitHub release
-            gh release create $tagName `
-              --title "$releaseName" `
-              --notes "$releaseNotes" `
-              --target ${{ github.sha }}
-            
-            Write-Host "✅ Created GitHub release: $tagName"
-          } else {
-            Write-Host "Release $tagName already exists"
-          }
+- name: Create GitHub Release
+  shell: bash
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    TAG="${{ steps.version.outputs.VERSION_TAG }}"
+    
+    # Check if release exists
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer $GH_TOKEN" \
+      "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG")
+    
+    if [ "$STATUS" -eq "200" ]; then
+      echo "Release $TAG already exists"
+    else
+      # Create release
+      curl -X POST \
+        -H "Authorization: Bearer $GH_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "https://api.github.com/repos/${{ github.repository }}/releases" \
+        -d '{
+          "tag_name": "'$TAG'",
+          "target_commitish": "${{ github.sha }}",
+          "name": "${{ env.MODULE_NAME }} ${{ steps.version.outputs.VERSION }}",
+          "body": "Module version ${{ steps.version.outputs.VERSION }}",
+          "draft": false,
+          "prerelease": false
+        }'
       
-      - name: Update Package Visibility (Private/Internal)
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Note: Package visibility is inherited from repository visibility
-          # For enterprise, you might want to set specific permissions
-          
-          Write-Host @"
-          📦 Package Published Successfully!
-          
-          Package: ${{ env.MODULE_NAME }}
-          Version: ${{ steps.version.outputs.VERSION }}
-          Registry: GitHub Packages (Private)
-          
-          The package visibility follows your repository settings:
-          - Private repo = Private package (only visible to repo collaborators)
-          - Internal repo = Internal package (visible to all authenticated users in the enterprise)
-          
-          View your package at:
-          https://github.com/orgs/${{ github.repository_owner }}/packages/nuget/${{ env.MODULE_NAME }}
-          "@
-      
-      - name: Job Summary
-        if: always()
-        shell: pwsh
-        run: |
-          $summary = @"
-          # 📦 Module Publishing Summary
-          
-          | Property | Value |
-          |----------|-------|
-          | Module | ${{ env.MODULE_NAME }} |
-          | Version | ${{ steps.version.outputs.VERSION }} |
-          | Registry | GitHub Packages |
-          | Repository | GitHubPackages |
-          | Visibility | Private/Internal |
-          | Status | ${{ job.status }} |
-          
-          ## Installation Instructions
-          
-          \`\`\`powershell
-          # One-time setup
-          Register-PSRepository -Name GitHubPackages \`
-            -SourceLocation "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \`
-            -InstallationPolicy Trusted
-          
-          # Install the module
-          Install-Module -Name ${{ env.MODULE_NAME }} -Repository GitHubPackages
-          \`\`\`
-          "@
-          
-          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      echo "✅ Created release $TAG"
+    fi
