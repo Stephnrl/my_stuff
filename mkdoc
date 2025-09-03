@@ -1,46 +1,35 @@
-# Welcome to Test Documentation
+name: Deploy MkDocs to GitHub Pages
 
-This is a test documentation site to verify MkDocs is working correctly with GitHub Pages on our internal GitHub Enterprise Server.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
-## Quick Test Checklist ✅
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
-- [ ] Basic Markdown rendering
-- [ ] Code syntax highlighting
-- [ ] Navigation structure
-- [ ] Search functionality
-- [ ] Theme switching (light/dark)
-- [ ] Tables and lists
-- [ ] Admonitions (info boxes)
-- [ ] Copy code button
-- [ ] Mobile responsive design
-
-## Current Status
-
-!!! success "Deployment Status"
-    If you can read this, your MkDocs deployment is working! 🎉
-
-## Quick Links
-
-- [:material-rocket: Getting Started](getting-started.md) - Start here for setup
-- [:material-code-braces: API Documentation](api/index.md) - API reference
-- [:material-palette: Features Demo](features/markdown.md) - See all features
-
-## System Information
-
-| Component | Version | Status |
-|-----------|---------|--------|
-| Python | 3.11+ | :material-check-circle:{ .success } |
-| MkDocs | 1.5.3 | :material-check-circle:{ .success } |
-| Material Theme | 9.5.3 | :material-check-circle:{ .success } |
-| GitHub Pages | Internal | :material-check-circle:{ .success } |
-
-## Sample Code Block
-
-```python
-def hello_mkdocs():
-    """Test function to verify syntax highlighting"""
-    print("✨ MkDocs is working!")
-    return True
-
-if __name__ == "__main__":
-    hello_mkdocs()
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux]
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Build and Deploy
+        run: |
+          mkdocs build --strict
+          mkdocs gh-deploy --force --clean
