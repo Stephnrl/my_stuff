@@ -1,102 +1,46 @@
-site_name: Test Documentation Site
-site_description: Testing MkDocs with GitHub Pages
-site_author: DevOps Team
-site_url: https://your-github-enterprise.com/pages/org/repo/
+# Welcome to Test Documentation
 
-repo_name: org/test-docs
-repo_url: https://your-github-enterprise.com/org/test-docs
-edit_uri: edit/main/docs/
+This is a test documentation site to verify MkDocs is working correctly with GitHub Pages on our internal GitHub Enterprise Server.
 
-theme:
-  name: material
-  features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
-    - navigation.top
-    - navigation.instant
-    - search.suggest
-    - search.highlight
-    - content.code.copy
-    - content.code.annotate
-  palette:
-    - scheme: default
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
-    - scheme: slate
-      primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
-  font:
-    text: Roboto
-    code: Roboto Mono
-  icon:
-    logo: material/book-open-variant
+## Quick Test Checklist ✅
 
-plugins:
-  - search
-  - minify:
-      minify_html: true
+- [ ] Basic Markdown rendering
+- [ ] Code syntax highlighting
+- [ ] Navigation structure
+- [ ] Search functionality
+- [ ] Theme switching (light/dark)
+- [ ] Tables and lists
+- [ ] Admonitions (info boxes)
+- [ ] Copy code button
+- [ ] Mobile responsive design
 
-markdown_extensions:
-  - admonition
-  - abbr
-  - attr_list
-  - def_list
-  - footnotes
-  - meta
-  - md_in_html
-  - toc:
-      permalink: true
-  - pymdownx.arithmatex:
-      generic: true
-  - pymdownx.betterem:
-      smart_enable: all
-  - pymdownx.caret
-  - pymdownx.details
-  - pymdownx.emoji:
-      emoji_index: !!python/name:material.extensions.emoji.twemoji
-      emoji_generator: !!python/name:material.extensions.emoji.to_svg
-  - pymdownx.highlight:
-      anchor_linenums: true
-  - pymdownx.inlinehilite
-  - pymdownx.keys
-  - pymdownx.mark
-  - pymdownx.smartsymbols
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.tabbed:
-      alternate_style: true
-  - pymdownx.tasklist:
-      custom_checkbox: true
-  - pymdownx.tilde
-  - tables
+## Current Status
 
-nav:
-  - Home: index.md
-  - Getting Started: getting-started.md
-  - Features:
-    - Markdown Demo: features/markdown.md
-    - Code Examples: features/code-blocks.md
-    - Diagrams: features/diagrams.md
-  - API:
-    - Overview: api/index.md
-    - Endpoints: api/endpoints.md
-  - About: about.md
+!!! success "Deployment Status"
+    If you can read this, your MkDocs deployment is working! 🎉
 
-extra:
-  social:
-    - icon: fontawesome/brands/github
-      link: https://your-github-enterprise.com/org
-    - icon: fontawesome/brands/docker
-      link: https://hub.docker.com/
-  version:
-    provider: mike
+## Quick Links
+
+- [:material-rocket: Getting Started](getting-started.md) - Start here for setup
+- [:material-code-braces: API Documentation](api/index.md) - API reference
+- [:material-palette: Features Demo](features/markdown.md) - See all features
+
+## System Information
+
+| Component | Version | Status |
+|-----------|---------|--------|
+| Python | 3.11+ | :material-check-circle:{ .success } |
+| MkDocs | 1.5.3 | :material-check-circle:{ .success } |
+| Material Theme | 9.5.3 | :material-check-circle:{ .success } |
+| GitHub Pages | Internal | :material-check-circle:{ .success } |
+
+## Sample Code Block
+
+```python
+def hello_mkdocs():
+    """Test function to verify syntax highlighting"""
+    print("✨ MkDocs is working!")
+    return True
+
+if __name__ == "__main__":
+    hello_mkdocs()
