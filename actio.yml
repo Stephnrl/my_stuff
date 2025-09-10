@@ -1,0 +1,556 @@
+name: Build Azure Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packer/**'
+      - 'environments/**'
+      - '.github/workflows/build-images.yml'
+  
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'packer/**'
+      - 'environments/**'
+  
+  schedule:
+    # Weekly builds - Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
+  
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+        default: 'dev'
+      
+      image_type:
+        description: 'Image type to build'
+        required: true
+        type: choice
+        options:
+          - all
+          - rhel9
+          - windows2022
+        default: 'all'
+      
+      image_version:
+        description: 'Image version (leave empty for auto)'
+        required: false
+        type: string
+        default: ''
+      
+      skip_validation:
+        description: 'Skip validation step'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  PACKER_VERSION: "1.9.4"
+  ANSIBLE_VERSION: "2.16.12"
+  TERRAFORM_VERSION: "1.6.0"  # If you need to create galleries
+
+permissions:
+  id-token: write   # Required for OIDC
+  contents: read    # Read repository
+  packages: write   # If storing artifacts
+
+jobs:
+  # ============================================
+  # Setup and Validation
+  # ============================================
+  setup:
+    name: Setup and Validate
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      image_version: ${{ steps.version.outputs.version }}
+      build_matrix: ${{ steps.matrix.outputs.matrix }}
+      should_build: ${{ steps.changes.outputs.should_build }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for change detection
+
+      - name: Determine Environment
+        id: set-env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check for Changes
+        id: changes
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            rhel9:
+              - 'packer/rhel9/**'
+              - 'packer/common/**'
+              - 'environments/**'
+            windows2022:
+              - 'packer/windows2022/**'
+              - 'packer/common/**'
+              - 'environments/**'
+            ansible:
+              - 'ansible/**'
+            scripts:
+              - 'scripts/**'
+
+      - name: Determine Build Matrix
+        id: matrix
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.image_type }}" in
+              all)
+                echo 'matrix=["rhel9","windows2022"]' >> $GITHUB_OUTPUT
+                ;;
+              *)
+                echo 'matrix=["${{ inputs.image_type }}"]' >> $GITHUB_OUTPUT
+                ;;
+            esac
+          else
+            # Build only changed images
+            matrix="[]"
+            if [[ "${{ steps.changes.outputs.rhel9 }}" == "true" ]]; then
+              matrix='["rhel9"]'
+            fi
+            if [[ "${{ steps.changes.outputs.windows2022 }}" == "true" ]]; then
+              if [[ "$matrix" == "[]" ]]; then
+                matrix='["windows2022"]'
+              else
+                matrix='["rhel9","windows2022"]'
+              fi
+            fi
+            echo "matrix=$matrix" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Generate Version
+        id: version
+        run: |
+          if [[ -n "${{ inputs.image_version }}" ]]; then
+            echo "version=${{ inputs.image_version }}" >> $GITHUB_OUTPUT
+          else
+            # Semantic versioning: YEAR.MONTH.BUILD_NUMBER
+            VERSION="$(date +%Y).$(date +%m).${{ github.run_number }}"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Validate Packer Templates
+        if: inputs.skip_validation != true
+        run: |
+          for dir in packer/*/; do
+            if [[ -f "$dir/$(basename $dir).pkr.hcl" ]]; then
+              echo "Validating $dir"
+              cd $dir
+              packer init .
+              packer validate \
+                -var "subscription_id=dummy" \
+                -var "gallery_resource_group=dummy" \
+                -var "gallery_name=dummy" \
+                .
+              cd - > /dev/null
+            fi
+          done
+
+      - name: Packer Format Check
+        run: |
+          packer fmt -check -recursive packer/
+
+  # ============================================
+  # Build Images
+  # ============================================
+  build:
+    name: Build ${{ matrix.image }} - ${{ needs.setup.outputs.environment }}
+    needs: setup
+    if: needs.setup.outputs.build_matrix != '[]'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.setup.outputs.build_matrix) }}
+    
+    environment: 
+      name: ${{ needs.setup.outputs.environment }}
+    
+    env:
+      IMAGE_VERSION: ${{ needs.setup.outputs.image_version }}
+      ENVIRONMENT: ${{ needs.setup.outputs.environment }}
+    
+    steps:
+      - name: Checkout Packer Repository
+        uses: actions/checkout@v4
+        with:
+          path: packer-repo
+
+      - name: Checkout Ansible Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/ansible-config
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: ansible-repo
+          ref: main
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: ${{ env.PACKER_VERSION }}
+
+      - name: Setup Python for Ansible
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Ansible
+        run: |
+          pip install ansible-core==${{ env.ANSIBLE_VERSION }}
+          ansible --version
+
+      - name: Install Ansible Requirements
+        working-directory: ansible-repo
+        run: |
+          if [[ -f requirements.yml ]]; then
+            ansible-galaxy install -r requirements.yml
+          fi
+          if [[ -f collections/requirements.yml ]]; then
+            ansible-galaxy collection install -r collections/requirements.yml
+          fi
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Set Azure Subscription
+        run: |
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          az account show
+
+      - name: Cache Packer Plugins
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.config/packer/plugins
+            ~/packer.d/plugins
+          key: packer-plugins-${{ runner.os }}-${{ hashFiles('**/packer.pkr.hcl') }}
+          restore-keys: |
+            packer-plugins-${{ runner.os }}-
+
+      - name: Initialize Packer
+        working-directory: packer-repo/packer/${{ matrix.image }}
+        run: packer init .
+
+      - name: Create Build Metadata
+        id: metadata
+        run: |
+          cat > packer-repo/build-metadata.json <<EOF
+          {
+            "build_number": "${{ github.run_number }}",
+            "build_id": "${{ github.run_id }}",
+            "commit_sha": "${{ github.sha }}",
+            "commit_ref": "${{ github.ref }}",
+            "triggered_by": "${{ github.actor }}",
+            "repository": "${{ github.repository }}",
+            "workflow": "${{ github.workflow }}"
+          }
+          EOF
+
+      - name: Build ${{ matrix.image }} Image
+        working-directory: packer-repo/packer/${{ matrix.image }}
+        env:
+          PKR_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          PKR_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          PKR_VAR_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          PKR_VAR_ansible_repo_path: ${{ github.workspace }}/ansible-repo
+          PKR_VAR_image_version: ${{ env.IMAGE_VERSION }}
+          PACKER_LOG: 1
+          PACKER_LOG_PATH: packer-build.log
+        run: |
+          # Build with appropriate var files
+          packer build \
+            -var-file="../common/base.pkrvars.hcl" \
+            -var-file="../../environments/${{ env.ENVIRONMENT }}.pkrvars.hcl" \
+            -var "image_version=${{ env.IMAGE_VERSION }}" \
+            -var "ansible_repo_path=${{ github.workspace }}/ansible-repo" \
+            -on-error=abort \
+            ${{ matrix.image }}.pkr.hcl
+
+      - name: Upload Build Logs
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: packer-logs-${{ matrix.image }}-${{ github.run_number }}
+          path: |
+            packer-repo/packer/${{ matrix.image }}/packer-build.log
+            packer-repo/build-metadata.json
+          retention-days: 30
+
+      - name: Verify Image in Gallery
+        run: |
+          echo "Verifying image in gallery..."
+          GALLERY_RG="${{ vars.GALLERY_RESOURCE_GROUP_${{ env.ENVIRONMENT }} }}"
+          GALLERY_NAME="${{ vars.GALLERY_NAME_${{ env.ENVIRONMENT }} }}"
+          
+          az sig image-version show \
+            --resource-group "$GALLERY_RG" \
+            --gallery-name "$GALLERY_NAME" \
+            --gallery-image-definition "${{ matrix.image }}-stig-hardened" \
+            --gallery-image-version "${{ env.IMAGE_VERSION }}" \
+            --query "provisioningState" -o tsv
+
+      - name: Tag Image Version
+        run: |
+          GALLERY_RG="${{ vars.GALLERY_RESOURCE_GROUP_${{ env.ENVIRONMENT }} }}"
+          GALLERY_NAME="${{ vars.GALLERY_NAME_${{ env.ENVIRONMENT }} }}"
+          
+          az sig image-version update \
+            --resource-group "$GALLERY_RG" \
+            --gallery-name "$GALLERY_NAME" \
+            --gallery-image-definition "${{ matrix.image }}-stig-hardened" \
+            --gallery-image-version "${{ env.IMAGE_VERSION }}" \
+            --set tags.GitHubRunId="${{ github.run_id }}" \
+                  tags.GitHubCommit="${{ github.sha }}" \
+                  tags.GitHubActor="${{ github.actor }}"
+
+  # ============================================
+  # Test Images (Optional)
+  # ============================================
+  test:
+    name: Test ${{ matrix.image }}
+    needs: [setup, build]
+    if: needs.setup.outputs.environment != 'prod'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.setup.outputs.build_matrix) }}
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Test VM from Image
+        id: deploy-vm
+        run: |
+          # Create test VM from the new image
+          VM_NAME="test-${{ matrix.image }}-${{ github.run_number }}"
+          RESOURCE_GROUP="rg-test-${{ needs.setup.outputs.environment }}"
+          IMAGE_ID="/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/${{ vars.GALLERY_RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ vars.GALLERY_NAME }}/images/${{ matrix.image }}-stig-hardened/versions/${{ needs.setup.outputs.image_version }}"
+          
+          az vm create \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$VM_NAME" \
+            --image "$IMAGE_ID" \
+            --size "Standard_B2s" \
+            --admin-username "testadmin" \
+            --generate-ssh-keys \
+            --public-ip-address-allocation static \
+            --nsg-rule SSH
+          
+          # Get VM IP
+          VM_IP=$(az vm show -d -g "$RESOURCE_GROUP" -n "$VM_NAME" --query publicIps -o tsv)
+          echo "vm_ip=$VM_IP" >> $GITHUB_OUTPUT
+          echo "vm_name=$VM_NAME" >> $GITHUB_OUTPUT
+          echo "resource_group=$RESOURCE_GROUP" >> $GITHUB_OUTPUT
+
+      - name: Run Compliance Tests
+        run: |
+          # Run InSpec or other compliance tests
+          echo "Running compliance tests on ${{ steps.deploy-vm.outputs.vm_ip }}"
+          # Add your actual test commands here
+
+      - name: Cleanup Test VM
+        if: always()
+        run: |
+          az vm delete \
+            --resource-group "${{ steps.deploy-vm.outputs.resource_group }}" \
+            --name "${{ steps.deploy-vm.outputs.vm_name }}" \
+            --yes --no-wait
+
+  # ============================================
+  # Promote to Production
+  # ============================================
+  promote:
+    name: Promote to Production
+    needs: [setup, build, test]
+    if: |
+      github.ref == 'refs/heads/main' && 
+      needs.setup.outputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment: 
+      name: production
+      url: https://portal.azure.com
+    
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Copy Images to Production Gallery
+        run: |
+          SOURCE_RG="${{ vars.GALLERY_RESOURCE_GROUP_STAGING }}"
+          SOURCE_GALLERY="${{ vars.GALLERY_NAME_STAGING }}"
+          DEST_RG="${{ vars.GALLERY_RESOURCE_GROUP_PROD }}"
+          DEST_GALLERY="${{ vars.GALLERY_NAME_PROD }}"
+          VERSION="${{ needs.setup.outputs.image_version }}"
+          
+          for IMAGE in ${{ join(fromJson(needs.setup.outputs.build_matrix), ' ') }}; do
+            echo "Promoting $IMAGE to production..."
+            
+            # Get source image version
+            SOURCE_ID=$(az sig image-version show \
+              --resource-group "$SOURCE_RG" \
+              --gallery-name "$SOURCE_GALLERY" \
+              --gallery-image-definition "${IMAGE}-stig-hardened" \
+              --gallery-image-version "$VERSION" \
+              --query id -o tsv)
+            
+            # Create image version in production gallery
+            az sig image-version create \
+              --resource-group "$DEST_RG" \
+              --gallery-name "$DEST_GALLERY" \
+              --gallery-image-definition "${IMAGE}-stig-hardened" \
+              --gallery-image-version "$VERSION" \
+              --managed-image "$SOURCE_ID" \
+              --replica-count 2 \
+              --target-regions "eastus2=1" "westus2=1" "centralus=1"
+          done
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.setup.outputs.image_version }}
+          release_name: Release ${{ needs.setup.outputs.image_version }}
+          body: |
+            ## Images Released
+            - Version: ${{ needs.setup.outputs.image_version }}
+            - Images: ${{ join(fromJson(needs.setup.outputs.build_matrix), ', ') }}
+            - Environment: Production
+            
+            ## Changes
+            ${{ github.event.head_commit.message }}
+          draft: false
+          prerelease: false
+
+  # ============================================
+  # Notifications
+  # ============================================
+  notify:
+    name: Send Notifications
+    needs: [setup, build, test, promote]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Determine Status
+        id: status
+        run: |
+          if [[ "${{ needs.build.result }}" == "success" ]]; then
+            echo "status=✅ Success" >> $GITHUB_OUTPUT
+            echo "color=good" >> $GITHUB_OUTPUT
+          elif [[ "${{ needs.build.result }}" == "failure" ]]; then
+            echo "status=❌ Failed" >> $GITHUB_OUTPUT
+            echo "color=danger" >> $GITHUB_OUTPUT
+          else
+            echo "status=⚠️ Warning" >> $GITHUB_OUTPUT
+            echo "color=warning" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack Notification
+        if: vars.SLACK_WEBHOOK_URL != ''
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              attachments: [{
+                color: '${{ steps.status.outputs.color }}',
+                title: 'Image Build ${{ steps.status.outputs.status }}',
+                fields: [
+                  {
+                    title: 'Version',
+                    value: '${{ needs.setup.outputs.image_version }}',
+                    short: true
+                  },
+                  {
+                    title: 'Environment',
+                    value: '${{ needs.setup.outputs.environment }}',
+                    short: true
+                  },
+                  {
+                    title: 'Images',
+                    value: '${{ join(fromJson(needs.setup.outputs.build_matrix), ', ') }}',
+                    short: false
+                  },
+                  {
+                    title: 'Triggered By',
+                    value: '${{ github.actor }}',
+                    short: true
+                  },
+                  {
+                    title: 'Workflow',
+                    value: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}',
+                    short: false
+                  }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Send Email Notification
+        if: failure() && vars.NOTIFICATION_EMAIL != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: Image Build Failed - ${{ needs.setup.outputs.image_version }}
+          to: ${{ vars.NOTIFICATION_EMAIL }}
+          from: GitHub Actions
+          body: |
+            Image build failed for version ${{ needs.setup.outputs.image_version }}
+            
+            Environment: ${{ needs.setup.outputs.environment }}
+            Images: ${{ join(fromJson(needs.setup.outputs.build_matrix), ', ') }}
+            
+            View logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
