@@ -1,0 +1,95 @@
+Controls to Disable/Modify:
+SELinux (Set to Permissive)
+yaml# R-258078 RHEL-09-431010 - Change from enforcing to permissive
+rhel9STIG_stigrule_258078__etc_selinux_config_Line: 'SELINUX=permissive'
+Firewall (Disable firewalld)
+yaml# R-257935 RHEL-09-251010 - Keep installed but don't enable
+rhel9STIG_stigrule_257935_Manage: False
+# R-257936 RHEL-09-251015 - Don't enable/start firewalld
+rhel9STIG_stigrule_257936_Manage: False
+# R-257939 RHEL-09-251030 - Firewall backend config
+rhel9STIG_stigrule_257939_Manage: False
+Physical Hardware Controls (Not needed in cloud)
+yaml# USB controls - not applicable in Azure
+rhel9STIG_stigrule_258034_Manage: False  # USB storage
+rhel9STIG_stigrule_258035_Manage: False  # USBGuard install
+rhel9STIG_stigrule_258036_Manage: False  # USBGuard service
+rhel9STIG_stigrule_258037_Manage: False  # USBGuard audit
+
+# Bluetooth - not applicable in Azure
+rhel9STIG_stigrule_258039_Manage: False  # Bluetooth module
+
+# WiFi - not applicable in Azure
+rhel9STIG_stigrule_258040_Manage: False  # WiFi disable
+
+# Smart card readers - not needed in cloud
+rhel9STIG_stigrule_258019_Manage: False  # Smart card removal
+rhel9STIG_stigrule_258020_Manage: False  # Smart card lock
+rhel9STIG_stigrule_258121_Manage: False  # OpenSC config
+rhel9STIG_stigrule_258122_Manage: False  # SSSD cert auth
+rhel9STIG_stigrule_258124_Manage: False  # pcsc-lite
+rhel9STIG_stigrule_258125_Manage: False  # pcscd service
+rhel9STIG_stigrule_258126_Manage: False  # opensc package
+GUI/Desktop Controls (If server, no GUI)
+yaml# GNOME/Desktop settings - disable if no GUI
+rhel9STIG_stigrule_258012_Manage: False  # Banner message
+rhel9STIG_stigrule_258013_Manage: False  # Banner lock
+rhel9STIG_stigrule_258014_Manage: False  # Automount
+rhel9STIG_stigrule_258015_Manage: False  # Automount lock
+rhel9STIG_stigrule_258016_Manage: False  # Autorun
+rhel9STIG_stigrule_258017_Manage: False  # Autorun lock
+rhel9STIG_stigrule_258021_Manage: False  # Screensaver lock
+rhel9STIG_stigrule_258022_Manage: False  # Lock enabled
+rhel9STIG_stigrule_258023_Manage: False  # Idle delay
+rhel9STIG_stigrule_258024_Manage: False  # Idle lock
+rhel9STIG_stigrule_258025_Manage: False  # Lock delay
+rhel9STIG_stigrule_258026_Manage: False  # Lock delay setting
+rhel9STIG_stigrule_258027_Manage: False  # Picture URI
+rhel9STIG_stigrule_258030_Manage: False  # Restart buttons
+rhel9STIG_stigrule_258031_Manage: False  # Logout
+rhel9STIG_stigrule_258032_Manage: False  # Logout lock
+rhel9STIG_stigrule_258033_Manage: False  # User list
+Kernel Modules (Some not needed in cloud)
+yaml# Filesystems rarely used in cloud
+rhel9STIG_stigrule_257880_Manage: False  # cramfs
+rhel9STIG_stigrule_257849_Manage: False  # autofs
+
+# Physical hardware modules
+rhel9STIG_stigrule_257806_Manage: False  # firewire
+Services Not Typically Needed
+yaml# These are already being removed, but confirm they're not needed:
+rhel9STIG_stigrule_257827_Manage: True   # sendmail (remove)
+rhel9STIG_stigrule_257828_Manage: False  # nfs-utils (might need for Azure Files)
+rhel9STIG_stigrule_257834_Manage: False  # tuned (might want for performance)
+Core Dump/Kdump (May conflict with cloud debugging)
+yaml# Consider if you need crash dumps for debugging
+rhel9STIG_stigrule_257818_Manage: False  # kdump (Azure has own crash handling)
+FAPolicyD (Since using Defender/Elastic)
+yaml# Application whitelisting - you have Defender
+rhel9STIG_stigrule_258089_Manage: False  # fapolicyd install
+rhel9STIG_stigrule_258090_Manage: False  # fapolicyd service
+Controls to KEEP Enabled:
+
+Audit rules - Keep all audit rules (R-258176 through R-258229) as they provide valuable logging
+SSH hardening - Keep all SSH configurations
+Password policies - Keep password complexity and aging rules
+File permissions - Keep system file permission settings
+Sysctl settings - Keep kernel hardening parameters
+User account controls - Keep account management settings
+Logging (rsyslog/auditd) - Keep system logging configurations
+
+Additional Recommendations:
+
+Network Time Protocol: Keep chrony enabled for time sync (important for logs)
+Consider keeping:
+
+Basic kernel module blacklisting (ATM, CAN, SCTP, TIPC) for attack surface reduction
+Core security packages (sudo, audit, rsyslog)
+User namespace restrictions (if not using containers)
+
+
+Azure-Specific Considerations:
+
+Ensure Azure Linux Agent is not blocked by any settings
+Verify network settings don't interfere with Azure networking
+Consider Azure Security Center recommendations alongside STIG
