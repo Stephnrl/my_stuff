@@ -1,0 +1,61 @@
+The Problem: "Snowflake Infrastructure" with Vendor Lock-in
+What you're getting: Hand-built AWS environments with no Infrastructure as Code (IaC), bare-bones documentation, and zero knowledge transfer - creating permanent operational dependency.
+Immediate Technical Debt Burden
+You'll inherit full-time manual management of:
+
+2 complete AWS environments (prod + nonprod)
+EKS clusters, RDS MariaDB, load balancers, security groups, IAM policies, S3, ElastiCache
+Self-hosted Jenkins with complex deployment workflows
+140+ container images requiring vendor-coordinated deployments every few months
+All patching, updates, and maintenance performed manually
+
+The Documentation Red Flag: Their bare-bones diagrams tell you nothing about configurations, dependencies, security rules, or operational procedures. This confirms they're building a revenue model around your operational helplessness, not delivering a transferable solution.
+The Technical Debt Disaster
+Bus Factor = 1 (the vendor): All infrastructure knowledge exists only in their heads. If they disappear, you're stuck with environments you can't rebuild, modify, or properly maintain.
+No Disaster Recovery: One accidental deletion means manually recreating complex infrastructure from incomplete documentation or paying the vendor to rebuild.
+Permanent Vendor Dependency: Every operational task becomes a billable consulting call - database updates, security patches, scaling, troubleshooting, after-hours deployments.
+Deployment Nightmare: "Working session calls" for every deployment means you can't deploy on your schedule, handle emergencies independently, or perform after-hours updates without vendor negotiations.
+What Terraform Infrastructure as Code Solves
+Complete Infrastructure Documentation:
+
+Every AWS resource, configuration, and dependency defined in version-controlled code
+Self-documenting with full audit history and change tracking
+No hidden tribal knowledge - everything transparent and transferable
+
+Operational Independence:
+
+Your team owns and understands the infrastructure blueprint
+Changes become code reviews and automated deployments
+Self-service operations without vendor coordination
+
+Disaster Recovery in Minutes:
+
+terraform apply recreates entire environment from code in ~30 minutes
+Guaranteed environment consistency between prod and nonprod
+No manual rebuild nightmares
+
+Automated Operations:
+
+Infrastructure changes, patching, and deployments become predictable, scheduled events
+After-hours deployments run automatically without vendor involvement
+140+ image deployments become push-button operations
+
+Real-World Impact
+Without Terraform (Current Vendor Path):
+
+Your "one person" becomes a full-time manual infrastructure operator
+40+ hours/week of manual ops work with no vacation coverage
+Permanent vendor dependency worth $50K+ annually in "consulting" fees
+High-stress incident response with no self-recovery capability
+
+With Terraform:
+
+5-10 hours/week monitoring automated systems
+Self-sufficient operations and predictable change management
+Knowledge shared across your team, not locked with a vendor
+Infrastructure becomes a manageable, transferable asset
+
+The Bottom Line
+This vendor is delivering operational dependency, not operational capability. They're building a revenue model around keeping you helpless rather than empowering your team.
+The Ask: Require Terraform/CloudFormation deliverables with complete documentation and knowledge transfer, or find a vendor who understands that modern infrastructure should be self-managing, not vendor-dependent.
+Cost Reality: Terraform implementation = 2-4 weeks upfront vs. $100K+/year in ongoing operational dependency and vendor consulting fees.
