@@ -1,0 +1,270 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Configuration variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCAN_RESULTS_DIR="${SCRIPT_DIR}/scan_results"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+SCAN_REPORT="${SCAN_RESULTS_DIR}/stig_scan_${TIMESTAMP}.xml"
+HTML_REPORT="${SCAN_RESULTS_DIR}/stig_scan_${TIMESTAMP}.html"
+LOG_FILE="${SCAN_RESULTS_DIR}/scanner_${TIMESTAMP}.log"
+
+# STIG profile configuration - adjust based on your OS
+RHEL_STIG_PROFILE="xccdf_org.ssgproject.content_profile_stig"
+UBUNTU_STIG_PROFILE="xccdf_org.ssgproject.content_profile_stig"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging function
+log() {
+    echo -e "${BLUE}[$(date '+%Y-%m-%d %H:%M:%S')] $1${NC}" | tee -a "$LOG_FILE"
+}
+
+error() {
+    echo -e "${RED}[ERROR] $1${NC}" | tee -a "$LOG_FILE"
+}
+
+success() {
+    echo -e "${GREEN}[SUCCESS] $1${NC}" | tee -a "$LOG_FILE"
+}
+
+warning() {
+    echo -e "${YELLOW}[WARNING] $1${NC}" | tee -a "$LOG_FILE"
+}
+
+# Create results directory
+mkdir -p "$SCAN_RESULTS_DIR"
+
+# Detect OS and version
+detect_os() {
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+    else
+        error "Cannot detect OS version"
+        exit 1
+    fi
+    log "Detected OS: $OS $OS_VERSION"
+}
+
+# Install OpenSCAP based on distribution
+install_openscap() {
+    log "Installing OpenSCAP scanner..."
+    
+    case "$OS" in
+        "rhel"|"centos"|"rocky"|"almalinux")
+            log "Installing for RHEL-based system..."
+            if command -v dnf &> /dev/null; then
+                sudo dnf install -y openscap-scanner scap-security-guide
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y openscap-scanner scap-security-guide
+            else
+                error "Neither dnf nor yum package manager found"
+                exit 1
+            fi
+            CONTENT_PATH="/usr/share/xml/scap/ssg/content"
+            ;;
+        "ubuntu"|"debian")
+            log "Installing for Debian-based system..."
+            sudo apt-get update
+            sudo apt-get install -y libopenscap8 ssg-debian ssg-debderived
+            CONTENT_PATH="/usr/share/xml/scap/ssg/content"
+            ;;
+        "sles"|"opensuse"*)
+            log "Installing for SUSE-based system..."
+            sudo zypper install -y openscap-scanner scap-security-guide
+            CONTENT_PATH="/usr/share/xml/scap/ssg/content"
+            ;;
+        *)
+            error "Unsupported operating system: $OS"
+            exit 1
+            ;;
+    esac
+    
+    success "OpenSCAP installation completed"
+}
+
+# Find STIG content file
+find_stig_content() {
+    log "Locating STIG content files..."
+    
+    # Common locations for STIG content
+    local possible_paths=(
+        "/usr/share/xml/scap/ssg/content"
+        "/usr/share/scap-security-guide"
+        "/opt/scap-security-guide"
+    )
+    
+    for path in "${possible_paths[@]}"; do
+        if [[ -d "$path" ]]; then
+            CONTENT_PATH="$path"
+            break
+        fi
+    done
+    
+    if [[ -z "${CONTENT_PATH:-}" ]]; then
+        error "Could not find STIG content directory"
+        exit 1
+    fi
+    
+    # Find the appropriate STIG content file based on OS
+    case "$OS" in
+        "rhel"|"centos"|"rocky"|"almalinux")
+            STIG_FILE=$(find "$CONTENT_PATH" -name "*rhel*stig*ds.xml" | head -1)
+            PROFILE="$RHEL_STIG_PROFILE"
+            ;;
+        "ubuntu")
+            STIG_FILE=$(find "$CONTENT_PATH" -name "*ubuntu*stig*ds.xml" | head -1)
+            PROFILE="$UBUNTU_STIG_PROFILE"
+            ;;
+        *)
+            # Fallback - try to find any STIG file
+            STIG_FILE=$(find "$CONTENT_PATH" -name "*stig*ds.xml" | head -1)
+            PROFILE="$RHEL_STIG_PROFILE"  # Default profile
+            ;;
+    esac
+    
+    if [[ -z "$STIG_FILE" ]]; then
+        error "Could not find STIG content file in $CONTENT_PATH"
+        log "Available files:"
+        ls -la "$CONTENT_PATH" | tee -a "$LOG_FILE"
+        exit 1
+    fi
+    
+    log "Using STIG content file: $STIG_FILE"
+    log "Using profile: $PROFILE"
+}
+
+# List available profiles (for debugging)
+list_profiles() {
+    log "Available profiles in STIG content:"
+    oscap info "$STIG_FILE" | grep "Profile:" | tee -a "$LOG_FILE"
+}
+
+# Run STIG scan
+run_stig_scan() {
+    log "Starting STIG compliance scan..."
+    log "This may take several minutes..."
+    
+    # Run the scan
+    if oscap xccdf eval \
+        --profile "$PROFILE" \
+        --results "$SCAN_REPORT" \
+        --report "$HTML_REPORT" \
+        "$STIG_FILE" 2>&1 | tee -a "$LOG_FILE"; then
+        success "STIG scan completed successfully"
+    else
+        # OpenSCAP returns non-zero exit code even on successful scans with findings
+        warning "STIG scan completed with findings (this is normal)"
+    fi
+    
+    if [[ ! -f "$SCAN_REPORT" ]]; then
+        error "Scan results file was not created"
+        exit 1
+    fi
+}
+
+# Parse compliance percentage from results
+parse_compliance_percentage() {
+    log "Parsing compliance results..."
+    
+    if [[ ! -f "$SCAN_REPORT" ]]; then
+        error "Results file not found: $SCAN_REPORT"
+        exit 1
+    fi
+    
+    # Extract test results using xmllint or oscap
+    if command -v xmllint &> /dev/null; then
+        local total_rules=$(xmllint --xpath "count(//rule-result)" "$SCAN_REPORT" 2>/dev/null || echo "0")
+        local passed_rules=$(xmllint --xpath "count(//rule-result[result='pass'])" "$SCAN_REPORT" 2>/dev/null || echo "0")
+    else
+        # Fallback method using grep and wc
+        local total_rules=$(grep -c "<rule-result" "$SCAN_REPORT" || echo "0")
+        local passed_rules=$(grep -c "<result>pass</result>" "$SCAN_REPORT" || echo "0")
+    fi
+    
+    if [[ "$total_rules" -eq 0 ]]; then
+        error "No test results found in scan report"
+        return 1
+    fi
+    
+    # Calculate compliance percentage
+    local compliance_percentage=$(awk "BEGIN {printf \"%.0f\", ($passed_rules / $total_rules) * 100}")
+    
+    log "Scan Results Summary:"
+    log "  Total Rules Evaluated: $total_rules"
+    log "  Rules Passed: $passed_rules"
+    log "  Rules Failed: $((total_rules - passed_rules))"
+    log "  Compliance Percentage: ${compliance_percentage}%"
+    
+    # Output the percentage in the requested format
+    echo "${compliance_percentage}%"
+    
+    # Create a summary file
+    cat > "${SCAN_RESULTS_DIR}/compliance_summary_${TIMESTAMP}.txt" << EOF
+STIG Compliance Scan Summary
+============================
+Scan Date: $(date)
+OS: $OS $OS_VERSION
+Profile: $PROFILE
+Content File: $STIG_FILE
+
+Results:
+  Total Rules: $total_rules
+  Passed: $passed_rules
+  Failed: $((total_rules - passed_rules))
+  Compliance: ${compliance_percentage}%
+
+Reports:
+  XML Report: $SCAN_REPORT
+  HTML Report: $HTML_REPORT
+  Log File: $LOG_FILE
+EOF
+    
+    success "Compliance percentage: ${compliance_percentage}%"
+    log "Summary saved to: ${SCAN_RESULTS_DIR}/compliance_summary_${TIMESTAMP}.txt"
+    log "HTML report available at: $HTML_REPORT"
+}
+
+# Main execution
+main() {
+    log "Starting OpenSCAP STIG Scanner"
+    log "==============================="
+    
+    detect_os
+    
+    # Check if OpenSCAP is already installed
+    if ! command -v oscap &> /dev/null; then
+        install_openscap
+    else
+        log "OpenSCAP is already installed"
+    fi
+    
+    find_stig_content
+    list_profiles
+    run_stig_scan
+    parse_compliance_percentage
+    
+    success "STIG scan process completed successfully"
+    log "All results saved in: $SCAN_RESULTS_DIR"
+}
+
+# Cleanup function
+cleanup() {
+    if [[ $? -ne 0 ]]; then
+        error "Script failed. Check log file: $LOG_FILE"
+    fi
+}
+
+# Set trap for cleanup
+trap cleanup EXIT
+
+# Run main function
+main "$@"
