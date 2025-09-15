@@ -1,0 +1,37 @@
+This is not a GitHub Enterprise server issue and does not require an incident ticket.
+This is expected behavior when connecting to our self-hosted GitHub Enterprise server, which uses self-signed certificates for internal security. This is a standard configuration in enterprise environments and requires client-side certificate trust configuration - this is a user configuration issue, not a system outage or defect.
+Root Cause:
+Our GitHub Enterprise server uses self-signed certificates (standard practice for internal systems). Git clients must be configured to trust these certificates.
+Resolution Steps:
+
+Extract the server certificate:
+
+bashopenssl s_client -connect your-github-enterprise.com:443 -showcerts
+
+Copy the certificate block (including the BEGIN/END lines):
+
+-----BEGIN CERTIFICATE-----
+MIIDXTCCAkWgAwIBAgIJAKoK/OvvumdHMA0GCSqGSIb3DQEBCwUAMEUxCzAJBgNV...
+-----END CERTIFICATE-----
+
+Add certificate to Git's trusted bundle:
+
+bash# Navigate to Git's certificate directory
+cd "C:\Users\%USERNAME%\AppData\Local\Programs\Git\usr\ssl\certs"
+
+# Edit the certificate bundle
+notepad ca-bundle.crt
+Append your certificate at the bottom:
+# GitHub Enterprise Certificate
+-----BEGIN CERTIFICATE-----
+[paste certificate here]
+-----END CERTIFICATE-----
+
+Configure Git to use the certificate bundle:
+
+bashgit config --global http.sslbackend openssl
+git config --global http.sslcainfo "C:\Users\%USERNAME%\AppData\Local\Programs\Git\usr\ssl\certs\ca-bundle.crt"
+Alternative (simpler) approach:
+bashgit config --global http.sslbackend schannel
+This uses Windows' certificate store, which may already trust our internal certificates.
+Future tickets of this nature should be classified as user support/configuration requests, not incidents.
