@@ -1,8 +1,9 @@
-Decision ID #,Date,Decision,Decision Maker(s),State,Notes
-D001,2025-01-14,Proceed with phased migration approach vs big-bang,,Open,Risk vs complexity tradeoff
-D002,2025-01-14,Select outbound connectivity solution (NAT Gateway vs Azure Firewall vs External LB),,Open,Cost and complexity considerations
-D003,2025-01-14,Determine if NSGs should be created proactively or during migration,,Open,Security vs migration complexity
-D004,2025-01-14,Decide on DNS update strategy (immediate vs staged),,Open,Consider TTL and propagation time
-D005,2025-01-14,Choose pilot migration candidates,,Open,Balance risk and learning opportunity
-D006,2025-01-14,Approve extended maintenance window for Service Fabric clusters,,Open,Business impact assessment needed
-D007,2025-01-14,Determine recovery point objective (RPO) for migration failures,,Open,Influences backup strategy
+Policy ID #,Date,Policy,Owner(s),Status,Notes
+P001,2025-01-14,All Basic SKU resources must be migrated before September 30 2025,,Needs documenting,Microsoft retirement deadline
+P002,2025-01-14,Network Security Groups required for all Standard SKU public IPs,,Needs documenting,Security by default model
+P003,2025-01-14,Migration validation must be performed in non-production first,,Needs documenting,Risk mitigation requirement
+P004,2025-01-14,Recovery backup files must be retained for 30 days post-migration,,Needs documenting,Disaster recovery requirement
+P005,2025-01-14,All migrations must follow approved maintenance windows,,Needs documenting,Business continuity requirement
+P006,2025-01-14,DNS records must be updated within 15 minutes of IP changes,,Needs documenting,Minimize service disruption
+P007,2025-01-14,Multi-LB dependencies must be migrated simultaneously,,Needs documenting,Technical requirement - no mixed SKUs
+P008,2025-01-14,Outbound connectivity must be validated post-migration,,Needs documenting,Prevent unexpected outages
