@@ -1,13 +1,6 @@
-Action ID #,Date Open,Action Item,Owner(s),Target Due Date,State,Notes
-A001,2025-01-14,Run Azure Resource Graph queries to identify all Basic SKU resources,,2025-01-21,Open,Use provided KQL queries
-A002,2025-01-14,Install PowerShell modules (AzureVMPublicIPUpgrade v1.0.2 and AzureBasicLoadBalancerUpgrade v2.5.40),,2025-01-21,Open,Requires latest Az modules
-A003,2025-01-14,Document all current Public IP addresses and DNS mappings,,2025-01-28,Open,Critical for post-migration validation
-A004,2025-01-14,Create NSG rules matrix for all applications,,2025-02-04,Open,Required for Standard SKU security model
-A005,2025-01-14,Test migration scripts with -WhatIf parameter in sandbox,,2025-02-11,Open,No changes made in WhatIf mode
-A006,2025-01-14,Create communication plan for stakeholders,,2025-02-04,Open,Include maintenance windows and impact
-A007,2025-01-14,Remove all resource locks from LBs and related resources,,2025-02-18,Open,Required before migration can proceed
-A008,2025-01-14,Configure backup storage paths for recovery files,,2025-02-11,Open,Ensure adequate disk space
-A009,2025-01-14,Design outbound connectivity solution for internal LBs,,2025-02-25,Open,NAT Gateway recommended approach
-A010,2025-01-14,Execute pilot migration on non-critical resources,,2025-03-04,Open,Validate procedures and timing
-A011,2025-01-14,Create runbooks for migration and recovery procedures,,2025-02-18,Open,Include failure scenarios
-A012,2025-01-14,Schedule maintenance windows with business,,2025-02-25,Open,Consider global operations
+Issue ID #,Date,Issue Description,Owners,Target due date,Status,Notes
+I001,2025-01-14,Service Fabric Clusters require extended downtime (~1 hour vs 2-5 minutes),,2025-02-28,Open,Need separate migration strategy
+I002,2025-01-14,Floating IP on secondary NIC configurations must be reconfigured to primary,,2025-02-15,Open,Pre-migration requirement
+I003,2025-01-14,App Gateway v1 Basic IPs unaffected until v1 retirement,,2025-09-30,Open,Track separately from main migration
+I004,2025-01-14,VMSS instance protection policies block migration,,2025-02-15,Open,Must disable protection before migration
+I005,2025-01-14,No rollback path from Standard to Basic SKU,,2025-01-21,Open,One-way migration - ensure thorough testing
