@@ -1,6 +1,8 @@
-Issue ID #,Date,Issue Description,Owners,Target due date,Status,Notes
-I001,2025-01-14,Service Fabric Clusters require extended downtime (~1 hour vs 2-5 minutes),,2025-02-28,Open,Need separate migration strategy
-I002,2025-01-14,Floating IP on secondary NIC configurations must be reconfigured to primary,,2025-02-15,Open,Pre-migration requirement
-I003,2025-01-14,App Gateway v1 Basic IPs unaffected until v1 retirement,,2025-09-30,Open,Track separately from main migration
-I004,2025-01-14,VMSS instance protection policies block migration,,2025-02-15,Open,Must disable protection before migration
-I005,2025-01-14,No rollback path from Standard to Basic SKU,,2025-01-21,Open,One-way migration - ensure thorough testing
+Decision ID #,Date,Decision,Decision Maker(s),State,Notes
+D001,2025-01-14,Proceed with phased migration approach vs big-bang,,Open,Risk vs complexity tradeoff
+D002,2025-01-14,Select outbound connectivity solution (NAT Gateway vs Azure Firewall vs External LB),,Open,Cost and complexity considerations
+D003,2025-01-14,Determine if NSGs should be created proactively or during migration,,Open,Security vs migration complexity
+D004,2025-01-14,Decide on DNS update strategy (immediate vs staged),,Open,Consider TTL and propagation time
+D005,2025-01-14,Choose pilot migration candidates,,Open,Balance risk and learning opportunity
+D006,2025-01-14,Approve extended maintenance window for Service Fabric clusters,,Open,Business impact assessment needed
+D007,2025-01-14,Determine recovery point objective (RPO) for migration failures,,Open,Influences backup strategy
