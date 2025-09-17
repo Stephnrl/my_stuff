@@ -1,0 +1,78 @@
+Technical Knowledge & Tools
+Security Fundamentals:
+
+"Walk me through the OWASP Top 10 - which vulnerabilities do you encounter most frequently?"
+"How would you explain the difference between authentication and authorization to a junior developer?"
+"Describe a time you identified and helped remediate a critical security vulnerability"
+
+SAST/DAST/SCA Tools:
+
+"What's your experience with SAST vs DAST tools? When would you use each?"
+"Have you implemented security scanning in CI/CD pipelines? Which tools did you use?"
+"How do you handle false positives in automated security scans?"
+"What's your approach to dependency scanning and managing vulnerable packages?"
+
+GitHub Actions & Azure Specific:
+
+"How would you secure GitHub Actions workflows and prevent secret exposure?"
+"What security considerations are important for self-hosted runners?"
+"Describe how you'd implement security gates in a GitHub Actions pipeline"
+"What Azure security services have you worked with? (Key Vault, Defender, Security Center, etc.)"
+
+Practical Scenarios
+Shift-Left Security:
+
+"How would you integrate security into our SDLC without slowing down development?"
+"Describe your approach to threat modeling for a new feature or application"
+"How do you prioritize security findings when you have limited remediation resources?"
+
+Incident Response:
+
+"Walk me through how you'd respond to a suspected container escape in our runner environment"
+"A developer accidentally committed AWS keys to a public repo - what are your immediate steps?"
+
+Soft Skills & Culture Fit
+Developer Collaboration:
+
+"Tell me about a time you had to convince a resistant developer team to adopt security practices"
+"How do you balance security requirements with delivery deadlines?"
+"Describe a security training or awareness program you've implemented"
+
+Teaching & Mentoring:
+
+"Give an example of when you taught a developer about secure coding (like input validation, SQL injection prevention, or API security)"
+"How would you help a team that keeps introducing the same security antipatterns?"
+
+Red Team/Blue Team Experience
+Offensive Security (if relevant):
+
+"What's your experience with penetration testing or CTF competitions like Hack The Box?"
+"How does offensive security experience help you in a defensive role?"
+Rather than just "have you done Hack The Box," ask: "What's the most interesting vulnerability you've exploited in a CTF or lab environment?"
+
+Architecture & Design
+Security Architecture:
+
+"How would you design security for a multi-tenant SaaS application?"
+"Explain the concept of Zero Trust and how you'd implement it"
+"What security controls would you implement for our GitHub runners handling customer code?"
+
+Compliance & Governance
+
+"What experience do you have with compliance frameworks (SOC2, ISO 27001, etc.)?"
+"How do you document and track security controls?"
+"Describe your approach to security policy creation and enforcement"
+
+Red Flags to Watch For:
+
+Can't explain basic concepts in simple terms
+Only knows tool names but not how they work
+No experience collaborating with developers
+Overly focused on stopping everything vs. managing risk
+Can't give specific examples from past experience
+
+Good Follow-ups:
+
+"What would you do differently if you could do that project again?"
+"What was the business impact of that security improvement?"
+"How did you measure success?"
