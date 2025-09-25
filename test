@@ -1,49 +1,14 @@
-# {{ ansible_managed }}
-# Internal repositories configuration for {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}
+---
+# Default values for configure role
+# These can be overridden in playbooks or inventory
 
-{% for repo in internal_repos %}
-[{{ repo.name }}]
-name={{ repo.description }}
-baseurl={{ repo.baseurl }}
-enabled={{ '1' if repo.enabled else '0' }}
-gpgcheck={{ '1' if repo.gpgcheck else '0' }}
-{% if repo.priority is defined %}
-priority={{ repo.priority }}
-{% endif %}
-{% if jfrog_username and jfrog_password %}
-username={{ jfrog_username }}
-password={{ jfrog_password }}
-{% endif %}
-{% if repo.sslverify is defined %}
-sslverify={{ '1' if repo.sslverify else '0' }}
-{% endif %}
-metadata_expire=300
+# JFrog defaults (override with vault or group_vars)
+jfrog_base_url: "https://artifactory.example.com/artifactory"
 
-{% endfor %}
+# Feature toggles
+disable_rhui_repos: true
+enable_microsoft_repo: true
 
-
-
-
-# {{ ansible_managed }}
-# Microsoft repositories configuration for {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}
-
-{% for repo in microsoft_repos %}
-[{{ repo.name }}]
-name={{ repo.description }}
-baseurl={{ repo.baseurl }}
-enabled={{ '1' if repo.enabled else '0' }}
-gpgcheck={{ '1' if repo.gpgcheck else '0' }}
-{% if repo.priority is defined %}
-priority={{ repo.priority }}
-{% endif %}
-{% if jfrog_username and jfrog_password %}
-username={{ jfrog_username }}
-password={{ jfrog_password }}
-{% endif %}
-{% if repo.sslverify is defined %}
-sslverify={{ '1' if repo.sslverify else '0' }}
-{% endif %}
-skip_if_unavailable=1
-metadata_expire=300
-
-{% endfor %}
+# Repository settings
+repo_metadata_expire: 300
+repo_skip_if_unavailable: true
