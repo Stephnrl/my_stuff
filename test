@@ -1,0 +1,92 @@
+---
+# Dynamic variable loading based on OS facts
+- name: Load OS-specific variables
+  include_vars: "{{ item }}"
+  with_first_found:
+    - files:
+        # Try most specific first (distribution-version)
+        - "{{ ansible_facts['distribution'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+        # Then try just distribution
+        - "{{ ansible_facts['distribution'] }}.yml"
+        # Fallback to OS family
+        - "{{ ansible_facts['os_family'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
+        - "{{ ansible_facts['os_family'] }}.yml"
+      paths:
+        - "{{ role_path }}/vars"
+      skip: false
+  tags:
+    - always
+
+- name: Display loaded OS configuration
+  debug:
+    msg: "Configuring {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}"
+  tags:
+    - always
+
+# Repository Configuration
+- name: Ensure /etc/yum.repos.d directory exists
+  file:
+    path: /etc/yum.repos.d
+    state: directory
+    mode: '0755'
+  when: ansible_facts['os_family'] == 'RedHat'
+  tags:
+    - repos
+
+- name: Configure internal repository
+  template:
+    src: internal.repo.j2
+    dest: /etc/yum.repos.d/internal.repo
+    mode: '0644'
+    owner: root
+    group: root
+  when: ansible_facts['os_family'] == 'RedHat'
+  tags:
+    - repos
+
+- name: Configure Microsoft repository
+  template:
+    src: microsoft.repo.j2
+    dest: /etc/yum.repos.d/microsoft.repo
+    mode: '0644'
+    owner: root
+    group: root
+  when: 
+    - ansible_facts['os_family'] == 'RedHat'
+    - enable_microsoft_repo | default(true)
+  tags:
+    - repos
+
+- name: Disable RHUI repositories
+  command: dnf config-manager --disable '*rhui*'
+  args:
+    warn: false
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_facts['distribution_major_version'] | int >= 8
+    - disable_rhui_repos | default(true)
+  changed_when: true
+  tags:
+    - repos
+
+# Clean DNF cache after repo changes
+- name: Clean DNF cache
+  command: dnf clean all
+  args:
+    warn: false
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_facts['distribution_major_version'] | int >= 8
+  changed_when: true
+  tags:
+    - repos
+
+# Update package cache
+- name: Update DNF cache
+  dnf:
+    update_cache: true
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_facts['distribution_major_version'] | int >= 8
+  tags:
+    - repos
