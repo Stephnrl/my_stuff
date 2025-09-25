@@ -1,92 +1,43 @@
 ---
-# Dynamic variable loading based on OS facts
-- name: Load OS-specific variables
-  include_vars: "{{ item }}"
-  with_first_found:
-    - files:
-        # Try most specific first (distribution-version)
-        - "{{ ansible_facts['distribution'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
-        # Then try just distribution
-        - "{{ ansible_facts['distribution'] }}.yml"
-        # Fallback to OS family
-        - "{{ ansible_facts['os_family'] }}-{{ ansible_facts['distribution_major_version'] }}.yml"
-        - "{{ ansible_facts['os_family'] }}.yml"
-      paths:
-        - "{{ role_path }}/vars"
-      skip: false
-  tags:
-    - always
+# Variables specific to RHEL 9
+os_config_name: "Red Hat Enterprise Linux 9"
 
-- name: Display loaded OS configuration
-  debug:
-    msg: "Configuring {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_major_version'] }}"
-  tags:
-    - always
+# JFrog Artifactory settings
+jfrog_base_url: "https://artifactory.example.com/artifactory"
+jfrog_username: "{{ vault_jfrog_username | default('reader') }}"
+jfrog_password: "{{ vault_jfrog_password | default('') }}"
 
-# Repository Configuration
-- name: Ensure /etc/yum.repos.d directory exists
-  file:
-    path: /etc/yum.repos.d
-    state: directory
-    mode: '0755'
-  when: ansible_facts['os_family'] == 'RedHat'
-  tags:
-    - repos
+# Repository configurations
+internal_repos:
+  - name: "rhel9-base"
+    description: "RHEL 9 Base Repository"
+    baseurl: "{{ jfrog_base_url }}/rhel9-base"
+    enabled: true
+    gpgcheck: false
+    priority: 10
+  
+  - name: "rhel9-appstream"
+    description: "RHEL 9 AppStream Repository"
+    baseurl: "{{ jfrog_base_url }}/rhel9-appstream"
+    enabled: true
+    gpgcheck: false
+    priority: 10
+  
+  - name: "rhel9-extras"
+    description: "RHEL 9 Extras Repository"
+    baseurl: "{{ jfrog_base_url }}/rhel9-extras"
+    enabled: true
+    gpgcheck: false
+    priority: 20
 
-- name: Configure internal repository
-  template:
-    src: internal.repo.j2
-    dest: /etc/yum.repos.d/internal.repo
-    mode: '0644'
-    owner: root
-    group: root
-  when: ansible_facts['os_family'] == 'RedHat'
-  tags:
-    - repos
+microsoft_repos:
+  - name: "microsoft-rhel9-prod"
+    description: "Microsoft packages for RHEL 9"
+    baseurl: "{{ jfrog_base_url }}/microsoft-rhel9-prod"
+    enabled: true
+    gpgcheck: false
+    priority: 30
 
-- name: Configure Microsoft repository
-  template:
-    src: microsoft.repo.j2
-    dest: /etc/yum.repos.d/microsoft.repo
-    mode: '0644'
-    owner: root
-    group: root
-  when: 
-    - ansible_facts['os_family'] == 'RedHat'
-    - enable_microsoft_repo | default(true)
-  tags:
-    - repos
-
-- name: Disable RHUI repositories
-  command: dnf config-manager --disable '*rhui*'
-  args:
-    warn: false
-  when:
-    - ansible_facts['os_family'] == 'RedHat'
-    - ansible_facts['distribution_major_version'] | int >= 8
-    - disable_rhui_repos | default(true)
-  changed_when: true
-  tags:
-    - repos
-
-# Clean DNF cache after repo changes
-- name: Clean DNF cache
-  command: dnf clean all
-  args:
-    warn: false
-  when:
-    - ansible_facts['os_family'] == 'RedHat'
-    - ansible_facts['distribution_major_version'] | int >= 8
-  changed_when: true
-  tags:
-    - repos
-
-# Update package cache
-- name: Update DNF cache
-  dnf:
-    update_cache: true
-  when:
-    - ansible_facts['os_family'] == 'RedHat'
-    - ansible_facts['distribution_major_version'] | int >= 8
-  tags:
-    - repos
+# Feature flags
+disable_rhui_repos: true
+enable_microsoft_repo: true
