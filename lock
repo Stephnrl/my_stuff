@@ -1,0 +1,75 @@
+# tasks/lock-version.yml
+---
+- name: Complete RHEL 9.4 version lock
+  block:
+    - name: Get current version
+      command: cat /etc/redhat-release
+      register: current_version
+      changed_when: false
+
+    - name: Display current version
+      debug:
+        msg: "Current version: {{ current_version.stdout }}"
+
+    - name: Create releasever lock file
+      copy:
+        content: "9.4"
+        dest: /etc/dnf/vars/releasever
+        mode: '0644'
+        backup: yes
+
+    - name: Update DNF configuration for version lock
+      ini_file:
+        path: /etc/dnf/dnf.conf
+        section: main
+        option: "{{ item.key }}"
+        value: "{{ item.value }}"
+      loop:
+        - { key: 'releasever', value: '9.4' }
+        - { key: 'obsoletes', value: '0' }  # Prevent auto-obsoletes
+        - { key: 'best', value: '0' }  # Don't force newest
+      tags:
+        - version-lock
+
+    - name: Configure yum variables
+      copy:
+        content: "9.4"
+        dest: "/etc/yum/vars/{{ item }}"
+        mode: '0644'
+      loop:
+        - releasever
+        - releasever_major
+      tags:
+        - version-lock
+
+    - name: Modify repository configurations
+      replace:
+        path: "{{ item }}"
+        regexp: '\$releasever'
+        replace: '9.4'
+        backup: yes
+      with_fileglob:
+        - /etc/yum.repos.d/*.repo
+      tags:
+        - version-lock
+
+    - name: Clean cache after version lock
+      command: dnf clean all
+      changed_when: true
+      tags:
+        - version-lock
+
+    - name: Verify version lock
+      shell: |
+        echo "=== DNF Config ==="
+        dnf config-manager --dump | grep -E "releasever|9.4"
+        echo -e "\n=== Available Updates ==="
+        dnf check-update | grep -E "rhel|redhat" | head -5
+        echo -e "\n=== Would update to ==="
+        dnf update --assumeno 2>&1 | grep -E "rhel-9|Going to|Total download"
+      register: verify_lock
+      changed_when: false
+      failed_when: "'9.6' in verify_lock.stdout"
+      tags:
+        - version-lock
+        - verify
