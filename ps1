@@ -1,93 +1,62 @@
-[CmdletBinding()]
-param (
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$Environment,
-    
-    [Parameter(Mandatory = $true)]
-    [ValidateNotNullOrEmpty()]
-    [string]$AdminSecurityId,
-    
-    [Parameter(Mandatory = $false)]
-    [string]$AdminSecurityDomain = 'snc'
-)
+name: Test Key Vault Script
 
-# Load utility scripts
-function Initialize-Scripts {
-    $scriptPath = $PSScriptRoot
-    
-    Write-Host "Loading utility scripts from: $scriptPath"
-    
-    # Dot source the Utility.ps1 file
-    . "$scriptPath/Utility.ps1"
-    
-    Write-Host "Utility scripts loaded successfully"
-}
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to test (prod, dev, test, uat)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - development
+          - test
+          - uat
+          - prod
+          - production
+      admin-security-id:
+        description: 'Admin Security ID to retrieve'
+        required: true
+        type: string
+      admin-security-domain:
+        description: 'Admin Security Domain'
+        required: false
+        type: string
+        default: 'snc'
 
-# Main execution function
-function Invoke-Main {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory = $true)]
-        [string]$Environment,
-        
-        [Parameter(Mandatory = $true)]
-        [string]$AdminSecurityId,
-        
-        [Parameter(Mandatory = $false)]
-        [string]$AdminSecurityDomain = 'snc'
-    )
+jobs:
+  test-script:
+    runs-on: ubuntu-latest
     
-    try {
-        Write-Host "=========================================="
-        Write-Host "Starting deployment script"
-        Write-Host "Environment: $Environment"
-        Write-Host "=========================================="
-        
-        # Get admin credentials
-        Write-Host "`nRetrieving admin credentials..."
-        $adminCreds = Get-KeyVaultSecurityCredentials `
-            -Environment $Environment `
-            -SecurityId $AdminSecurityId `
-            -Domain $AdminSecurityDomain
-        
-        # Use the credentials
-        $adminUserName = $adminCreds.FullUserName
-        $adminPassword = $adminCreds.Password
-        
-        Write-Host "Admin Username: $adminUserName"
-        
-        # Create PSCredential object
-        $securePassword = ConvertTo-SecureString $adminPassword -AsPlainText -Force
-        $credential = New-Object System.Management.Automation.PSCredential($adminUserName, $securePassword)
-        
-        Write-Host "`nCredentials prepared successfully"
-        
-        Write-Host "`n=========================================="
-        Write-Host "Deployment completed successfully"
-        Write-Host "=========================================="
-        
-        return $true
-    }
-    catch {
-        Write-Error "Deployment failed: $_"
-        Write-Host "Stack Trace: $($_.ScriptStackTrace)"
-        throw
-    }
-}
-
-# Script entry point
-try {
-    # Load all utility scripts
-    Initialize-Scripts
-    
-    # Execute main function
-    Invoke-Main `
-        -Environment $Environment `
-        -AdminSecurityId $AdminSecurityId `
-        -AdminSecurityDomain $AdminSecurityDomain
-}
-catch {
-    Write-Error "Script execution failed: $_"
-    exit 1
-}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Display Parameters
+        run: |
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Security ID: ${{ inputs.admin-security-id }}"
+          echo "Domain: ${{ inputs.admin-security-domain }}"
+      
+      - name: Test Key Vault Script
+        shell: pwsh
+        env:
+          ENV_NAME: ${{ inputs.environment }}
+          SECURITY_ID: ${{ inputs.admin-security-id }}
+          SECURITY_DOMAIN: ${{ inputs.admin-security-domain }}
+        run: |
+          Write-Host "Testing Key Vault credential retrieval..."
+          Write-Host "Environment: $env:ENV_NAME"
+          Write-Host "Security ID: $env:SECURITY_ID"
+          Write-Host "Domain: $env:SECURITY_DOMAIN"
+          
+          # Run the main script with proper parameter passing
+          & "${{ github.workspace }}/scripts/Main.ps1" `
+            -Environment "$env:ENV_NAME" `
+            -AdminSecurityId "$env:SECURITY_ID" `
+            -AdminSecurityDomain "$env:SECURITY_DOMAIN"
