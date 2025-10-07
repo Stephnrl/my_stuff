@@ -1,0 +1,66 @@
+HIGH PRIORITY - Your Direct Responsibility
+1. Configuration Management (CM) - Most Critical for DevSecOps
+
+CM.L2-3.4.1: Baseline configurations for AKS clusters, runner images, and GitHub Actions
+CM.L2-3.4.3: Change management for pipelines, IaC code, and infrastructure changes
+CM.L2-3.4.4: Security impact analysis before deploying changes (IaC review process)
+CM.L2-3.4.5: Access restrictions (branch protection, PR approvals, required reviewers)
+CM.L2-3.4.6/7: Least functionality in runner images (minimal base images, only required tools)
+CM.L2-3.4.8: Application execution policies (container security policies, admission controllers in AKS)
+CM.L2-3.4.9: Control over software installed in pipelines/runners
+
+2. System & Information Integrity (SI) - Critical for Pipelines
+
+SI.L2-3.14.1: Patching AKS nodes, runner OS, GitHub Enterprise servers, container images
+SI.L2-3.14.2: Container image scanning, dependency scanning in pipelines
+SI.L2-3.14.3: Monitoring security advisories (GitHub, Azure, Kubernetes CVEs)
+SI.L2-3.14.4/5: Automated vulnerability scanning in CI/CD (Trivy, Defender for Containers, etc)
+SI.L2-3.14.6/7: Monitoring pipeline activity for anomalous behavior
+
+3. Audit & Accountability (AU) - Essential for Compliance
+
+AU.L2-3.3.1: Logging in AKS (Azure Monitor, container logs), GitHub audit logs
+AU.L2-3.3.2: Traceability of service account actions in pipelines
+AU.L2-3.3.3: Reviewing deployment logs, failed pipeline runs
+AU.L2-3.3.8: Protecting audit logs (immutable storage, Log Analytics Workspace retention)
+AU.L2-3.3.4: Alerts for audit failures or suspicious activities
+
+4. System & Communications Protection (SC)
+
+SC.L2-3.13.1: Network policies in AKS, NSGs for runner subnets
+SC.L2-3.13.6: Deny-by-default firewall rules, network segmentation
+SC.L2-3.13.8: TLS for all communications (GitHub to Azure, within AKS)
+SC.L2-3.13.10: Key management (Azure Key Vault for secrets, certificates)
+SC.L2-3.13.11/16: Encryption at rest (Azure storage, etcd in AKS) and in transit
+SC.L2-3.13.2: Security engineering in pipeline design
+
+MEDIUM PRIORITY - Shared or Partially Applicable
+5. Access Control (AC) - Shared with IAM Team
+
+AC.L2-3.1.3: Control CUI flow through pipelines (where does CUI go?)
+AC.L2-3.1.5: Least privilege for service principals, managed identities, runner permissions
+AC.L2-3.1.7: Privileged access to AKS, GitHub Enterprise servers
+AC.L2-3.1.20: External connections between GitHub SaaS and Azure Gov
+AC.L2-3.1.22: artifacts (ensure no CUI exposure)
+
+6. Risk Assessment (RA)
+
+RA.L2-3.11.2: Vulnerability scanning (containers, IaC, dependencies)
+RA.L2-3.11.3: Remediation tracking and timelines
+
+7. Incident Response (IR)
+
+IR.L2-3.6.1/2: Procedures for responding to pipeline compromises, leaked secrets
+IR.L2-3.6.3: Testing incident response (tabletop exercises)
+
+8. Maintenance (MA)
+
+MA.L2-3.7.1/2: Maintenance windows for AKS, runner updates
+MA.L2-3.7.5: Remote maintenance of cloud infrastructure
+
+LOW PRIORITY - Not Your Responsibility
+
+PE (Physical Protection): Azure's responsibility via FedRAMP
+PS (Personnel Security): HR/Security team
+Most IA controls: Handled by IAM team (passwords, MFA policies in Entra)
+AT (Training): Participate but security team owns
