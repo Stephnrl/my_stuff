@@ -1,266 +1,233 @@
-# terraform-module-aws-eks-landing-zone/modules/k8s-rbac/variables.tf
+# terraform-module-aws-eks-landing-zone/modules/k8s-rbac/outputs.tf
 
-# Required Variables
-variable "namespace" {
-  description = "Kubernetes namespace to create RBAC resources in"
-  type        = string
-  
-  validation {
-    condition     = can(regex("^[a-z0-9-]+$", var.namespace))
-    error_message = "Namespace must be lowercase alphanumeric with hyphens only."
+# Primary Role Information
+output "role_name" {
+  description = "Name of the created Role"
+  value       = kubernetes_role_v1.team_role.metadata[0].name
+}
+
+output "role_uid" {
+  description = "UID of the created Role"
+  value       = kubernetes_role_v1.team_role.metadata[0].uid
+}
+
+output "role_binding_name" {
+  description = "Name of the created RoleBinding"
+  value       = kubernetes_role_binding_v1.team_role_binding.metadata[0].name
+}
+
+output "role_binding_uid" {
+  description = "UID of the created RoleBinding"
+  value       = kubernetes_role_binding_v1.team_role_binding.metadata[0].uid
+}
+
+# Team and Permission Information
+output "team_name" {
+  description = "Team name associated with this RBAC configuration"
+  value       = var.team_name
+}
+
+output "kubernetes_group" {
+  description = "Kubernetes group bound to the role"
+  value       = var.kubernetes_group
+}
+
+output "permission_level" {
+  description = "Permission level granted to the team"
+  value       = var.permission_level
+}
+
+output "namespace" {
+  description = "Namespace where RBAC resources are created"
+  value       = var.namespace
+}
+
+output "environment" {
+  description = "Environment for this RBAC configuration"
+  value       = var.environment
+}
+
+# Role Rules Information
+output "role_rules" {
+  description = "RBAC rules applied to the role"
+  value = [
+    for rule in kubernetes_role_v1.team_role.rule : {
+      api_groups     = rule.api_groups
+      resources      = rule.resources
+      resource_names = rule.resource_names
+      verbs          = rule.verbs
+    }
+  ]
+}
+
+output "role_rules_summary" {
+  description = "Summary of permissions granted"
+  value = {
+    permission_level = var.permission_level
+    can_create      = contains(flatten([for rule in kubernetes_role_v1.team_role.rule : rule.verbs]), "create")
+    can_update      = contains(flatten([for rule in kubernetes_role_v1.team_role.rule : rule.verbs]), "update")
+    can_delete      = contains(flatten([for rule in kubernetes_role_v1.team_role.rule : rule.verbs]), "delete")
+    can_read        = contains(flatten([for rule in kubernetes_role_v1.team_role.rule : rule.verbs]), "get")
+    can_list        = contains(flatten([for rule in kubernetes_role_v1.team_role.rule : rule.verbs]), "list")
   }
 }
 
-variable "team_name" {
-  description = "Name of the team (used for naming RBAC resources)"
-  type        = string
-}
-
-variable "kubernetes_group" {
-  description = "Kubernetes group name that maps to EKS Access Entry"
-  type        = string
-  
-  validation {
-    condition     = length(var.kubernetes_group) > 0
-    error_message = "Kubernetes group name must not be empty."
+# Subjects Information
+output "primary_subject" {
+  description = "Primary subject (group) bound to the role"
+  value = {
+    kind = "Group"
+    name = var.kubernetes_group
   }
 }
 
-# Permission Level Configuration
-variable "permission_level" {
-  description = "Permission level to grant (standard, readonly, or custom)"
-  type        = string
-  default     = "standard"
-  
-  validation {
-    condition     = contains(["standard", "readonly", "normal", "reader", "admin", "developer", "deployer", "custom"], var.permission_level)
-    error_message = "Permission level must be one of: standard (recommended), readonly, custom. Legacy values (normal, reader, admin, developer, deployer) also supported for backward compatibility."
-  }
-}
-
-variable "environment" {
-  description = "Environment name (dev, staging, prod)"
-  type        = string
-  default     = "dev"
-  
-  validation {
-    condition     = contains(["dev", "development", "staging", "stage", "prod", "production", "test", "qa"], var.environment)
-    error_message = "Environment must be one of: dev, development, staging, stage, prod, production, test, qa."
-  }
-}
-
-# Custom Rules (for permission_level = "custom")
-variable "custom_rules" {
-  description = "Custom RBAC rules when permission_level is 'custom'"
-  type = list(object({
-    api_groups     = list(string)
-    resources      = list(string)
-    resource_names = optional(list(string))
-    verbs          = list(string)
-  }))
-  default = null
-}
-
-variable "custom_description" {
-  description = "Description for custom role"
-  type        = string
-  default     = "Custom RBAC role"
-}
-
-# Additional Configuration
-variable "labels" {
-  description = "Additional labels to apply to RBAC resources"
-  type        = map(string)
-  default     = {}
-}
-
-variable "annotations" {
-  description = "Additional annotations to apply to RBAC resources"
-  type        = map(string)
-  default     = {}
-}
-
-# Environment Restrictions
-variable "apply_environment_restrictions" {
-  description = "Apply environment-specific restrictions (e.g., remove delete verbs in prod)"
-  type        = bool
-  default     = true
-}
-
-# Additional Subjects
-variable "additional_subjects" {
-  description = "Additional subjects to bind to the role (users or service accounts)"
-  type = list(object({
-    kind = string # "User", "Group", or "ServiceAccount"
-    name = string
-  }))
-  default = []
-  
-  validation {
-    condition = alltrue([
-      for subject in var.additional_subjects : 
-      contains(["User", "Group", "ServiceAccount"], subject.kind)
-    ])
-    error_message = "Subject kind must be one of: User, Group, ServiceAccount."
-  }
+output "additional_subjects" {
+  description = "Additional subjects bound to the role"
+  value = [
+    for subject in kubernetes_role_binding_v1.team_role_binding.subject : {
+      kind = subject.kind
+      name = subject.name
+    } if subject.name != var.kubernetes_group
+  ]
 }
 
 # Service Account Bindings
-variable "service_account_bindings" {
-  description = "Map of service account names to role bindings"
-  type = map(object({
-    role_name = optional(string) # If null, uses the primary team role
-  }))
-  default = {}
+output "service_account_bindings" {
+  description = "Service account bindings created"
+  value = {
+    for name, binding in kubernetes_role_binding_v1.service_account_bindings :
+    name => {
+      binding_name = binding.metadata[0].name
+      role_name    = binding.role_ref[0].name
+      sa_name      = name
+    }
+  }
 }
 
 # Cluster-Wide Access
-variable "enable_cluster_readonly" {
-  description = "Enable cluster-wide read-only access for the team"
-  type        = bool
-  default     = false
+output "cluster_readonly_enabled" {
+  description = "Whether cluster-wide read-only access is enabled"
+  value       = var.enable_cluster_readonly
 }
 
-# Additional Custom Roles
-variable "additional_roles" {
-  description = "Additional custom roles to create in the namespace"
-  type = map(object({
-    labels      = optional(map(string), {})
-    annotations = optional(map(string), {})
-    rules = list(object({
-      api_groups     = list(string)
-      resources      = list(string)
-      resource_names = optional(list(string))
-      verbs          = list(string)
-    }))
-    subjects = list(object({
-      kind = string
-      name = string
-    }))
-  }))
-  default = {}
+output "cluster_role_name" {
+  description = "Name of the cluster role (if created)"
+  value       = var.enable_cluster_readonly ? kubernetes_cluster_role_v1.team_cluster_readonly[0].metadata[0].name : null
 }
 
-# Permission Level Customization
-variable "permission_overrides" {
-  description = "Override default permissions for specific permission levels"
-  type = map(object({
-    rules = list(object({
-      api_groups     = list(string)
-      resources      = list(string)
-      resource_names = optional(list(string))
-      verbs          = list(string)
-    }))
-  }))
-  default = {}
+output "cluster_role_binding_name" {
+  description = "Name of the cluster role binding (if created)"
+  value       = var.enable_cluster_readonly ? kubernetes_cluster_role_binding_v1.team_cluster_readonly_binding[0].metadata[0].name : null
 }
 
-# Production-Specific Settings
-variable "prod_restrictions" {
-  description = "Additional restrictions for production environments"
-  type = object({
-    deny_exec               = optional(bool, true)
-    deny_port_forward       = optional(bool, true)
-    deny_secret_delete      = optional(bool, true)
-    deny_configmap_delete   = optional(bool, false)
-    require_approval        = optional(bool, false)
-  })
-  default = {
-    deny_exec             = true
-    deny_port_forward     = true
-    deny_secret_delete    = true
-    deny_configmap_delete = false
-    require_approval      = false
+# Custom Roles
+output "custom_roles" {
+  description = "Additional custom roles created"
+  value = {
+    for name, role in kubernetes_role_v1.custom_roles :
+    name => {
+      role_name    = role.metadata[0].name
+      binding_name = kubernetes_role_binding_v1.custom_role_bindings[name].metadata[0].name
+    }
   }
 }
 
-# Resource-Specific Permissions
-variable "resource_permissions" {
-  description = "Fine-grained permissions for specific resource types"
-  type = object({
-    deployments = optional(object({
-      verbs          = optional(list(string))
-      resource_names = optional(list(string))
-    }))
-    secrets = optional(object({
-      verbs          = optional(list(string))
-      resource_names = optional(list(string))
-    }))
-    configmaps = optional(object({
-      verbs          = optional(list(string))
-      resource_names = optional(list(string))
-    }))
-    services = optional(object({
-      verbs          = optional(list(string))
-      resource_names = optional(list(string))
-    }))
-  })
-  default = {}
-}
-
-# Advanced Features
-variable "enable_pod_security_policy" {
-  description = "Enable Pod Security Policy bindings (deprecated in K8s 1.25+)"
-  type        = bool
-  default     = false
-}
-
-variable "enable_aggregation_rules" {
-  description = "Enable aggregation rules for the role"
-  type        = bool
-  default     = false
-}
-
-variable "aggregation_rule_selectors" {
-  description = "Label selectors for role aggregation"
-  type = list(object({
-    match_labels = map(string)
-  }))
-  default = []
-}
-
-# Monitoring and Auditing
-variable "enable_audit_annotations" {
-  description = "Add audit annotations to RBAC resources"
-  type        = bool
-  default     = true
-}
-
-variable "audit_contact" {
-  description = "Contact information for RBAC audit purposes"
-  type        = string
-  default     = ""
-}
-
-# Time-Based Access (metadata only, enforcement requires external tooling)
-variable "time_based_access" {
-  description = "Metadata for time-based access controls"
-  type = object({
-    enabled    = optional(bool, false)
-    start_time = optional(string, "")
-    end_time   = optional(string, "")
-    timezone   = optional(string, "UTC")
-  })
-  default = {
-    enabled = false
+# Security Configuration
+output "security_configuration" {
+  description = "Summary of security configuration"
+  value = {
+    permission_level             = var.permission_level
+    environment_restrictions     = var.apply_environment_restrictions
+    cluster_readonly_enabled     = var.enable_cluster_readonly
+    additional_subjects_count    = length(var.additional_subjects)
+    service_account_bindings     = length(var.service_account_bindings)
+    custom_roles_count          = length(var.additional_roles)
   }
 }
 
-# Integration Settings
-variable "integrate_with_external_oidc" {
-  description = "Add annotations for external OIDC integration"
-  type        = bool
-  default     = false
+# Integration Information
+output "integration_info" {
+  description = "Information for integrating with other systems"
+  value = {
+    namespace        = var.namespace
+    team_name        = var.team_name
+    group_name       = var.kubernetes_group
+    role_name        = kubernetes_role_v1.team_role.metadata[0].name
+    binding_name     = kubernetes_role_binding_v1.team_role_binding.metadata[0].name
+    permission_level = var.permission_level
+    environment      = var.environment
+  }
 }
 
-variable "oidc_issuer" {
-  description = "OIDC issuer URL"
-  type        = string
-  default     = ""
+# Audit Information
+output "audit_info" {
+  description = "Audit information for compliance and tracking"
+  value = {
+    role_created_at         = kubernetes_role_v1.team_role.metadata[0].creation_timestamp
+    binding_created_at      = kubernetes_role_binding_v1.team_role_binding.metadata[0].creation_timestamp
+    role_resource_version   = kubernetes_role_v1.team_role.metadata[0].resource_version
+    binding_resource_version = kubernetes_role_binding_v1.team_role_binding.metadata[0].resource_version
+    audit_annotations       = var.enable_audit_annotations ? {
+      contact = var.audit_contact
+      team    = var.team_name
+      env     = var.environment
+    } : {}
+  }
 }
 
-variable "oidc_client_id" {
-  description = "OIDC client ID"
-  type        = string
-  default     = ""
+# Verification Commands
+output "verification_commands" {
+  description = "kubectl commands to verify RBAC setup"
+  value = {
+    check_role            = "kubectl get role ${kubernetes_role_v1.team_role.metadata[0].name} -n ${var.namespace}"
+    check_rolebinding     = "kubectl get rolebinding ${kubernetes_role_binding_v1.team_role_binding.metadata[0].name} -n ${var.namespace}"
+    describe_role         = "kubectl describe role ${kubernetes_role_v1.team_role.metadata[0].name} -n ${var.namespace}"
+    describe_rolebinding  = "kubectl describe rolebinding ${kubernetes_role_binding_v1.team_role_binding.metadata[0].name} -n ${var.namespace}"
+    test_access          = "kubectl auth can-i --list --as=${var.kubernetes_group} -n ${var.namespace}"
+  }
+}
+
+# Troubleshooting Information
+output "troubleshooting_info" {
+  description = "Information for troubleshooting RBAC issues"
+  value = {
+    role_name         = kubernetes_role_v1.team_role.metadata[0].name
+    binding_name      = kubernetes_role_binding_v1.team_role_binding.metadata[0].name
+    namespace         = var.namespace
+    kubernetes_group  = var.kubernetes_group
+    permission_level  = var.permission_level
+    
+    # Common issues checklist
+    checklist = {
+      role_exists                = "kubectl get role ${kubernetes_role_v1.team_role.metadata[0].name} -n ${var.namespace}"
+      binding_exists             = "kubectl get rolebinding ${kubernetes_role_binding_v1.team_role_binding.metadata[0].name} -n ${var.namespace}"
+      check_group_membership     = "User must be mapped to '${var.kubernetes_group}' group via EKS Access Entry"
+      verify_namespace_access    = "kubectl auth can-i get pods -n ${var.namespace} --as=system:serviceaccount:${var.namespace}:default"
+    }
+  }
+}
+
+# Resource Counts
+output "resource_counts" {
+  description = "Count of RBAC resources created"
+  value = {
+    roles                    = 1 + length(var.additional_roles)
+    role_bindings            = 1 + length(var.service_account_bindings) + length(var.additional_roles)
+    cluster_roles            = var.enable_cluster_readonly ? 1 : 0
+    cluster_role_bindings    = var.enable_cluster_readonly ? 1 : 0
+    total_subjects           = 1 + length(var.additional_subjects)
+    service_account_bindings = length(var.service_account_bindings)
+  }
+}
+
+# Permissions Matrix (for documentation)
+output "permissions_matrix" {
+  description = "Detailed permissions matrix for the role"
+  value = {
+    for rule in kubernetes_role_v1.team_role.rule : 
+    join("/", rule.api_groups) => {
+      resources = rule.resources
+      verbs     = rule.verbs
+    }
+  }
 }
