@@ -1,0 +1,225 @@
+# Iron Bank Container Image Pipeline
+
+## Overview
+
+This document describes the automated pipeline for ingesting hardened, DoD-compliant container images from Iron Bank into our Azure GCC High environment.
+
+---
+
+## What is Iron Bank?
+
+**Iron Bank** is the Department of Defense's secure container image repository within Platform One. It provides:
+
+- **Hardened Container Images**: Over 1,000 vendor and open-source containers that have been security-hardened
+- **Compliance Assessments**: Images come with vulnerability assessments and compliance documentation
+- **Supply Chain Security**: Helps satisfy Authority to Operate (ATO) requirements for DoD systems
+- **Information Level**: Currently operates at IL2 (Impact Level 2)
+
+### Why We Use Iron Bank
+
+As a contractor working with DoD clients in our Azure GCC High tenant, we require:
+- Pre-hardened, compliant base images that meet DoD security standards
+- Reduced security risk in our software supply chain
+- Images that support our ATO requirements
+- Containers from an approved DoD source
+
+---
+
+## Pipeline Architecture
+
+### Components
+
+1. **Registry1** (Iron Bank's container registry)
+2. **GitHub Workflows** (automation orchestration)
+3. **PowerShell Scripts** (sync and scan operations)
+4. **Azure Container Registries**
+   - NonProd: `devsecospnonprod`
+   - Prod: `[production ACR name]`
+5. **Microsoft Defender for Cloud** (vulnerability scanning)
+6. **KQL Queries** (scan result analysis)
+
+### Authentication
+
+- **Robot Account**: Dedicated service account for automated pulls from Registry1
+- **GitHub Secrets**:
+  - `IRONBANK_USERNAME`
+  - `IRONBANK_PASSWORD`
+
+---
+
+## Pipeline Workflow
+
+### Step 1: Image Configuration
+
+**File**: `images.json`
+
+This configuration file defines which images to sync and includes:
+- Source image name from Iron Bank
+- Image version/tag
+- Destination Azure Container Registry
+- Target tag in ACR
+
+**Example Structure**:
+```json
+{
+  "images": [
+    {
+      "source": "registry1.dso.mil/ironbank/opensource/nginx/nginx",
+      "version": "1.25.3",
+      "destination": "devsecospnonprod.azurecr.io/ironbank/nginx",
+      "tag": "1.25.3-hardened"
+    }
+  ]
+}
+```
+
+### Step 2: Sync to NonProd (Workflow 1)
+
+**Workflow**: Image Sync to NonProd  
+**Script**: PowerShell script for image synchronization
+
+**Process**:
+1. Workflow is triggered (manually or on schedule)
+2. Script parses `images.json`
+3. Authenticates to Registry1 using robot account credentials
+4. Pulls specified images from Iron Bank
+5. Pushes images to NonProd ACR (`devsecospnonprod`)
+
+**Duration**: Varies based on image size and count
+
+### Step 3: Defender for Cloud Scanning
+
+**Automatic Process** (No manual intervention required)
+
+Once images land in the NonProd ACR, Microsoft Defender for Cloud automatically:
+- Detects new images
+- Initiates vulnerability scanning
+- Stores scan results in Azure Resource Graph
+
+**Important**: There is a time delay between image push and scan completion (typically 15-30 minutes)
+
+### Step 4: Scan Analysis (Workflow 2)
+
+**Workflow**: Vulnerability Scan Analysis  
+**Script**: PowerShell script with KQL query
+
+**Process**:
+1. Workflow is triggered after sufficient time for scanning
+2. PowerShell script executes KQL query against Azure Resource Graph
+3. Retrieves Defender for Cloud scan results for synced images
+4. Analyzes vulnerabilities (Critical, High, Medium, Low)
+5. Generates GitHub Actions summary report
+
+**Output**: GitHub Actions summary with:
+- Vulnerability counts by severity
+- Affected images
+- CVE details
+- Recommendations
+
+### Step 5: Review and Approval
+
+**Manual Step**
+
+Team reviews the scan results from the GitHub Actions summary:
+- **If vulnerabilities are acceptable**: Proceed to production sync
+- **If critical issues found**: Investigate, update image version, or remediate before proceeding
+
+### Step 6: Sync to Production (Workflow 3)
+
+**Workflow**: Image Sync to Production  
+**Script**: PowerShell script for production promotion
+
+**Process**:
+1. Workflow is triggered manually after approval
+2. Script references `images.json` for image details
+3. Pulls images from NonProd ACR
+4. Pushes images to Production ACR
+5. Images are now available for production deployments
+
+---
+
+## Access and Prerequisites
+
+### Required Access
+
+1. **Repo1 Account**: Required to access Iron Bank resources
+   - Register at: https://sso-info.il2.dso.mil/new_account.html
+   - Use for browsing Iron Bank Catalog
+
+2. **Robot Account**: For automated pipeline authentication
+   - Request via Repo1 help desk ticket (template: "Robot account")
+   - Email: aflcmc.hncx.p1cst@us.af.mil
+   - Provide: Company name, Project name, Primary POC
+
+3. **GitHub Repository Access**: To trigger workflows and view results
+
+4. **Azure Permissions**: Read access to ACRs and Defender for Cloud results
+
+### GitHub Secrets Configuration
+
+Ensure the following secrets are configured in the GitHub repository:
+- `IRONBANK_USERNAME`: Robot account username
+- `IRONBANK_PASSWORD`: Robot account password
+
+---
+
+## Workflow Locations
+
+| Workflow | Purpose | Script Location |
+|----------|---------|----------------|
+| Image Sync - NonProd | Pull from Iron Bank, push to NonProd ACR | `[path to PS1 script]` |
+| Scan Analysis | Query Defender results, generate report | `[path to PS1 script]` |
+| Image Sync - Prod | Promote images from NonProd to Prod | `[path to PS1 script]` |
+
+---
+
+## Maintenance and Troubleshooting
+
+### Common Issues
+
+**Authentication Failures**
+- Verify robot account credentials are current in GitHub Secrets
+- Check if robot account has been disabled or expired
+- Contact Iron Bank support if credential issues persist
+
+**Images Not Appearing in ACR**
+- Check GitHub Actions logs for errors
+- Verify network connectivity between GitHub runner and Azure
+- Confirm ACR permissions for the service principal
+
+**Defender Scans Not Completing**
+- Allow additional time (scans can take 30+ minutes)
+- Verify Defender for Cloud is enabled on the ACR
+- Check Azure Resource Graph for scan results manually
+
+**High Vulnerability Counts**
+- Check if a newer version is available in Iron Bank
+- Review CVEs to determine if they're applicable to your use case
+- Consider alternative images if vulnerabilities cannot be remediated
+
+### Update Process
+
+To add or update images:
+1. Modify `images.json` with new image details
+2. Commit changes to the repository
+3. Trigger the NonProd sync workflow
+4. Follow the standard workflow process
+
+---
+
+## Support and Resources
+
+- **Iron Bank Documentation**: https://docs-ironbank.dso.mil/
+- **Iron Bank Catalog**: https://ironbank.dso.mil/catalog
+- **Iron Bank Support**: aflcmc.hncx.p1cst@us.af.mil
+- **Team Contact**: [Your team's contact info]
+
+---
+
+## Document Owner
+
+**Created by**: [Your Name]  
+**Last Updated**: [Date]  
+**Point of Contact**: [Your Email]
+
+For questions about this pipeline, contact [your name] or reference this documentation.
