@@ -1,0 +1,24 @@
+plugin: azure.azcollection.azure_rm
+
+cloud_environment: AzureUSGovernment
+auth_source: cli
+
+hostvar_expressions:
+  ansible_host: private_ipv4_addresses | first
+
+conditional_groups:
+  # Primary GHE group
+  github_enterprise_servers: |
+    (image.publisher is defined and image.publisher == 'GitHub') or
+    (tags.application is defined and tags.application == 'github-enterprise')
+  
+  # OS groups excluding GHE
+  os_linux: |
+    os_profile.system == 'linux' and 
+    'github_enterprise_servers' not in group_names
+  
+  os_windows: |
+    os_profile.system == 'windows'
+
+include_vm_resource_groups:
+  - '*'
