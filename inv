@@ -6,19 +6,31 @@ auth_source: cli
 hostvar_expressions:
   ansible_host: private_ipv4_addresses | first
 
+# GitHub Enterprise gets its own group only
 conditional_groups:
-  # Primary GHE group
   github_enterprise_servers: |
     (image.publisher is defined and image.publisher == 'GitHub') or
     (tags.application is defined and tags.application == 'github-enterprise')
   
-  # OS groups excluding GHE
+  # Linux hosts EXCEPT GitHub Enterprise
   os_linux: |
     os_profile.system == 'linux' and 
-    'github_enterprise_servers' not in group_names
+    not ((image.publisher is defined and image.publisher == 'GitHub') or 
+         (tags.application is defined and tags.application == 'github-enterprise'))
   
-  os_windows: |
-    os_profile.system == 'windows'
+  # Windows hosts (assuming no GHE on Windows)
+  os_windows: os_profile.system == 'windows'
+  
+  # Location groups excluding GHE
+  azure_loc_eastus: |
+    location == 'eastus' and
+    not ((image.publisher is defined and image.publisher == 'GitHub') or
+         (tags.application is defined and tags.application == 'github-enterprise'))
+  
+  azure_loc_westus: |
+    location == 'westus' and
+    not ((image.publisher is defined and image.publisher == 'GitHub') or
+         (tags.application is defined and tags.application == 'github-enterprise'))
 
 include_vm_resource_groups:
   - '*'
