@@ -3,14 +3,15 @@ import json
 from datetime import datetime
 
 # Configuration
-GITHUB_TOKEN = "your-github-token-here"  # Or use environment variable
+GITHUB_TOKEN = "your-github-token-here"
 GITHUB_REPO = "owner/repo-name"  # e.g., "actions/checkout"
 
 def fetch_github_data(repo):
-    """Fetch data from GitHub API"""
+    """Fetch data from GitHub API using current best practices"""
     headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "X-GitHub-Api-Version": "2022-11-28"
     }
     base_url = f"https://api.github.com/repos/{repo}"
     
@@ -66,6 +67,8 @@ def fetch_github_data(repo):
         
     except requests.exceptions.RequestException as e:
         print(f"❌ Error fetching data: {e}")
+        if hasattr(e.response, 'text'):
+            print(f"Response: {e.response.text}")
         return None
 
 def print_summary(data):
