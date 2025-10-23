@@ -1,0 +1,76 @@
+---
+# Install Elastic Agent package
+# This is typically run during Packer builds or initial VM setup
+
+- name: Check if Elastic Agent is already installed
+  ansible.builtin.stat:
+    path: /usr/bin/elastic-agent
+  register: elastic_agent_binary
+
+- name: Set installation needed flag
+  ansible.builtin.set_fact:
+    elastic_agent_needs_install: "{{ not elastic_agent_binary.stat.exists }}"
+
+- name: Installation block
+  when: elastic_agent_needs_install or elastic_agent_force_reinstall | default(false)
+  block:
+    - name: Create temporary directory for Elastic Agent download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: elastic_agent
+      register: elastic_temp_dir
+
+    - name: Download Elastic Agent RPM
+      ansible.builtin.get_url:
+        url: "{{ elastic_agent_rpm_url }}"
+        dest: "{{ elastic_temp_dir.path }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm"
+        mode: '0644'
+        timeout: 300
+      register: rpm_download
+
+    - name: Download Elastic Agent SHA512 checksum file
+      ansible.builtin.get_url:
+        url: "{{ elastic_agent_sha512_url }}"
+        dest: "{{ elastic_temp_dir.path }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm.sha512"
+        mode: '0644'
+        timeout: 60
+
+    - name: Read SHA512 checksum from file
+      ansible.builtin.slurp:
+        src: "{{ elastic_temp_dir.path }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm.sha512"
+      register: sha512_file
+
+    - name: Extract expected checksum value
+      ansible.builtin.set_fact:
+        expected_checksum: "{{ (sha512_file.content | b64decode).split()[0] }}"
+
+    - name: Calculate SHA512 checksum of downloaded RPM
+      ansible.builtin.stat:
+        path: "{{ rpm_download.dest }}"
+        checksum_algorithm: sha512
+        get_checksum: yes
+      register: rpm_stat
+
+    - name: Verify SHA512 checksum matches
+      ansible.builtin.assert:
+        that:
+          - rpm_stat.stat.checksum == expected_checksum
+        fail_msg: "SHA512 checksum mismatch! Expected: {{ expected_checksum }}, Got: {{ rpm_stat.stat.checksum }}"
+        success_msg: "SHA512 checksum verified successfully"
+
+    - name: Install Elastic Agent RPM
+      ansible.builtin.yum:
+        name: "{{ rpm_download.dest }}"
+        state: present
+        disable_gpg_check: yes
+      notify: restart elastic-agent
+
+    - name: Clean up temporary directory
+      ansible.builtin.file:
+        path: "{{ elastic_temp_dir.path }}"
+        state: absent
+      when: elastic_agent_cleanup_temp | default(true)
+
+- name: Display installation status
+  ansible.builtin.debug:
+    msg: "Elastic Agent {{ elastic_agent_version }} is {{ 'already installed' if not elastic_agent_needs_install else 'now installed' }}"
