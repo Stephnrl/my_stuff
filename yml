@@ -1,20 +1,36 @@
 ---
-# roles/monitoring/elastic_agent/tasks/main.yml
+# roles/monitoring/elastic_agent/tasks/service.yml
 
-- name: Install Elastic Agent
-  ansible.builtin.include_tasks: install.yml
-  when: not (elastic_agent_skip_install | default(false))
-  tags:
-    - install
+- name: Ensure Elastic Agent service is enabled and started
+  ansible.builtin.systemd:
+    name: elastic-agent
+    state: "{{ elastic_agent_service_state }}"
+    enabled: "{{ elastic_agent_service_enabled }}"
+    daemon_reload: yes
+  register: service_status
 
-- name: Configure Elastic Agent
-  ansible.builtin.include_tasks: configure.yml
-  when: elastic_agent_configure | default(false)
-  tags:
-    - configure
+- name: Wait for Elastic Agent to be ready
+  ansible.builtin.wait_for:
+    timeout: 30
+  when: service_status is changed
 
-- name: Ensure Elastic Agent is running
-  ansible.builtin.include_tasks: service.yml
-  when: elastic_agent_manage_service | default(true)
-  tags:
-    - service
+- name: Check Elastic Agent status
+  ansible.builtin.command: elastic-agent status
+  register: agent_status_check
+  changed_when: false
+  failed_when: false
+
+- name: Display agent status
+  ansible.builtin.debug:
+    msg: "{{ agent_status_check.stdout_lines }}"
+  when: agent_status_check.rc == 0
+
+- name: Verify Elastic Agent is healthy
+  ansible.builtin.assert:
+    that:
+      - agent_status_check.rc == 0
+      - "'healthy' in agent_status_check.stdout or 'Connected' in agent_status_check.stdout"
+    fail_msg: "Elastic Agent is not healthy. Status: {{ agent_status_check.stdout }}"
+    success_msg: "Elastic Agent is healthy and running"
+  when: elastic_agent_verify_health | default(false)
+  ignore_errors: yes
