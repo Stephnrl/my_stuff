@@ -1,92 +1,107 @@
----
-# roles/monitoring/elastic_agent/tasks/configure.yml
+# RHEL 9 Hardened Image Pipeline - Implementation
 
-- name: Determine configuration mode
-  ansible.builtin.set_fact:
-    elastic_config_mode: "{{ 'fleet' if elastic_agent_fleet_url is defined and elastic_agent_fleet_url else 'standalone' }}"
+## Epic 1: Planning & Requirements
+- [ ] Document current VM provisioning workflow and pain points
+- [ ] Identify specific STIG controls that conflict with container workloads
+  - [ ] Test baseline RHEL 9 STIG application with Podman/Docker
+  - [ ] Document failing controls and required exceptions
+- [ ] Define compliance requirements with security/compliance team
+- [ ] Get approval for self-managed image hardening approach
+- [ ] Document access control requirements (AD vs local accounts)
+- [ ] Define Service Level Objectives (SLO) for image build/update cadence
 
-- name: Display configuration mode
-  ansible.builtin.debug:
-    msg: "Configuring Elastic Agent in {{ elastic_config_mode }} mode"
+## Epic 2: Infrastructure Setup
+- [ ] Create Azure Service Principal for Packer builds
+  - [ ] Assign required RBAC permissions (Contributor on resource group)
+  - [ ] Store credentials in Key Vault / GitHub Secrets
+- [ ] Set up Azure Compute Gallery
+  - [ ] Configure gallery sharing permissions for target subscriptions
+  - [ ] Define image versioning strategy
+- [ ] Create dedicated resource group for Packer builds
+- [ ] Set up build network/subnet (if required for GCC High compliance)
 
-- name: Configure Fleet-managed Elastic Agent
-  when: elastic_config_mode == 'fleet'
-  block:
-    - name: Check if agent is already enrolled
-      ansible.builtin.command: elastic-agent status
-      register: agent_status
-      failed_when: false
-      changed_when: false
+## Epic 3: Packer Configuration
+- [ ] Create base Packer template for RHEL 9
+  - [ ] Configure Azure ARM builder
+  - [ ] Set managed image vs VHD output
+  - [ ] Configure target Compute Gallery
+- [ ] Implement Packer provisioners
+  - [ ] Shell provisioner for pre-Ansible setup
+  - [ ] Ansible provisioner integration
+- [ ] Add Packer variables file for environment-specific configs
+- [ ] Implement Packer validation steps
+- [ ] Create Packer build documentation
 
-    - name: Check enrollment status
-      ansible.builtin.set_fact:
-        is_enrolled: "{{ 'Connected' in agent_status.stdout or 'healthy' in agent_status.stdout }}"
-      when: agent_status.rc == 0
+## Epic 4: Ansible Hardening Playbooks
+- [ ] Create Ansible inventory/variables structure
+- [ ] Implement FIPS enablement playbook
+  - [ ] Enable FIPS mode
+  - [ ] Configure crypto policies
+  - [ ] Validate FIPS compliance
+- [ ] Implement STIG hardening playbook
+  - [ ] Apply RHEL 9 STIG baseline (use ansible-lockdown or DISA STIG Ansible)
+  - [ ] Document STIG exceptions/tailoring for containers
+  - [ ] Create override variables file for container-specific exemptions
+- [ ] Implement patching playbook
+  - [ ] Configure DNF/YUM repositories (RHUI or custom mirrors)
+  - [ ] Apply all security updates
+  - [ ] Handle kernel updates
+- [ ] Implement agent installation playbooks
+  - [ ] Install and configure Elastic Agent
+  - [ ] Install Microsoft Defender for Cloud agent
+  - [ ] Verify agent connectivity
+- [ ] Container runtime preparation
+  - [ ] Install Podman
+  - [ ] Configure SELinux policies for containers
+  - [ ] Test container workload compatibility
+- [ ] Implement validation/testing playbook
+  - [ ] STIG compliance scanning (OpenSCAP)
+  - [ ] Container functionality tests
+  - [ ] Agent health checks
 
-    - name: Enroll Elastic Agent with Fleet
-      ansible.builtin.command: >
-        elastic-agent enroll
-        --url={{ elastic_agent_fleet_url }}
-        --enrollment-token={{ elastic_agent_enrollment_token }}
-        {{ '--force' if elastic_agent_force_enroll else '' }}
-        {{ '--insecure' if elastic_agent_fleet_insecure else '' }}
-        --non-interactive
-      when: 
-        - not (is_enrolled | default(false))
-        - elastic_agent_enrollment_token is defined
-      register: enrollment_result
-      notify: restart elastic-agent
+## Epic 5: CI/CD Pipeline
+- [ ] Create GitHub Actions workflow (or Azure DevOps pipeline)
+  - [ ] Trigger on schedule (monthly for patches?)
+  - [ ] Trigger on manual workflow_dispatch
+  - [ ] Trigger on PR to main branch
+- [ ] Implement pipeline stages
+  - [ ] Packer validate
+  - [ ] Packer build
+  - [ ] Post-build validation (spin up test VM)
+  - [ ] Promote to Compute Gallery
+- [ ] Add pipeline notifications (Slack/Teams/Email)
+- [ ] Implement build artifact retention policy
 
-    - name: Display enrollment result
-      ansible.builtin.debug:
-        msg: "Enrollment completed successfully"
-      when: enrollment_result is changed
+## Epic 6: Testing & Validation
+- [ ] Create automated test suite
+  - [ ] InSpec/Cinc Auditor tests for STIG compliance
+  - [ ] Container runtime tests (podman run, docker run)
+  - [ ] Agent connectivity tests
+- [ ] Deploy test VM from new image
+- [ ] Execute validation test suite
+- [ ] Perform manual smoke testing
+- [ ] Security scanning of built image (Defender, Qualys, etc.)
 
-- name: Configure Standalone Elastic Agent
-  when: elastic_config_mode == 'standalone'
-  block:
-    - name: Ensure Elastic Agent config directory exists
-      ansible.builtin.file:
-        path: /opt/Elastic/Agent
-        state: directory
-        mode: '0750'
-        owner: root
-        group: root
+## Epic 7: Documentation & Handoff
+- [ ] Create runbook for image updates
+- [ ] Document STIG exceptions and justifications
+- [ ] Create troubleshooting guide
+- [ ] Document image versioning and rollback procedures
+- [ ] Create access control documentation (SSH key management, etc.)
+- [ ] Present solution to security/compliance team
+- [ ] Get sign-off from stakeholders
 
-    - name: Deploy standalone elastic-agent.yml configuration
-      ansible.builtin.template:
-        src: elastic-agent.yml.j2
-        dest: /opt/Elastic/Agent/elastic-agent.yml
-        mode: '0640'
-        owner: root
-        group: root
-        backup: yes
-      notify: restart elastic-agent
+## Epic 8: Production Rollout
+- [ ] Update Terraform/Bicep to reference new Compute Gallery image
+- [ ] Create image update notification process
+- [ ] Deploy pilot VMs using new image
+- [ ] Monitor for issues (30-day burn-in)
+- [ ] Full production cutover
+- [ ] Decommission old VM provisioning request process
 
-    - name: Validate configuration syntax
-      ansible.builtin.command: elastic-agent validate -c /opt/Elastic/Agent/elastic-agent.yml
-      register: config_validation
-      failed_when: config_validation.rc != 0
-      changed_when: false
-
-- name: Configure agent logging
-  ansible.builtin.template:
-    src: logging.yml.j2
-    dest: /opt/Elastic/Agent/logging.yml
-    mode: '0640'
-    owner: root
-    group: root
-    backup: yes
-  when: elastic_agent_custom_logging | default(false)
-  notify: restart elastic-agent
-
-- name: Set agent log level
-  ansible.builtin.lineinfile:
-    path: /opt/Elastic/Agent/elastic-agent.yml
-    regexp: '^(\s*)#?\s*level:'
-    line: '  level: {{ elastic_agent_log_level }}'
-    state: present
-  when: 
-    - elastic_config_mode == 'standalone'
-    - elastic_agent_log_level is defined
-  notify: restart elastic-agent
+## Epic 9: Maintenance & Operations
+- [ ] Set up monthly image rebuild schedule
+- [ ] Create process for emergency patches
+- [ ] Implement image lifecycle management
+- [ ] Create metrics/dashboard for image usage
+- [ ] Schedule quarterly STIG review for new controls
