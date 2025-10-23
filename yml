@@ -1,15 +1,59 @@
 ---
-# roles/monitoring/elastic_agent/handlers/main.yml
+# roles/monitoring/elastic_agent/defaults/main.yml
 
-- name: restart elastic-agent
-  ansible.builtin.systemd:
-    name: elastic-agent
-    state: restarted
-    daemon_reload: yes
-  listen: restart elastic-agent
+# Installation settings
+elastic_agent_version: "8.19.3"
+elastic_artifacts_base_url: "https://artifacts.elastic.co/downloads/beats/elastic-agent"
+elastic_agent_rpm_url: "{{ elastic_artifacts_base_url }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm"
+elastic_agent_sha512_url: "{{ elastic_artifacts_base_url }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm.sha512"
+elastic_agent_cleanup_temp: true
+elastic_agent_skip_install: false
 
-- name: reload elastic-agent
-  ansible.builtin.systemd:
-    name: elastic-agent
-    state: reloaded
-  listen: reload elastic-agent
+# Configuration settings
+elastic_agent_configure: false
+elastic_agent_config_mode: "standalone"  # 'standalone' or 'fleet'
+
+# Fleet-managed settings (when using Fleet)
+# elastic_agent_fleet_url: "https://fleet-server.example.com:8220"
+# elastic_agent_enrollment_token: ""
+elastic_agent_fleet_insecure: false
+elastic_agent_force_enroll: false
+
+# Standalone configuration settings
+elastic_agent_outputs:
+  - name: default
+    type: elasticsearch
+    hosts:
+      - "https://elasticsearch.example.com:9200"
+    # username: "elastic"
+    # password: "changeme"
+    # api_key: ""
+
+elastic_agent_inputs: []
+# Example inputs:
+# elastic_agent_inputs:
+#   - type: system/metrics
+#     id: system-metrics
+#     data_stream:
+#       namespace: default
+#     use_output: default
+#     streams:
+#       - metricset: cpu
+#         data_stream.dataset: system.cpu
+#       - metricset: memory
+#         data_stream.dataset: system.memory
+#       - metricset: network
+#         data_stream.dataset: system.network
+
+# Logging configuration
+elastic_agent_log_level: info  # debug, info, warning, error
+elastic_agent_custom_logging: false
+
+# Service management
+elastic_agent_manage_service: true
+elastic_agent_service_enabled: true
+elastic_agent_service_state: started
+elastic_agent_verify_health: false
+
+# Agent settings
+elastic_agent_download_timeout: 120
