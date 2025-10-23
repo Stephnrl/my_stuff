@@ -1,59 +1,92 @@
 ---
-# roles/monitoring/elastic_agent/defaults/main.yml
+# roles/monitoring/elastic_agent/tasks/configure.yml
 
-# Installation settings
-elastic_agent_version: "8.19.3"
-elastic_artifacts_base_url: "https://artifacts.elastic.co/downloads/beats/elastic-agent"
-elastic_agent_rpm_url: "{{ elastic_artifacts_base_url }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm"
-elastic_agent_sha512_url: "{{ elastic_artifacts_base_url }}/elastic-agent-{{ elastic_agent_version }}-x86_64.rpm.sha512"
-elastic_agent_cleanup_temp: true
-elastic_agent_skip_install: false
+- name: Determine configuration mode
+  ansible.builtin.set_fact:
+    elastic_config_mode: "{{ 'fleet' if elastic_agent_fleet_url is defined and elastic_agent_fleet_url else 'standalone' }}"
 
-# Configuration settings
-elastic_agent_configure: false
-elastic_agent_config_mode: "standalone"  # 'standalone' or 'fleet'
+- name: Display configuration mode
+  ansible.builtin.debug:
+    msg: "Configuring Elastic Agent in {{ elastic_config_mode }} mode"
 
-# Fleet-managed settings (when using Fleet)
-# elastic_agent_fleet_url: "https://fleet-server.example.com:8220"
-# elastic_agent_enrollment_token: ""
-elastic_agent_fleet_insecure: false
-elastic_agent_force_enroll: false
+- name: Configure Fleet-managed Elastic Agent
+  when: elastic_config_mode == 'fleet'
+  block:
+    - name: Check if agent is already enrolled
+      ansible.builtin.command: elastic-agent status
+      register: agent_status
+      failed_when: false
+      changed_when: false
 
-# Standalone configuration settings
-elastic_agent_outputs:
-  - name: default
-    type: elasticsearch
-    hosts:
-      - "https://elasticsearch.example.com:9200"
-    # username: "elastic"
-    # password: "changeme"
-    # api_key: ""
+    - name: Check enrollment status
+      ansible.builtin.set_fact:
+        is_enrolled: "{{ 'Connected' in agent_status.stdout or 'healthy' in agent_status.stdout }}"
+      when: agent_status.rc == 0
 
-elastic_agent_inputs: []
-# Example inputs:
-# elastic_agent_inputs:
-#   - type: system/metrics
-#     id: system-metrics
-#     data_stream:
-#       namespace: default
-#     use_output: default
-#     streams:
-#       - metricset: cpu
-#         data_stream.dataset: system.cpu
-#       - metricset: memory
-#         data_stream.dataset: system.memory
-#       - metricset: network
-#         data_stream.dataset: system.network
+    - name: Enroll Elastic Agent with Fleet
+      ansible.builtin.command: >
+        elastic-agent enroll
+        --url={{ elastic_agent_fleet_url }}
+        --enrollment-token={{ elastic_agent_enrollment_token }}
+        {{ '--force' if elastic_agent_force_enroll else '' }}
+        {{ '--insecure' if elastic_agent_fleet_insecure else '' }}
+        --non-interactive
+      when: 
+        - not (is_enrolled | default(false))
+        - elastic_agent_enrollment_token is defined
+      register: enrollment_result
+      notify: restart elastic-agent
 
-# Logging configuration
-elastic_agent_log_level: info  # debug, info, warning, error
-elastic_agent_custom_logging: false
+    - name: Display enrollment result
+      ansible.builtin.debug:
+        msg: "Enrollment completed successfully"
+      when: enrollment_result is changed
 
-# Service management
-elastic_agent_manage_service: true
-elastic_agent_service_enabled: true
-elastic_agent_service_state: started
-elastic_agent_verify_health: false
+- name: Configure Standalone Elastic Agent
+  when: elastic_config_mode == 'standalone'
+  block:
+    - name: Ensure Elastic Agent config directory exists
+      ansible.builtin.file:
+        path: /opt/Elastic/Agent
+        state: directory
+        mode: '0750'
+        owner: root
+        group: root
 
-# Agent settings
-elastic_agent_download_timeout: 120
+    - name: Deploy standalone elastic-agent.yml configuration
+      ansible.builtin.template:
+        src: elastic-agent.yml.j2
+        dest: /opt/Elastic/Agent/elastic-agent.yml
+        mode: '0640'
+        owner: root
+        group: root
+        backup: yes
+      notify: restart elastic-agent
+
+    - name: Validate configuration syntax
+      ansible.builtin.command: elastic-agent validate -c /opt/Elastic/Agent/elastic-agent.yml
+      register: config_validation
+      failed_when: config_validation.rc != 0
+      changed_when: false
+
+- name: Configure agent logging
+  ansible.builtin.template:
+    src: logging.yml.j2
+    dest: /opt/Elastic/Agent/logging.yml
+    mode: '0640'
+    owner: root
+    group: root
+    backup: yes
+  when: elastic_agent_custom_logging | default(false)
+  notify: restart elastic-agent
+
+- name: Set agent log level
+  ansible.builtin.lineinfile:
+    path: /opt/Elastic/Agent/elastic-agent.yml
+    regexp: '^(\s*)#?\s*level:'
+    line: '  level: {{ elastic_agent_log_level }}'
+    state: present
+  when: 
+    - elastic_config_mode == 'standalone'
+    - elastic_agent_log_level is defined
+  notify: restart elastic-agent
