@@ -1,0 +1,132 @@
+name: Deploy Lab Infrastructure
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: Deploy with Terraform
+    runs-on: ubuntu-latest
+    outputs:
+      instance_ip: ${{ steps.tf-output.outputs.instance_ip }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+      
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
+      
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+        working-directory: ./terraform
+      
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
+        working-directory: ./terraform
+      
+      - name: Get Terraform Outputs
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        id: tf-output
+        run: |
+          echo "instance_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+        working-directory: ./terraform
+      
+      - name: Upload Ansible artifacts
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-files
+          path: |
+            terraform/ansible/
+  
+  ansible:
+    name: Configure with Ansible
+    needs: terraform
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Ansible artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-files
+          path: ./ansible
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible-core
+      
+      - name: Wait for SSH to be ready
+        run: |
+          chmod 400 ansible/lab-key.pem
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no -i ansible/lab-key.pem ec2-user@${{ needs.terraform.outputs.instance_ip }} "echo 'SSH Ready'"; then
+              echo "SSH is ready!"
+              break
+            fi
+            echo "Waiting for SSH... attempt $i/30"
+            sleep 10
+          done
+      
+      - name: Run Ansible Playbook
+        run: |
+          cd ansible
+          ansible-playbook -i inventory.ini bootstrap.yml -v
+      
+      - name: Test Ansible installation
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ansible/lab-key.pem ec2-user@${{ needs.terraform.outputs.instance_ip }} "
+            sudo su - alice -c 'source ~/ansible-venv/bin/activate && ansible --version'
+          "
+```
+
+## 4. Project Structure
+```
+.
+├── .github/
+│   └── workflows/
+│       └── deploy-lab.yml
+├── terraform/
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   └── templates/
+│       └── inventory.tpl
+├── ansible/
+│   ├── bootstrap.yml
+│   ├── ansible.cfg
+│   └── templates/
+│       └── bashrc.j2
+└── README.md
