@@ -1,139 +1,16 @@
----
-- name: Bootstrap AL2023 Lab Instance
-  hosts: lab_servers
-  become: yes
-  gather_facts: yes
-  
-  vars:
-    lab_users:
-      - username: alice
-        sudo: yes
-      - username: bob
-        sudo: yes
-      - username: charlie
-        sudo: no
-    
-    ansible_collections:
-      - amazon.aws
-      - community.general
-      - ansible.posix
-  
-  tasks:
-    - name: Wait for cloud-init to complete
-      command: cloud-init status --wait
-      changed_when: false
+# .bashrc
 
-    - name: Update all packages
-      dnf:
-        name: "*"
-        state: latest
-      
-    - name: Install Python 3.12 and pip
-      dnf:
-        name:
-          - python3.12
-          - python3.12-pip
-        state: present
-    
-    - name: Install system dependencies
-      dnf:
-        name:
-          - git
-          - vim
-          - unzip
-          - wget
-        state: present
-    
-    - name: Create lab users
-      user:
-        name: "{{ item.username }}"
-        state: present
-        shell: /bin/bash
-        create_home: yes
-      loop: "{{ lab_users }}"
-    
-    - name: Add users to sudoers
-      lineinfile:
-        path: /etc/sudoers.d/{{ item.username }}
-        line: "{{ item.username }} ALL=(ALL) NOPASSWD:ALL"
-        create: yes
-        mode: '0440'
-        validate: 'visudo -cf %s'
-      loop: "{{ lab_users }}"
-      when: item.sudo | default(false)
-    
-    - name: Create .bashrc for users
-      template:
-        src: templates/bashrc.j2
-        dest: /home/{{ item.username }}/.bashrc
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0644'
-      loop: "{{ lab_users }}"
-    
-    - name: Create venv directory for each user
-      file:
-        path: /home/{{ item.username }}/ansible-venv
-        state: directory
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0755'
-      loop: "{{ lab_users }}"
-    
-    - name: Create Python virtual environment for each user
-      become_user: "{{ item.username }}"
-      shell: |
-        /usr/bin/python3.12 -m venv /home/{{ item.username }}/ansible-venv
-      args:
-        creates: /home/{{ item.username }}/ansible-venv/bin/activate
-      loop: "{{ lab_users }}"
-    
-    - name: Upgrade pip in venv
-      become_user: "{{ item.username }}"
-      pip:
-        name: pip
-        state: latest
-        virtualenv: /home/{{ item.username }}/ansible-venv
-        virtualenv_command: /usr/bin/python3.12 -m venv
-      loop: "{{ lab_users }}"
-    
-    - name: Install ansible-core in each user's venv
-      become_user: "{{ item.username }}"
-      pip:
-        name: ansible-core
-        state: present
-        virtualenv: /home/{{ item.username }}/ansible-venv
-      loop: "{{ lab_users }}"
-    
-    - name: Install Ansible collections in each user's venv
-      become_user: "{{ item.0.username }}"
-      shell: |
-        source /home/{{ item.0.username }}/ansible-venv/bin/activate
-        ansible-galaxy collection install {{ item.1 }}
-      args:
-        creates: /home/{{ item.0.username }}/.ansible/collections/ansible_collections/{{ item.1 | replace('.', '/') }}
-      loop: "{{ lab_users | product(ansible_collections) | list }}"
-      environment:
-        PATH: "/home/{{ item.0.username }}/ansible-venv/bin:{{ ansible_env.PATH }}"
-    
-    - name: Create activation helper script
-      copy:
-        content: |
-          #!/bin/bash
-          source ~/ansible-venv/bin/activate
-          echo "Ansible environment activated!"
-          echo "Run 'ansible --version' to verify"
-        dest: /home/{{ item.username }}/activate-ansible.sh
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-        mode: '0755'
-      loop: "{{ lab_users }}"
-    
-    - name: Add venv activation to .bash_profile
-      lineinfile:
-        path: /home/{{ item.username }}/.bash_profile
-        line: "alias activate-ansible='source ~/ansible-venv/bin/activate'"
-        create: yes
-        owner: "{{ item.username }}"
-        group: "{{ item.username }}"
-      loop: "{{ lab_users }}"
+# Source global definitions
+if [ -f /etc/bashrc ]; then
+    . /etc/bashrc
+fi
+
+# User specific aliases and functions
+alias ll='ls -lah'
+alias activate-ansible='source ~/ansible-venv/bin/activate'
+
+# Show Ansible venv info
+if [ -f ~/ansible-venv/bin/activate ]; then
+    echo "Ansible venv available at ~/ansible-venv"
+    echo "Run 'activate-ansible' or 'source ~/ansible-venv/bin/activate'"
+fi
