@@ -1,25 +1,42 @@
-module "ansible_configuration" {
-  source = "./modules/ansible-runner"
-  
-  vm_id                   = azurerm_linux_virtual_machine.vm.id
-  vm_host                 = azurerm_public_ip.vm_pip.ip_address
-  ssh_user                = "azureuser"
-  ssh_private_key_path    = "~/.ssh/id_rsa"
-  
-  ansible_repo_url        = "https://github.com/your-org/ansible-playbooks.git"
-  ansible_repo_branch     = "main"
-  playbook_path           = "playbooks/configure-webserver.yml"
-  
-  # Galaxy requirements
-  galaxy_requirements_yml = file("${path.module}/requirements.yml")
-  galaxy_force_install    = false
-  
-  become = true
-  
-  extra_vars = jsonencode({
-    app_version = "1.2.3"
-    environment = "production"
-  })
-  
-  vm_ready_dependency = azurerm_linux_virtual_machine.vm
+provisioner "remote-exec" {
+  inline = [
+    <<-EOT
+      set -e
+      echo 'Starting Ansible configuration...'
+      
+      # Create working directory
+      WORK_DIR=$(mktemp -d)
+      cd $WORK_DIR
+      
+      # Install Galaxy requirements if provided
+      if [ -s /tmp/requirements.yml ]; then
+        echo 'Installing Ansible Galaxy requirements...'
+        ansible-galaxy collection install -r /tmp/requirements.yml ${var.galaxy_force_install ? "--force" : ""}
+        ansible-galaxy role install -r /tmp/requirements.yml ${var.galaxy_force_install ? "--force" : ""} || true
+        rm /tmp/requirements.yml
+      fi
+      
+      # Clone the Ansible repository
+      echo 'Cloning Ansible repository...'
+      git clone ${var.ansible_repo_url} ansible-repo
+      cd ansible-repo
+      
+      # Checkout specific branch/tag if specified
+      ${var.ansible_repo_branch != "" ? "git checkout ${var.ansible_repo_branch}" : "echo 'Using default branch'"}
+      
+      # Run the playbook locally
+      echo 'Running Ansible playbook...'
+      ansible-playbook ${var.playbook_path} \
+        --connection=local \
+        -i 'localhost,' \
+        ${var.extra_vars != "" ? "--extra-vars '${var.extra_vars}'" : ""} \
+        ${var.become ? "--become" : ""} \
+        ${var.ansible_extra_args}
+      
+      # Cleanup
+      cd /
+      rm -rf $WORK_DIR
+      echo 'Ansible configuration complete!'
+    EOT
+  ]
 }
