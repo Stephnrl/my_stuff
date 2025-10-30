@@ -1,82 +1,83 @@
 ---
-- name: Check MDATP health status
-  ansible.builtin.command: mdatp health --field healthy
-  register: mdatp_health_status
-  changed_when: false
-  failed_when: false
+# Installation settings
+mdatp_channel: "prod"  # Options: prod, insiders-fast, insiders-slow
+mdatp_installer_script: "mde_installer.sh"
+mdatp_install_dir: "/tmp/mde_install"
+mdatp_enable_realtime_protection: true
 
-- name: Display health status
-  ansible.builtin.debug:
-    msg: "MDATP Health Status: {{ mdatp_health_status.stdout }}"
+# Onboarding settings (these would come from your mdatp_onboard.json.j2)
+mdatp_onboarding_info: {}  # This will be populated by your template
 
-- name: Fail if MDATP is not healthy
-  ansible.builtin.fail:
-    msg: |
-      MDE is not healthy. Health status:
-      {{ mdatp_health_status.stdout }}
-      MDE deployment not complete.
-  when: mdatp_health_status.stdout != "true"
+# Post-installation validation
+mdatp_run_validation: true
+mdatp_validation_timeout: 300  # seconds
 
-- name: Run connectivity test
-  ansible.builtin.command: mdatp connectivity test
-  register: mdatp_connectivity_status
-  changed_when: false
-  failed_when: false
+# Configuration file deployment (optional)
+mdatp_deploy_managed_config: false
+mdatp_managed_config_path: "/etc/opt/microsoft/mdatp/managed/mdatp_managed.json"
 
-- name: Display connectivity status
-  ansible.builtin.debug:
-    msg: "{{ mdatp_connectivity_status.stdout }}"
+# Antivirus Engine Settings (for managed config)
+mdatp_av_enforcement_level: "real_time"
+mdatp_av_behavior_monitoring: "enabled"
+mdatp_av_scan_after_update: true
+mdatp_av_scan_archives: true
+mdatp_av_scan_history_max: 10000
+mdatp_av_scan_retention_days: 90
+mdatp_av_max_scan_threads: 2
+mdatp_av_exclusions_merge_policy: "merge"
+mdatp_av_allowed_threats: []
+mdatp_av_disallowed_threat_actions:
+  - "allow"
+  - "restore"
+mdatp_av_non_exec_mount_policy: "unmute"
+mdatp_av_unmonitored_filesystems:
+  - "nfs"
+  - "fuse"
+mdatp_av_enable_file_hash: false
+mdatp_av_threat_type_merge_policy: "merge"
+mdatp_av_threat_type_settings:
+  - key: "potentially_unwanted_application"
+    value: "block"
+  - key: "archive_bomb"
+    value: "audit"
+mdatp_av_scan_file_permissions: false
+mdatp_av_scan_file_ownership: false
+mdatp_av_scan_network_socket: false
 
-- name: Fail if connectivity test failed
-  ansible.builtin.fail:
-    msg: |
-      Connectivity test failed. Connectivity result:
-      {{ mdatp_connectivity_status.stdout }}
-      MDE deployment not complete.
-  when: mdatp_connectivity_status.rc != 0
+# Offline updates (optional)
+mdatp_av_offline_update_url: ""
+mdatp_av_offline_fallback_cloud: false
+mdatp_av_offline_update_mode: "disabled"
 
-- name: Check real-time protection status
-  ansible.builtin.command: mdatp health --field real_time_protection_enabled
-  register: mdatp_rtp_status
-  changed_when: false
+# Cloud Service Settings
+mdatp_cloud_enabled: true
+mdatp_cloud_diagnostic_level: "optional"
+mdatp_cloud_sample_submission: "safe"
+mdatp_cloud_auto_definition_update: true
+mdatp_cloud_proxy: ""
+mdatp_cloud_definition_update_interval: 28800
 
-- name: Enable real-time protection if disabled
-  ansible.builtin.command: mdatp config real-time-protection --value enabled
-  become: true
-  when:
-    - mdatp_enable_realtime_protection
-    - mdatp_rtp_status.stdout != "true"
-  changed_when: true
+# Features
+mdatp_features_module_load: "disabled"
+mdatp_features_file_permission_events: "disabled"
+mdatp_features_file_ownership_events: "disabled"
+mdatp_features_raw_socket_event: "disabled"
+mdatp_features_bootloader_calls: "disabled"
+mdatp_features_process_calls: "disabled"
+mdatp_features_pseudofs_calls: "disabled"
+mdatp_features_ebpf_module_load: "disabled"
+mdatp_features_lowfi_events: "disabled"
+mdatp_features_ebpf_provider: "enabled"
+mdatp_features_offline_verify_sig: "disabled"
 
-- name: Wait for RTP to enable
-  ansible.builtin.pause:
-    seconds: 5
-  when:
-    - mdatp_enable_realtime_protection
-    - mdatp_rtp_status.stdout != "true"
+# Network Protection
+mdatp_network_enforcement_level: "disabled"
+mdatp_network_disable_icmp: true
 
-- name: Download EICAR test file
-  ansible.builtin.get_url:
-    url: https://secure.eicar.org/eicar.com.txt
-    dest: /tmp/eicar.com.txt
-    mode: '0644'
-  register: eicar_download
-  failed_when: false
+# EDR Settings
+mdatp_edr_group_ids: ""
+mdatp_edr_tags: []
 
-- name: Wait for EICAR detection
-  ansible.builtin.pause:
-    seconds: 5
-
-- name: Check if EICAR file was quarantined
-  ansible.builtin.stat:
-    path: /tmp/eicar.com.txt
-  register: eicar_file_stat
-
-- name: Fail if EICAR file was not quarantined
-  ansible.builtin.fail:
-    msg: "EICAR file not deleted. MDE antivirus protection may not be working correctly."
-  when: eicar_file_stat.stat.exists
-
-- name: Display successful deployment message
-  ansible.builtin.debug:
-    msg: "✓ Microsoft Defender for Endpoint successfully deployed and validated!"
+# Exclusions
+mdatp_exclusions: []
+mdatp_exclusions_merge_policy: "admin_only"
