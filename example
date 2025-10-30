@@ -1,25 +1,82 @@
 ---
-- name: Create MDATP managed configuration directory
-  ansible.builtin.file:
-    path: "{{ mdatp_managed_config_path | dirname }}"
-    state: directory
-    mode: '0755'
-    owner: root
-    group: root
-    recurse: true
+- name: Check MDATP health status
+  ansible.builtin.command: mdatp health --field healthy
+  register: mdatp_health_status
+  changed_when: false
+  failed_when: false
 
-- name: Deploy Microsoft Defender ATP managed configuration
-  ansible.builtin.template:
-    src: mdatp_managed.json.j2
-    dest: "{{ mdatp_managed_config_path }}"
-    owner: root
-    group: root
-    mode: '0600'
-    validate: python3 -m json.tool %s
-  notify: restart mdatp
+- name: Display health status
+  ansible.builtin.debug:
+    msg: "MDATP Health Status: {{ mdatp_health_status.stdout }}"
 
-- name: Enable real-time protection
+- name: Fail if MDATP is not healthy
+  ansible.builtin.fail:
+    msg: |
+      MDE is not healthy. Health status:
+      {{ mdatp_health_status.stdout }}
+      MDE deployment not complete.
+  when: mdatp_health_status.stdout != "true"
+
+- name: Run connectivity test
+  ansible.builtin.command: mdatp connectivity test
+  register: mdatp_connectivity_status
+  changed_when: false
+  failed_when: false
+
+- name: Display connectivity status
+  ansible.builtin.debug:
+    msg: "{{ mdatp_connectivity_status.stdout }}"
+
+- name: Fail if connectivity test failed
+  ansible.builtin.fail:
+    msg: |
+      Connectivity test failed. Connectivity result:
+      {{ mdatp_connectivity_status.stdout }}
+      MDE deployment not complete.
+  when: mdatp_connectivity_status.rc != 0
+
+- name: Check real-time protection status
+  ansible.builtin.command: mdatp health --field real_time_protection_enabled
+  register: mdatp_rtp_status
+  changed_when: false
+
+- name: Enable real-time protection if disabled
   ansible.builtin.command: mdatp config real-time-protection --value enabled
   become: true
-  when: mdatp_enable_realtime_protection
-  changed_when: false
+  when:
+    - mdatp_enable_realtime_protection
+    - mdatp_rtp_status.stdout != "true"
+  changed_when: true
+
+- name: Wait for RTP to enable
+  ansible.builtin.pause:
+    seconds: 5
+  when:
+    - mdatp_enable_realtime_protection
+    - mdatp_rtp_status.stdout != "true"
+
+- name: Download EICAR test file
+  ansible.builtin.get_url:
+    url: https://secure.eicar.org/eicar.com.txt
+    dest: /tmp/eicar.com.txt
+    mode: '0644'
+  register: eicar_download
+  failed_when: false
+
+- name: Wait for EICAR detection
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Check if EICAR file was quarantined
+  ansible.builtin.stat:
+    path: /tmp/eicar.com.txt
+  register: eicar_file_stat
+
+- name: Fail if EICAR file was not quarantined
+  ansible.builtin.fail:
+    msg: "EICAR file not deleted. MDE antivirus protection may not be working correctly."
+  when: eicar_file_stat.stat.exists
+
+- name: Display successful deployment message
+  ansible.builtin.debug:
+    msg: "✓ Microsoft Defender for Endpoint successfully deployed and validated!"
