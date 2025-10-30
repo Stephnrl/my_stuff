@@ -1,0 +1,25 @@
+module "ansible_configuration" {
+  source = "./modules/ansible-runner"
+  
+  vm_id                   = azurerm_linux_virtual_machine.vm.id
+  vm_host                 = azurerm_public_ip.vm_pip.ip_address
+  ssh_user                = "azureuser"
+  ssh_private_key_path    = "~/.ssh/id_rsa"
+  
+  ansible_repo_url        = "https://github.com/your-org/ansible-playbooks.git"
+  ansible_repo_branch     = "main"
+  playbook_path           = "playbooks/configure-webserver.yml"
+  
+  # Galaxy requirements
+  galaxy_requirements_yml = file("${path.module}/requirements.yml")
+  galaxy_force_install    = false
+  
+  become = true
+  
+  extra_vars = jsonencode({
+    app_version = "1.2.3"
+    environment = "production"
+  })
+  
+  vm_ready_dependency = azurerm_linux_virtual_machine.vm
+}
