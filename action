@@ -1,16 +1,76 @@
-# .bashrc
+# modules/ansible-runner/main.tf
 
-# Source global definitions
-if [ -f /etc/bashrc ]; then
-    . /etc/bashrc
-fi
+terraform {
+  required_providers {
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+  }
+}
 
-# User specific aliases and functions
-alias ll='ls -lah'
-alias activate-ansible='source ~/ansible-venv/bin/activate'
+resource "null_resource" "run_ansible" {
+  triggers = {
+    vm_id            = var.vm_id
+    playbook_version = var.playbook_version
+    always_run       = var.always_run ? timestamp() : null
+  }
 
-# Show Ansible venv info
-if [ -f ~/ansible-venv/bin/activate ]; then
-    echo "Ansible venv available at ~/ansible-venv"
-    echo "Run 'activate-ansible' or 'source ~/ansible-venv/bin/activate'"
-fi
+  connection {
+    type        = "ssh"
+    user        = var.ssh_user
+    private_key = file(var.ssh_private_key_path)
+    host        = var.vm_host
+    timeout     = var.connection_timeout
+  }
+
+  # Upload requirements.yml if provided
+  provisioner "file" {
+    content     = var.galaxy_requirements_yml
+    destination = "/tmp/requirements.yml"
+  }
+
+  # Clone repo, install galaxy requirements, and run playbook
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "echo 'Starting Ansible configuration...'",
+      "",
+      "# Create working directory",
+      "WORK_DIR=$(mktemp -d)",
+      "cd $WORK_DIR",
+      "",
+      "# Install Galaxy requirements if provided",
+      "if [ -s /tmp/requirements.yml ]; then",
+      "  echo 'Installing Ansible Galaxy requirements...'",
+      "  ansible-galaxy collection install -r /tmp/requirements.yml ${var.galaxy_force_install ? "--force" : ""}",
+      "  ansible-galaxy role install -r /tmp/requirements.yml ${var.galaxy_force_install ? "--force" : ""} || true",
+      "  rm /tmp/requirements.yml",
+      "fi",
+      "",
+      "# Clone the Ansible repository",
+      "echo 'Cloning Ansible repository...'",
+      "git clone ${var.ansible_repo_url} ansible-repo",
+      "cd ansible-repo",
+      "",
+      "# Checkout specific branch/tag if specified",
+      var.ansible_repo_branch != "" ? "git checkout ${var.ansible_repo_branch}" : "echo 'Using default branch'",
+      "",
+      "# Run the playbook locally",
+      "echo 'Running Ansible playbook...'",
+      "ansible-playbook ${var.playbook_path} \\",
+      "  --connection=local \\",
+      "  -i 'localhost,' \\",
+      var.extra_vars != "" ? "  --extra-vars '${var.extra_vars}' \\" : "",
+      var.become ? "  --become \\" : "",
+      "  ${var.ansible_extra_args}",
+      "",
+      "# Cleanup",
+      "cd /",
+      "rm -rf $WORK_DIR",
+      "echo 'Ansible configuration complete!'"
+    ]
+  }
+
+  depends_on = [var.vm_ready_dependency]
+}
