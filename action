@@ -1,92 +1,24 @@
-# modules/ansible-runner/variables.tf
-
-variable "vm_id" {
-  description = "Azure VM ID to track changes"
-  type        = string
-}
-
-variable "vm_host" {
-  description = "IP or hostname of the VM"
-  type        = string
-}
-
-variable "ssh_user" {
-  description = "SSH username for the VM"
-  type        = string
-  default     = "azureuser"
-}
-
-variable "ssh_private_key_path" {
-  description = "Path to SSH private key for VM access"
-  type        = string
-}
-
-variable "connection_timeout" {
-  description = "SSH connection timeout"
-  type        = string
-  default     = "5m"
-}
-
-variable "ansible_repo_url" {
-  description = "Git URL of the Ansible repository"
-  type        = string
-}
-
-variable "ansible_repo_branch" {
-  description = "Branch or tag to checkout (optional)"
-  type        = string
-  default     = ""
-}
-
-variable "playbook_path" {
-  description = "Path to the playbook within the repo"
-  type        = string
-}
-
-variable "extra_vars" {
-  description = "Extra variables to pass to Ansible (JSON string)"
-  type        = string
-  default     = ""
-}
-
-variable "ansible_extra_args" {
-  description = "Additional arguments for ansible-playbook command"
-  type        = string
-  default     = ""
-}
-
-variable "become" {
-  description = "Run playbook with privilege escalation (sudo)"
-  type        = bool
-  default     = true
-}
-
-variable "galaxy_requirements_yml" {
-  description = "Content of requirements.yml for Ansible Galaxy"
-  type        = string
-  default     = ""
-}
-
-variable "galaxy_force_install" {
-  description = "Force reinstall of Galaxy collections/roles"
-  type        = bool
-  default     = false
-}
-
-variable "playbook_version" {
-  description = "Version/hash to trigger re-run when playbooks change"
-  type        = string
-  default     = "1"
-}
-
-variable "always_run" {
-  description = "Always run Ansible on terraform apply"
-  type        = bool
-  default     = false
-}
-
-variable "vm_ready_dependency" {
-  description = "Dependency to ensure VM is ready"
-  type        = any
-  default     = null
+module "ansible_configuration" {
+  source = "./modules/ansible-runner"
+  
+  # ... other variables
+  
+  galaxy_requirements_yml = yamlencode({
+    collections = [
+      {
+        name    = "community.general"
+        version = ">=7.0.0"
+      },
+      {
+        name    = "ansible.posix"
+        version = ">=1.5.0"
+      }
+    ]
+    roles = [
+      {
+        name    = "geerlingguy.docker"
+        version = "7.0.1"
+      }
+    ]
+  })
 }
