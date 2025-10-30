@@ -1,66 +1,67 @@
-{
-  "antivirusEngine": {
-    "enforcementLevel": "{{ mdatp_av_enforcement_level }}",
-    "behaviorMonitoring": "{{ mdatp_av_behavior_monitoring }}",
-    "scanAfterDefinitionUpdate": {{ mdatp_av_scan_after_update | lower }},
-    "scanArchives": {{ mdatp_av_scan_archives | lower }},
-    "scanHistoryMaximumItems": {{ mdatp_av_scan_history_max }},
-    "scanResultsRetentionDays": {{ mdatp_av_scan_retention_days }},
-    "maximumOnDemandScanThreads": {{ mdatp_av_max_scan_threads }},
-    "exclusionsMergePolicy": "{{ mdatp_av_exclusions_merge_policy }}",
-    "allowedThreats": {{ mdatp_av_allowed_threats | to_json }},
-    "disallowedThreatActions": {{ mdatp_av_disallowed_threat_actions | to_json }},
-    "nonExecMountPolicy": "{{ mdatp_av_non_exec_mount_policy }}",
-    "unmonitoredFilesystems": {{ mdatp_av_unmonitored_filesystems | to_json }},
-    "enableFileHashComputation": {{ mdatp_av_enable_file_hash | lower }},
-    "threatTypeSettingsMergePolicy": "{{ mdatp_av_threat_type_merge_policy }}",
-    "threatTypeSettings": {{ mdatp_av_threat_type_settings | to_json }},
-    "scanFileModifyPermissions": {{ mdatp_av_scan_file_permissions | lower }},
-    "scanFileModifyOwnership": {{ mdatp_av_scan_file_ownership | lower }},
-    "scanNetworkSocketEvent": {{ mdatp_av_scan_network_socket | lower }},
-{% if mdatp_av_offline_update_url %}
-    "offlineDefinitionUpdateUrl": "{{ mdatp_av_offline_update_url }}",
-    "offlineDefinitionUpdateFallbackToCloud": {{ mdatp_av_offline_fallback_cloud | lower }},
-    "offlineDefinitionUpdate": "{{ mdatp_av_offline_update_mode }}"
-{% else %}
-    "offlineDefinitionUpdate": "disabled"
-{% endif %}
-  },
-  "cloudService": {
-    "enabled": {{ mdatp_cloud_enabled | lower }},
-    "diagnosticLevel": "{{ mdatp_cloud_diagnostic_level }}",
-    "automaticSampleSubmissionConsent": "{{ mdatp_cloud_sample_submission }}",
-    "automaticDefinitionUpdateEnabled": {{ mdatp_cloud_auto_definition_update | lower }},
-{% if mdatp_cloud_proxy %}
-    "proxy": "{{ mdatp_cloud_proxy }}",
-{% endif %}
-    "definitionUpdatesInterval": {{ mdatp_cloud_definition_update_interval }}
-  },
-  "features": {
-    "moduleLoad": "{{ mdatp_features_module_load }}",
-    "supplementarySensorConfigurations": {
-      "enableFilePermissionEvents": "{{ mdatp_features_file_permission_events }}",
-      "enableFileOwnershipEvents": "{{ mdatp_features_file_ownership_events }}",
-      "enableRawSocketEvent": "{{ mdatp_features_raw_socket_event }}",
-      "enableBootLoaderCalls": "{{ mdatp_features_bootloader_calls }}",
-      "enableProcessCalls": "{{ mdatp_features_process_calls }}",
-      "enablePseudofsCalls": "{{ mdatp_features_pseudofs_calls }}",
-      "enableEbpfModuleLoadEvents": "{{ mdatp_features_ebpf_module_load }}",
-      "sendLowfiEvents": "{{ mdatp_features_lowfi_events }}"
-    },
-    "ebpfSupplementaryEventProvider": "{{ mdatp_features_ebpf_provider }}",
-    "offlineDefinitionUpdateVerifySig": "{{ mdatp_features_offline_verify_sig }}"
-  },
-  "networkProtection": {
-    "enforcementLevel": "{{ mdatp_network_enforcement_level }}",
-    "disableIcmpInspection": {{ mdatp_network_disable_icmp | lower }}
-  },
-  "edr": {
-    "groupIds": "{{ mdatp_edr_group_ids }}",
-    "tags": {{ mdatp_edr_tags | to_json }}
-  },
-  "exclusionSettings": {
-    "exclusions": {{ mdatp_exclusions | to_json }},
-    "mergePolicy": "{{ mdatp_exclusions_merge_policy }}"
-  }
-}
+---
+- name: Create MDE installation directory
+  ansible.builtin.file:
+    path: "{{ mdatp_install_dir }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy MDE installer script
+  ansible.builtin.copy:
+    src: "{{ mdatp_installer_script }}"
+    dest: "{{ mdatp_install_dir }}/{{ mdatp_installer_script }}"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Deploy onboarding configuration
+  ansible.builtin.template:
+    src: mdatp_onboard.json.j2
+    dest: "{{ mdatp_install_dir }}/mdatp_onboard.json"
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Check if MDATP is already installed
+  ansible.builtin.command: which mdatp
+  register: mdatp_installed
+  failed_when: false
+  changed_when: false
+
+- name: Install and onboard Microsoft Defender for Endpoint
+  ansible.builtin.command:
+    cmd: >
+      {{ mdatp_install_dir }}/{{ mdatp_installer_script }}
+      --install
+      --channel {{ mdatp_channel }}
+      --onboard {{ mdatp_install_dir }}/mdatp_onboard.json
+      {% if mdatp_enable_realtime_protection %}--passive-mode{% endif %}
+  register: mdatp_install_output
+  become: true
+  when: mdatp_installed.rc != 0
+  changed_when: mdatp_install_output.rc == 0
+
+- name: Display installation output
+  ansible.builtin.debug:
+    msg: "Return code [{{ mdatp_install_output.rc }}] {{ mdatp_install_output.stdout }}"
+  when: mdatp_installed.rc != 0
+
+- name: Display installation errors
+  ansible.builtin.debug:
+    msg: "{{ mdatp_install_output.stderr }}"
+  when:
+    - mdatp_installed.rc != 0
+    - mdatp_install_output.stderr is defined
+    - mdatp_install_output.stderr | length > 0
+
+- name: Wait for MDATP service to be ready
+  ansible.builtin.wait_for:
+    timeout: 30
+  when: mdatp_installed.rc != 0
+
+- name: Clean up installation directory
+  ansible.builtin.file:
+    path: "{{ mdatp_install_dir }}"
+    state: absent
+  when: mdatp_install_output.rc == 0
