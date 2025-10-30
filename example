@@ -1,67 +1,25 @@
 ---
-- name: Create MDE installation directory
+- name: Create MDATP managed configuration directory
   ansible.builtin.file:
-    path: "{{ mdatp_install_dir }}"
+    path: "{{ mdatp_managed_config_path | dirname }}"
     state: directory
     mode: '0755'
     owner: root
     group: root
+    recurse: true
 
-- name: Copy MDE installer script
-  ansible.builtin.copy:
-    src: "{{ mdatp_installer_script }}"
-    dest: "{{ mdatp_install_dir }}/{{ mdatp_installer_script }}"
-    mode: '0755'
-    owner: root
-    group: root
-
-- name: Deploy onboarding configuration
+- name: Deploy Microsoft Defender ATP managed configuration
   ansible.builtin.template:
-    src: mdatp_onboard.json.j2
-    dest: "{{ mdatp_install_dir }}/mdatp_onboard.json"
-    mode: '0600'
+    src: mdatp_managed.json.j2
+    dest: "{{ mdatp_managed_config_path }}"
     owner: root
     group: root
+    mode: '0600'
+    validate: python3 -m json.tool %s
+  notify: restart mdatp
 
-- name: Check if MDATP is already installed
-  ansible.builtin.command: which mdatp
-  register: mdatp_installed
-  failed_when: false
-  changed_when: false
-
-- name: Install and onboard Microsoft Defender for Endpoint
-  ansible.builtin.command:
-    cmd: >
-      {{ mdatp_install_dir }}/{{ mdatp_installer_script }}
-      --install
-      --channel {{ mdatp_channel }}
-      --onboard {{ mdatp_install_dir }}/mdatp_onboard.json
-      {% if mdatp_enable_realtime_protection %}--passive-mode{% endif %}
-  register: mdatp_install_output
+- name: Enable real-time protection
+  ansible.builtin.command: mdatp config real-time-protection --value enabled
   become: true
-  when: mdatp_installed.rc != 0
-  changed_when: mdatp_install_output.rc == 0
-
-- name: Display installation output
-  ansible.builtin.debug:
-    msg: "Return code [{{ mdatp_install_output.rc }}] {{ mdatp_install_output.stdout }}"
-  when: mdatp_installed.rc != 0
-
-- name: Display installation errors
-  ansible.builtin.debug:
-    msg: "{{ mdatp_install_output.stderr }}"
-  when:
-    - mdatp_installed.rc != 0
-    - mdatp_install_output.stderr is defined
-    - mdatp_install_output.stderr | length > 0
-
-- name: Wait for MDATP service to be ready
-  ansible.builtin.wait_for:
-    timeout: 30
-  when: mdatp_installed.rc != 0
-
-- name: Clean up installation directory
-  ansible.builtin.file:
-    path: "{{ mdatp_install_dir }}"
-    state: absent
-  when: mdatp_install_output.rc == 0
+  when: mdatp_enable_realtime_protection
+  changed_when: false
