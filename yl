@@ -1,0 +1,163 @@
+name: Build Packer Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - nonprod
+          - prod
+      os_version:
+        description: 'OS Version to build'
+        required: true
+        type: choice
+        options:
+          - rhel8
+          - rhel9
+          - all
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'packer-azure-images/packer/**'
+
+jobs:
+  packer-validate:
+    name: Validate Packer Templates
+    runs-on: [enterprise-nonprod]
+    strategy:
+      matrix:
+        os_version: [rhel8, rhel9]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: 'latest'
+
+      - name: Packer Format Check
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: packer fmt -check .
+
+      - name: Packer Init
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: packer init .
+
+      - name: Packer Validate
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: |
+          packer validate \
+            -var-file=../environments/nonprod.pkrvars.hcl \
+            .
+
+  packer-build-nonprod:
+    name: Build Images - NonProd
+    needs: packer-validate
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'nonprod') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop')
+    runs-on: [enterprise-nonprod]
+    environment: nonprod
+    strategy:
+      fail-fast: false
+      matrix:
+        os_version: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os_version == 'all' && fromJSON('["rhel8", "rhel9"]') || github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', github.event.inputs.os_version)) || fromJSON('["rhel8", "rhel9"]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_NONPROD }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_NONPROD }}
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: 'latest'
+
+      - name: Packer Init
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: packer init .
+
+      - name: Packer Build
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: |
+          packer build \
+            -var-file=../environments/nonprod.pkrvars.hcl \
+            -var "build_timestamp=$(date +%Y%m%d-%H%M%S)" \
+            .
+        env:
+          PKR_VAR_client_id: ${{ secrets.AZURE_CLIENT_ID_NONPROD }}
+          PKR_VAR_client_secret: ${{ secrets.AZURE_CLIENT_SECRET_NONPROD }}
+          PKR_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID_NONPROD }}
+          PKR_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Upload Packer Manifest
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packer-manifest-nonprod-${{ matrix.os_version }}
+          path: packer-azure-images/packer/${{ matrix.os_version }}/packer-manifest.json
+          retention-days: 30
+
+  packer-build-prod:
+    name: Build Images - Prod
+    needs: packer-validate
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: [enterprise-prod]
+    environment: prod
+    strategy:
+      fail-fast: false
+      matrix:
+        os_version: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.os_version == 'all' && fromJSON('["rhel8", "rhel9"]') || github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', github.event.inputs.os_version)) || fromJSON('["rhel8", "rhel9"]') }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_PROD }}
+
+      - name: Setup Packer
+        uses: hashicorp/setup-packer@main
+        with:
+          version: 'latest'
+
+      - name: Packer Init
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: packer init .
+
+      - name: Packer Build
+        working-directory: packer-azure-images/packer/${{ matrix.os_version }}
+        run: |
+          packer build \
+            -var-file=../environments/prod.pkrvars.hcl \
+            -var "build_timestamp=$(date +%Y%m%d-%H%M%S)" \
+            .
+        env:
+          PKR_VAR_client_id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          PKR_VAR_client_secret: ${{ secrets.AZURE_CLIENT_SECRET_PROD }}
+          PKR_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID_PROD }}
+          PKR_VAR_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+
+      - name: Upload Packer Manifest
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packer-manifest-prod-${{ matrix.os_version }}
+          path: packer-azure-images/packer/${{ matrix.os_version }}/packer-manifest.json
+          retention-days: 90
