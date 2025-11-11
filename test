@@ -1,0 +1,2 @@
+[System.IO.File]::WriteAllText("lara.pem", ($privateKey -replace "`r`n", "`n"), 
+    [System.Text.UTF8Encoding]::new($false))
