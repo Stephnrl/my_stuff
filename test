@@ -1,2 +1,130 @@
-[System.IO.File]::WriteAllText("lara.pem", ($privateKey -replace "`r`n", "`n"), 
-    [System.Text.UTF8Encoding]::new($false))
+name: 'Deploy Wiz Kubernetes Connector'
+description: 'Deploy Wiz Kubernetes integration to AKS using Helm'
+inputs:
+  namespace:
+    description: 'Kubernetes namespace for deployment'
+    required: false
+    default: 'wiz'
+  values-file:
+    description: 'Path to Helm values file'
+    required: false
+    default: 'values.yaml'
+  client-id:
+    description: 'Wiz API Client ID'
+    required: true
+  client-token:
+    description: 'Wiz API Client Token'
+    required: true
+  release-name:
+    description: 'Helm release name'
+    required: false
+    default: 'wiz-integration'
+  timeout:
+    description: 'Helm deployment timeout'
+    required: false
+    default: '10m'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [ ! -f "${{ inputs.values-file }}" ]; then
+          echo "::error::Values file not found: ${{ inputs.values-file }}"
+          exit 1
+        fi
+        echo "::notice::Starting Wiz Kubernetes Connector deployment"
+        echo "::notice::Namespace: ${{ inputs.namespace }}"
+        echo "::notice::Release: ${{ inputs.release-name }}"
+
+    - name: Add Helm repository
+      shell: bash
+      run: |
+        echo "::group::Adding Wiz Helm repository"
+        helm repo add wiz-sec https://charts.wiz.io
+        helm repo update
+        echo "::endgroup::"
+
+    - name: Create namespace
+      shell: bash
+      run: |
+        echo "::group::Ensuring namespace exists"
+        kubectl create namespace ${{ inputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+        echo "::endgroup::"
+
+    - name: Create API token secret
+      shell: bash
+      run: |
+        echo "::group::Creating/updating Kubernetes secret"
+        kubectl create secret generic wiz-api-token \
+          --from-literal=clientId="${{ inputs.client-id }}" \
+          --from-literal=clientToken="${{ inputs.client-token }}" \
+          --namespace=${{ inputs.namespace }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+        
+        if kubectl get secret wiz-api-token -n ${{ inputs.namespace }} &> /dev/null; then
+          echo "::notice::✓ Secret 'wiz-api-token' ready"
+        else
+          echo "::error::Failed to create secret"
+          exit 1
+        fi
+        echo "::endgroup::"
+
+    - name: Preview deployment images
+      shell: bash
+      run: |
+        echo "::group::Images to be deployed"
+        helm template ${{ inputs.release-name }} wiz-sec/wiz-kubernetes-integration \
+          --values ${{ inputs.values-file }} \
+          --namespace ${{ inputs.namespace }} \
+          | grep -E "^\s+image:" | sort -u || true
+        echo "::endgroup::"
+
+    - name: Deploy with Helm
+      shell: bash
+      run: |
+        echo "::group::Deploying Wiz connector via Helm"
+        helm upgrade ${{ inputs.release-name }} wiz-sec/wiz-kubernetes-integration \
+          --values ${{ inputs.values-file }} \
+          --namespace ${{ inputs.namespace }} \
+          --install \
+          --wait \
+          --timeout ${{ inputs.timeout }}
+        echo "::endgroup::"
+
+    - name: Verify deployment
+      shell: bash
+      run: |
+        echo "::group::Deployment status"
+        kubectl get all -n ${{ inputs.namespace }}
+        echo "::endgroup::"
+
+    - name: Check connector creation job
+      shell: bash
+      run: |
+        echo "::group::Checking connector creation job"
+        if kubectl get job -n ${{ inputs.namespace }} | grep -q "create-connector"; then
+          JOB_NAME=$(kubectl get job -n ${{ inputs.namespace }} -o name | grep create-connector | head -1)
+          JOB_STATUS=$(kubectl get $JOB_NAME -n ${{ inputs.namespace }} -o jsonpath='{.status.succeeded}')
+          
+          if [ "$JOB_STATUS" == "1" ]; then
+            echo "::notice::✓ Connector creation job completed successfully"
+          else
+            echo "::warning::Connector creation job may still be running"
+            echo "Check with: kubectl get jobs -n ${{ inputs.namespace }}"
+          fi
+        else
+          echo "::notice::No connector creation job found (may not be required)"
+        fi
+        echo "::endgroup::"
+
+    - name: Deployment summary
+      shell: bash
+      run: |
+        echo "::notice::Deployment complete!"
+        echo ""
+        echo "Useful commands:"
+        echo "  kubectl get all -n ${{ inputs.namespace }}"
+        echo "  kubectl logs -n ${{ inputs.namespace }} -l app.kubernetes.io/name=wiz-broker"
+        echo "  helm status ${{ inputs.release-name }} -n ${{ inputs.namespace }}"
