@@ -1,81 +1,13 @@
-@description('Environment name (dev, staging, prod)')
-param environmentName string
+using '../main.bicep'
 
-@description('Location for all resources')
-param location string = resourceGroup().location
-
-@description('AKS cluster name')
-param aksClusterName string
-
-@description('AKS resource group name (if different from current)')
-param aksResourceGroupName string = resourceGroup().name
-
-@description('Key Vault name')
-param keyVaultName string
-
-@description('Tags to apply to all resources')
-param tags object = {
-  environment: environmentName
+param environmentName = 'dev'
+param location = 'eastus'  // or your region
+param aksClusterName = 'your-aks-cluster-name'
+param aksResourceGroupName = 'your-aks-rg'  // if different
+param keyVaultName = 'your-keyvault-name'
+param tags = {
+  environment: 'dev'
   managedBy: 'bicep'
   application: 'wiz-connector'
+  costCenter: 'security'
 }
-
-// Get reference to existing AKS cluster
-resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-02-01' existing = {
-  name: aksClusterName
-  scope: resourceGroup(aksResourceGroupName)
-}
-
-// Get reference to existing Key Vault
-resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
-  name: keyVaultName
-}
-
-// Create managed identity for Wiz with federated credential
-module wizIdentity 'modules/managedIdentity.bicep' = {
-  name: 'wiz-identity-${environmentName}'
-  params: {
-    identityName: 'wiz-identity-${environmentName}'
-    location: location
-    tags: tags
-    oidcIssuerUrl: aksCluster.properties.oidcIssuerProfile.issuerUrl
-    k8sNamespace: 'wiz'
-    k8sServiceAccountName: 'wiz-service-account'
-  }
-}
-
-// Grant the managed identity access to Key Vault secrets
-resource keyVaultAccessPolicy 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
-  parent: keyVault
-  name: 'add'
-  properties: {
-    accessPolicies: [
-      {
-        tenantId: subscription().tenantId
-        objectId: wizIdentity.outputs.principalId
-        permissions: {
-          secrets: [
-            'get'
-            'list'
-          ]
-        }
-      }
-    ]
-  }
-}
-
-// Outputs for use in GitHub Actions
-@description('Client ID of the Wiz managed identity')
-output wizIdentityClientId string = wizIdentity.outputs.clientId
-
-@description('Principal ID of the Wiz managed identity')
-output wizIdentityPrincipalId string = wizIdentity.outputs.principalId
-
-@description('Name of the Wiz managed identity')
-output wizIdentityName string = wizIdentity.outputs.name
-
-@description('Key Vault name')
-output keyVaultName string = keyVault.name
-
-@description('AKS OIDC Issuer URL')
-output aksOidcIssuerUrl string = aksCluster.properties.oidcIssuerProfile.issuerUrl
