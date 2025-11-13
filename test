@@ -1,44 +1,94 @@
+# Wiz Kubernetes Connector - Production Configuration
+# Environment: Azure AKS (FedRAMP)
+# Cluster: cluster-dev-1
+
 global:
   wizApiToken:
     secret:
       create: false
       name: wiz-api-token
     clientEndpoint: fedramp
+  
+  # Logging (info for production)
+  logLevel: "info"
+  
+  # Common labels for all resources
+  commonLabels:
+    app.kubernetes.io/managed-by: "helm"
+    app.kubernetes.io/part-of: "wiz-security"
+    environment: "nonprod"
+    team: "platform"
+  
+  # Resource limits for connector jobs
+  wiz-kubernetes-connector:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 
 wiz-kubernetes-connector:
   image:
     registry: publicregistryfedrampwizio.azurecr.us/wiz-app
     repository: wiz-broker-fips
   
-  # Set resources for connector jobs
+  global:
+    image:
+      registry: publicregistryfedrampwizio.azurecr.us/wiz-app
+      repository: wiz-broker-fips
+  
+  enabled: true
+  
+  # Connector configuration
+  autoCreateConnector:
+    enabled: true
+    clusterFlavor: AKS
+    connectorName: "aks-cluster-dev-1"
+    autoDeleteConnectorEnabled: true  # Change to false if you want manual lifecycle
+    
+    # Tags for governance and compliance
+    clusterTags:
+      environment: "nonprod"
+      owner: "platform-team"
+      compliance: "fedramp"
+      cluster: "cluster-dev-1"
+      cost-center: "engineering"
+    
+    subscriptionTags:
+      environment: "nonprod"
+      managed-by: "platform-team"
+  
+  # Token refresh for security (requires K8s 1.22+)
+  refreshToken:
+    enabled: true
+    schedule: "0 */6 * * *"  # Every 6 hours
+  
+  # Resource limits for connector components
   resources:
     requests:
       cpu: 100m
       memory: 128Mi
     limits:
-      cpu: 500m      # Jobs may need burst capacity
+      cpu: 500m
       memory: 512Mi
   
-  global:
-    image:
-      registry: publicregistryfedrampwizio.azurecr.us/wiz-app
-      repository: wiz-broker-fips
-    
-    # Global resources for all components
-    wiz-kubernetes-connector:
-      resources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: 200m
-          memory: 256Mi
+  # Pod annotations for monitoring
+  podAnnotations:
+    prometheus.io/scrape: "true"
   
-  enabled: true
+  # Node placement (uncomment if using dedicated node pools)
+  # nodeSelector:
+  #   agentpool: system
   
-  autoCreateConnector:
-    clusterFlavor: AKS
+  # Tolerations (uncomment if system nodes are tainted)
+  # tolerations:
+  #   - key: "CriticalAddonsOnly"
+  #     operator: "Exists"
+  #     effect: "NoSchedule"
   
+  # Broker configuration
   wiz-broker:
     enabled: true
     
@@ -46,7 +96,7 @@ wiz-kubernetes-connector:
       registry: publicregistryfedrampwizio.azurecr.us/wiz-app
       repository: wiz-broker-fips
     
-    # Broker typically needs more resources (handles tunnel + API calls)
+    # Broker typically needs more resources
     resources:
       requests:
         cpu: 200m
@@ -54,3 +104,11 @@ wiz-kubernetes-connector:
       limits:
         cpu: 500m
         memory: 512Mi
+  
+  # HTTP Proxy (uncomment if required)
+  # httpProxyConfiguration:
+  #   enabled: true
+  #   create: true
+  #   httpProxy: "http://proxy.company.com:8080"
+  #   httpsProxy: "http://proxy.company.com:8080"
+  #   noProxyAddress: "kubernetes,kubernetes.default,kubernetes.default.svc,kubernetes.default.svc.cluster.local,.cluster.local,10.0.0.0/8"
