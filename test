@@ -1,13 +1,9 @@
-using '../main.bicep'
-
-param environmentName = 'dev'
-param location = 'eastus'  // or your region
-param aksClusterName = 'your-aks-cluster-name'
-param aksResourceGroupName = 'your-aks-rg'  // if different
-param keyVaultName = 'your-keyvault-name'
-param tags = {
-  environment: 'dev'
-  managedBy: 'bicep'
-  application: 'wiz-connector'
-  costCenter: 'security'
-}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wiz-service-account
+  namespace: wiz
+  annotations:
+    azure.workload.identity/client-id: "<IDENTITY_CLIENT_ID>"  # Replace with actual client ID
+  labels:
+    azure.workload.identity/use: "true"
