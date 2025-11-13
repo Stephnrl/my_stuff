@@ -1,9 +1,29 @@
-apiVersion: v1
-kind: ServiceAccount
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
 metadata:
-  name: wiz-service-account
+  name: wiz-api-credentials
   namespace: wiz
-  annotations:
-    azure.workload.identity/client-id: "<IDENTITY_CLIENT_ID>"  # Replace with actual client ID
-  labels:
-    azure.workload.identity/use: "true"
+spec:
+  provider: azure
+  secretObjects:
+  - secretName: wiz-api-token
+    type: Opaque
+    data:
+    - objectName: wiz-client-id
+      key: clientId
+    - objectName: wiz-client-token
+      key: clientToken
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "false"
+    clientID: "<IDENTITY_CLIENT_ID>"       # Replace with actual client ID
+    keyvaultName: "<your-keyvault-name>"   # Replace with your Key Vault name
+    tenantId: "<your-tenant-id>"           # Replace with your tenant ID
+    objects: |
+      array:
+        - |
+          objectName: wiz-client-id
+          objectType: secret
+        - |
+          objectName: wiz-client-token
+          objectType: secret
