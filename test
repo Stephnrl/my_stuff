@@ -1,45 +1,56 @@
-name: Deploy Wiz Connector
+global:
+  wizApiToken:
+    secret:
+      create: false
+      name: wiz-api-token
+    clientEndpoint: fedramp
 
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Target environment'
-        required: true
-        type: choice
-        options:
-          - dev
-          - staging
-          - prod
-      namespace:
-        description: 'Kubernetes namespace'
-        required: false
-        default: 'wiz'
-
-jobs:
-  deploy:
-    runs-on: [self-hosted, internal]  # Your internal runner label
-    environment: ${{ github.event.inputs.environment }}
+wiz-kubernetes-connector:
+  image:
+    registry: publicregistryfedrampwizio.azurecr.us/wiz-app
+    repository: wiz-broker-fips
+  
+  # Set resources for connector jobs
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m      # Jobs may need burst capacity
+      memory: 512Mi
+  
+  global:
+    image:
+      registry: publicregistryfedrampwizio.azurecr.us/wiz-app
+      repository: wiz-broker-fips
     
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Set AKS context
-        run: |
-          az aks get-credentials \
-            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
-            --name ${{ secrets.AKS_CLUSTER_NAME }}
-
-      - name: Deploy Wiz Connector
-        uses: ./.github/actions/deploy-wiz-connector
-        with:
-          namespace: ${{ github.event.inputs.namespace }}
-          values-file: 'environments/${{ github.event.inputs.environment }}/values.yaml'
-          client-id: ${{ secrets.WIZ_CLIENT_ID }}
-          client-token: ${{ secrets.WIZ_CLIENT_TOKEN }}
+    # Global resources for all components
+    wiz-kubernetes-connector:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+  
+  enabled: true
+  
+  autoCreateConnector:
+    clusterFlavor: AKS
+  
+  wiz-broker:
+    enabled: true
+    
+    image:
+      registry: publicregistryfedrampwizio.azurecr.us/wiz-app
+      repository: wiz-broker-fips
+    
+    # Broker typically needs more resources (handles tunnel + API calls)
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
