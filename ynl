@@ -1,0 +1,74 @@
+---
+- name: Deploy Wiz Connector to AKS
+  hosts: localhost
+  connection: local
+  vars:
+    namespace: wiz-system
+    wiz_chart_version: "latest"
+    keyvault_name: "your-keyvault"
+    
+  tasks:
+    - name: Create namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ namespace }}"
+
+    - name: Create service account
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: wiz-connector
+            namespace: "{{ namespace }}"
+            annotations:
+              azure.workload.identity/client-id: "{{ azure_client_id }}"
+
+    - name: Install Azure Key Vault CSI Driver
+      kubernetes.core.helm:
+        name: csi-secrets-store-provider-azure
+        chart_ref: csi-secrets-store-provider-azure/csi-secrets-store-provider-azure
+        release_namespace: kube-system
+        create_namespace: true
+
+    - name: Create SecretProviderClass
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: secrets-store.csi.x-k8s.io/v1
+          kind: SecretProviderClass
+          metadata:
+            name: wiz-keyvault-sync
+            namespace: "{{ namespace }}"
+          spec:
+            provider: azure
+            parameters:
+              usePodIdentity: "false"
+              useVMManagedIdentity: "true"
+              keyvaultName: "{{ keyvault_name }}"
+              objects: |
+                array:
+                  - |
+                    objectName: wiz-client-id
+                    objectType: secret
+                  - |
+                    objectName: wiz-client-secret
+                    objectType: secret
+
+    - name: Deploy Wiz Connector with Helm
+      kubernetes.core.helm:
+        name: wiz-connector
+        chart_ref: wiz-sec/wiz-kubernetes-connector
+        chart_version: "{{ wiz_chart_version }}"
+        release_namespace: "{{ namespace }}"
+        values_files:
+          - /path/to/your/values.yaml
+        values:
+          serviceAccount:
+            create: false
+            name: wiz-connector
