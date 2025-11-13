@@ -1,49 +1,81 @@
-@description('Name of the managed identity')
-param identityName string
+@description('Environment name (dev, staging, prod)')
+param environmentName string
 
-@description('Location for the managed identity')
+@description('Location for all resources')
 param location string = resourceGroup().location
 
-@description('Tags to apply to the managed identity')
-param tags object = {}
+@description('AKS cluster name')
+param aksClusterName string
 
-@description('AKS OIDC Issuer URL for federated credential')
-param oidcIssuerUrl string
+@description('AKS resource group name (if different from current)')
+param aksResourceGroupName string = resourceGroup().name
 
-@description('Kubernetes namespace for the service account')
-param k8sNamespace string = 'wiz'
+@description('Key Vault name')
+param keyVaultName string
 
-@description('Kubernetes service account name')
-param k8sServiceAccountName string = 'wiz-service-account'
-
-// Create the managed identity
-resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: identityName
-  location: location
-  tags: tags
+@description('Tags to apply to all resources')
+param tags object = {
+  environment: environmentName
+  managedBy: 'bicep'
+  application: 'wiz-connector'
 }
 
-// Create federated identity credential for workload identity
-resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: managedIdentity
-  name: 'wiz-federated-credential'
+// Get reference to existing AKS cluster
+resource aksCluster 'Microsoft.ContainerService/managedClusters@2024-02-01' existing = {
+  name: aksClusterName
+  scope: resourceGroup(aksResourceGroupName)
+}
+
+// Get reference to existing Key Vault
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
+  name: keyVaultName
+}
+
+// Create managed identity for Wiz with federated credential
+module wizIdentity 'modules/managedIdentity.bicep' = {
+  name: 'wiz-identity-${environmentName}'
+  params: {
+    identityName: 'wiz-identity-${environmentName}'
+    location: location
+    tags: tags
+    oidcIssuerUrl: aksCluster.properties.oidcIssuerProfile.issuerUrl
+    k8sNamespace: 'wiz'
+    k8sServiceAccountName: 'wiz-service-account'
+  }
+}
+
+// Grant the managed identity access to Key Vault secrets
+resource keyVaultAccessPolicy 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
+  parent: keyVault
+  name: 'add'
   properties: {
-    issuer: oidcIssuerUrl
-    subject: 'system:serviceaccount:${k8sNamespace}:${k8sServiceAccountName}'
-    audiences: [
-      'api://AzureADTokenExchange'
+    accessPolicies: [
+      {
+        tenantId: subscription().tenantId
+        objectId: wizIdentity.outputs.principalId
+        permissions: {
+          secrets: [
+            'get'
+            'list'
+          ]
+        }
+      }
     ]
   }
 }
 
-@description('Client ID of the managed identity')
-output clientId string = managedIdentity.properties.clientId
+// Outputs for use in GitHub Actions
+@description('Client ID of the Wiz managed identity')
+output wizIdentityClientId string = wizIdentity.outputs.clientId
 
-@description('Principal ID of the managed identity')
-output principalId string = managedIdentity.properties.principalId
+@description('Principal ID of the Wiz managed identity')
+output wizIdentityPrincipalId string = wizIdentity.outputs.principalId
 
-@description('Resource ID of the managed identity')
-output resourceId string = managedIdentity.id
+@description('Name of the Wiz managed identity')
+output wizIdentityName string = wizIdentity.outputs.name
 
-@description('Name of the managed identity')
-output name string = managedIdentity.name
+@description('Key Vault name')
+output keyVaultName string = keyVault.name
+
+@description('AKS OIDC Issuer URL')
+output aksOidcIssuerUrl string = aksCluster.properties.oidcIssuerProfile.issuerUrl
