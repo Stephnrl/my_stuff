@@ -4,66 +4,28 @@
   connection: local
   vars:
     namespace: wiz-system
-    wiz_chart_version: "latest"
-    keyvault_name: "your-keyvault"
+    jfrog_helm_repo: "https://your-company.jfrog.io/artifactory/helm-virtual"
+    jfrog_username: "{{ lookup('env', 'JFROG_USER') }}"
+    jfrog_password: "{{ lookup('env', 'JFROG_PASSWORD') }}"
+    wiz_chart_version: "1.2.3"  # Pin your version
     
   tasks:
-    - name: Create namespace
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Namespace
-          metadata:
-            name: "{{ namespace }}"
+    - name: Add JFrog Helm repository
+      kubernetes.core.helm_repository:
+        name: jfrog-helm
+        repo_url: "{{ jfrog_helm_repo }}"
+        username: "{{ jfrog_username }}"
+        password: "{{ jfrog_password }}"
 
-    - name: Create service account
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: ServiceAccount
-          metadata:
-            name: wiz-connector
-            namespace: "{{ namespace }}"
-            annotations:
-              azure.workload.identity/client-id: "{{ azure_client_id }}"
+    - name: Update Helm repo cache
+      command: helm repo update
 
-    - name: Install Azure Key Vault CSI Driver
-      kubernetes.core.helm:
-        name: csi-secrets-store-provider-azure
-        chart_ref: csi-secrets-store-provider-azure/csi-secrets-store-provider-azure
-        release_namespace: kube-system
-        create_namespace: true
+    # ... your other tasks (namespace, service account, etc) ...
 
-    - name: Create SecretProviderClass
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: secrets-store.csi.x-k8s.io/v1
-          kind: SecretProviderClass
-          metadata:
-            name: wiz-keyvault-sync
-            namespace: "{{ namespace }}"
-          spec:
-            provider: azure
-            parameters:
-              usePodIdentity: "false"
-              useVMManagedIdentity: "true"
-              keyvaultName: "{{ keyvault_name }}"
-              objects: |
-                array:
-                  - |
-                    objectName: wiz-client-id
-                    objectType: secret
-                  - |
-                    objectName: wiz-client-secret
-                    objectType: secret
-
-    - name: Deploy Wiz Connector with Helm
+    - name: Deploy Wiz Connector from JFrog
       kubernetes.core.helm:
         name: wiz-connector
-        chart_ref: wiz-sec/wiz-kubernetes-connector
+        chart_ref: jfrog-helm/wiz-kubernetes-connector  # Reference the repo you added
         chart_version: "{{ wiz_chart_version }}"
         release_namespace: "{{ namespace }}"
         values_files:
