@@ -1,266 +1,49 @@
-name: 'Deploy Wiz Kubernetes Connector'
-description: 'Deploy Wiz Kubernetes integration to AKS using Helm'
-inputs:
-  namespace:
-    description: 'Kubernetes namespace for deployment'
-    required: false
-    default: 'wiz'
-  values-file:
-    description: 'Path to Helm values file'
-    required: false
-    default: 'values.yaml'
-  use-keyvault:
-    description: 'Use Azure Key Vault for secrets'
-    required: false
-    default: 'true'
-  keyvault-name:
-    description: 'Azure Key Vault name'
-    required: false
-  tenant-id:
-    description: 'Azure Tenant ID'
-    required: false
-  aks-identity-client-id:
-    description: 'AKS Kubelet Managed Identity Client ID'
-    required: false
-  # Keep these for backward compatibility if use-keyvault is false
-  client-id:
-    description: 'Wiz API Client ID (legacy)'
-    required: false
-  client-token:
-    description: 'Wiz API Client Token (legacy)'
-    required: false
-  release-name:
-    description: 'Helm release name'
-    required: false
-    default: 'wiz-integration'
-  timeout:
-    description: 'Helm deployment timeout'
-    required: false
-    default: '10m'
-  helm-repo-url:
-    description: 'Helm repository URL (internal JFrog)'
-    required: false
-    default: 'https://your-jfrog.company.com/artifactory/helm-virtual'
-  helm-repo-username:
-    description: 'Helm repository username'
-    required: false
-  helm-repo-password:
-    description: 'Helm repository password'
-    required: false
+@description('Name of the managed identity')
+param identityName string
 
-runs:
-  using: 'composite'
-  steps:
-    - name: Validate inputs
-      shell: bash
-      run: |
-        if [ ! -f "${{ inputs.values-file }}" ]; then
-          echo "::error::Values file not found: ${{ inputs.values-file }}"
-          exit 1
-        fi
-        
-        if [ "${{ inputs.use-keyvault }}" == "true" ]; then
-          if [ -z "${{ inputs.keyvault-name }}" ] || [ -z "${{ inputs.tenant-id }}" ] || [ -z "${{ inputs.aks-identity-client-id }}" ]; then
-            echo "::error::When use-keyvault is true, keyvault-name, tenant-id, and aks-identity-client-id are required"
-            exit 1
-          fi
-        else
-          if [ -z "${{ inputs.client-id }}" ] || [ -z "${{ inputs.client-token }}" ]; then
-            echo "::error::When use-keyvault is false, client-id and client-token are required"
-            exit 1
-          fi
-        fi
-        
-        echo "::notice::Starting Wiz Kubernetes Connector deployment"
-        echo "::notice::Namespace: ${{ inputs.namespace }}"
-        echo "::notice::Using Key Vault: ${{ inputs.use-keyvault }}"
+@description('Location for the managed identity')
+param location string = resourceGroup().location
 
-    - name: Add Helm repository
-      shell: bash
-      env:
-        HELM_REPO_URL: ${{ inputs.helm-repo-url }}
-        HELM_REPO_USER: ${{ inputs.helm-repo-username }}
-        HELM_REPO_PASS: ${{ inputs.helm-repo-password }}
-      run: |
-        echo "::group::Adding internal Helm repository"
-        if [ -n "$HELM_REPO_USER" ] && [ -n "$HELM_REPO_PASS" ]; then
-          helm repo add wiz-sec "$HELM_REPO_URL" \
-            --username "$HELM_REPO_USER" \
-            --password "$HELM_REPO_PASS"
-        else
-          helm repo add wiz-sec "$HELM_REPO_URL"
-        fi
-        helm repo update
-        echo "::endgroup::"
+@description('Tags to apply to the managed identity')
+param tags object = {}
 
-    - name: Create namespace
-      shell: bash
-      run: |
-        echo "::group::Ensuring namespace exists"
-        kubectl create namespace ${{ inputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
-        echo "::endgroup::"
+@description('AKS OIDC Issuer URL for federated credential')
+param oidcIssuerUrl string
 
-    - name: Create SecretProviderClass (Key Vault)
-      if: inputs.use-keyvault == 'true'
-      shell: bash
-      run: |
-        echo "::group::Creating SecretProviderClass for Azure Key Vault"
-        cat <<EOF | kubectl apply -f -
-        apiVersion: secrets-store.csi.x-k8s.io/v1
-        kind: SecretProviderClass
-        metadata:
-          name: wiz-api-credentials
-          namespace: ${{ inputs.namespace }}
-        spec:
-          provider: azure
-          secretObjects:
-          - secretName: wiz-api-token
-            type: Opaque
-            data:
-            - objectName: wiz-client-id
-              key: clientId
-            - objectName: wiz-client-token
-              key: clientToken
-          parameters:
-            usePodIdentity: "false"
-            useVMManagedIdentity: "true"
-            userAssignedIdentityID: "${{ inputs.aks-identity-client-id }}"
-            keyvaultName: "${{ inputs.keyvault-name }}"
-            tenantId: "${{ inputs.tenant-id }}"
-            objects: |
-              array:
-                - |
-                  objectName: wiz-client-id
-                  objectType: secret
-                - |
-                  objectName: wiz-client-token
-                  objectType: secret
-        EOF
-        echo "::notice::✓ SecretProviderClass created"
-        echo "::endgroup::"
+@description('Kubernetes namespace for the service account')
+param k8sNamespace string = 'wiz'
 
-    - name: Create temporary pod to sync secrets
-      if: inputs.use-keyvault == 'true'
-      shell: bash
-      run: |
-        echo "::group::Creating temporary pod to sync Key Vault secrets"
-        cat <<EOF | kubectl apply -f -
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: wiz-secret-sync
-          namespace: ${{ inputs.namespace }}
-        spec:
-          containers:
-          - name: busybox
-            image: busybox:latest
-            command:
-            - sleep
-            - "30"
-            volumeMounts:
-            - name: secrets-store
-              mountPath: "/mnt/secrets-store"
-              readOnly: true
-          volumes:
-          - name: secrets-store
-            csi:
-              driver: secrets-store.csi.k8s.io
-              readOnly: true
-              volumeAttributes:
-                secretProviderClass: wiz-api-credentials
-        EOF
-        
-        # Wait for pod to start and sync secrets
-        echo "::notice::Waiting for secret sync..."
-        kubectl wait --for=condition=Ready pod/wiz-secret-sync -n ${{ inputs.namespace }} --timeout=60s || true
-        sleep 5
-        
-        # Verify secret was created
-        if kubectl get secret wiz-api-token -n ${{ inputs.namespace }} &> /dev/null; then
-          echo "::notice::✓ Secret 'wiz-api-token' synced from Key Vault"
-        else
-          echo "::error::Failed to sync secret from Key Vault"
-          kubectl describe pod wiz-secret-sync -n ${{ inputs.namespace }}
-          exit 1
-        fi
-        
-        # Clean up the temporary pod
-        kubectl delete pod wiz-secret-sync -n ${{ inputs.namespace }} --ignore-not-found=true
-        echo "::endgroup::"
+@description('Kubernetes service account name')
+param k8sServiceAccountName string = 'wiz-service-account'
 
-    - name: Create API token secret (Legacy)
-      if: inputs.use-keyvault == 'false'
-      shell: bash
-      run: |
-        echo "::group::Creating Kubernetes secret (legacy method)"
-        kubectl create secret generic wiz-api-token \
-          --from-literal=clientId="${{ inputs.client-id }}" \
-          --from-literal=clientToken="${{ inputs.client-token }}" \
-          --namespace=${{ inputs.namespace }} \
-          --dry-run=client -o yaml | kubectl apply -f -
-        
-        if kubectl get secret wiz-api-token -n ${{ inputs.namespace }} &> /dev/null; then
-          echo "::notice::✓ Secret 'wiz-api-token' ready"
-        else
-          echo "::error::Failed to create secret"
-          exit 1
-        fi
-        echo "::endgroup::"
+// Create the managed identity
+resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: identityName
+  location: location
+  tags: tags
+}
 
-    - name: Preview deployment images
-      shell: bash
-      run: |
-        echo "::group::Images to be deployed"
-        helm template ${{ inputs.release-name }} wiz-sec/wiz-kubernetes-integration \
-          --values ${{ inputs.values-file }} \
-          --namespace ${{ inputs.namespace }} \
-          | grep -E "^\s+image:" | sort -u || true
-        echo "::endgroup::"
+// Create federated identity credential for workload identity
+resource federatedCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: managedIdentity
+  name: 'wiz-federated-credential'
+  properties: {
+    issuer: oidcIssuerUrl
+    subject: 'system:serviceaccount:${k8sNamespace}:${k8sServiceAccountName}'
+    audiences: [
+      'api://AzureADTokenExchange'
+    ]
+  }
+}
 
-    - name: Deploy with Helm
-      shell: bash
-      run: |
-        echo "::group::Deploying Wiz connector via Helm"
-        helm upgrade ${{ inputs.release-name }} wiz-sec/wiz-kubernetes-integration \
-          --values ${{ inputs.values-file }} \
-          --namespace ${{ inputs.namespace }} \
-          --install \
-          --wait \
-          --timeout ${{ inputs.timeout }}
-        echo "::endgroup::"
+@description('Client ID of the managed identity')
+output clientId string = managedIdentity.properties.clientId
 
-    - name: Verify deployment
-      shell: bash
-      run: |
-        echo "::group::Deployment status"
-        kubectl get all -n ${{ inputs.namespace }}
-        echo "::endgroup::"
+@description('Principal ID of the managed identity')
+output principalId string = managedIdentity.properties.principalId
 
-    - name: Check connector creation job
-      shell: bash
-      run: |
-        echo "::group::Checking connector creation job"
-        if kubectl get job -n ${{ inputs.namespace }} | grep -q "create-connector"; then
-          JOB_NAME=$(kubectl get job -n ${{ inputs.namespace }} -o name | grep create-connector | head -1)
-          JOB_STATUS=$(kubectl get $JOB_NAME -n ${{ inputs.namespace }} -o jsonpath='{.status.succeeded}')
-          
-          if [ "$JOB_STATUS" == "1" ]; then
-            echo "::notice::✓ Connector creation job completed successfully"
-          else
-            echo "::warning::Connector creation job may still be running"
-            echo "Check with: kubectl get jobs -n ${{ inputs.namespace }}"
-          fi
-        else
-          echo "::notice::No connector creation job found"
-        fi
-        echo "::endgroup::"
+@description('Resource ID of the managed identity')
+output resourceId string = managedIdentity.id
 
-    - name: Deployment summary
-      shell: bash
-      run: |
-        echo "::notice::Deployment complete!"
-        echo ""
-        echo "Useful commands:"
-        echo "  kubectl get all -n ${{ inputs.namespace }}"
-        echo "  kubectl logs -n ${{ inputs.namespace }} -l app.kubernetes.io/name=wiz-broker"
-        echo "  helm status ${{ inputs.release-name }} -n ${{ inputs.namespace }}"
+@description('Name of the managed identity')
+output name string = managedIdentity.name
