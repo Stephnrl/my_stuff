@@ -1,29 +1,113 @@
-apiVersion: secrets-store.csi.x-k8s.io/v1
-kind: SecretProviderClass
-metadata:
-  name: wiz-api-credentials
-  namespace: wiz
-spec:
-  provider: azure
-  secretObjects:
-  - secretName: wiz-api-token
-    type: Opaque
-    data:
-    - objectName: wiz-client-id
-      key: clientId
-    - objectName: wiz-client-token
-      key: clientToken
-  parameters:
-    usePodIdentity: "false"
-    useVMManagedIdentity: "false"
-    clientID: "<IDENTITY_CLIENT_ID>"       # Replace with actual client ID
-    keyvaultName: "<your-keyvault-name>"   # Replace with your Key Vault name
-    tenantId: "<your-tenant-id>"           # Replace with your tenant ID
-    objects: |
-      array:
-        - |
-          objectName: wiz-client-id
-          objectType: secret
-        - |
-          objectName: wiz-client-token
-          objectType: secret
+# plugins/action/azure_oidc_login.py
+from ansible.plugins.action import ActionBase
+from ansible.errors import AnsibleError
+import os
+import json
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode
+from urllib.error import HTTPError, URLError
+
+class ActionModule(ActionBase):
+    
+    def run(self, tmp=None, task_vars=None):
+        if task_vars is None:
+            task_vars = dict()
+            
+        result = super(ActionModule, self).run(tmp, task_vars)
+        
+        try:
+            # Get required parameters
+            tenant_id = self._task.args.get('tenant_id')
+            client_id = self._task.args.get('client_id')
+            subscription_id = self._task.args.get('subscription_id')
+            use_gcc_high = self._task.args.get('gcc_high', True)
+            
+            if not all([tenant_id, client_id, subscription_id]):
+                raise AnsibleError('tenant_id, client_id, and subscription_id are required')
+            
+            # Step 1: Get OIDC token from GitHub
+            token_url = os.environ.get('ACTIONS_ID_TOKEN_REQUEST_URL')
+            token_request_token = os.environ.get('ACTIONS_ID_TOKEN_REQUEST_TOKEN')
+            
+            if not token_url or not token_request_token:
+                raise AnsibleError(
+                    'GitHub OIDC environment variables not found. '
+                    'Ensure permissions: id-token: write is set in workflow'
+                )
+            
+            # Request OIDC token with audience for Azure
+            oidc_request_url = f"{token_url}&audience=api://AzureADTokenExchange"
+            oidc_request = Request(oidc_request_url)
+            oidc_request.add_header('Authorization', f'Bearer {token_request_token}')
+            oidc_request.add_header('Accept', 'application/json')
+            
+            with urlopen(oidc_request) as response:
+                oidc_data = json.loads(response.read().decode())
+                oidc_token = oidc_data.get('value')
+            
+            if not oidc_token:
+                raise AnsibleError('Failed to retrieve OIDC token from GitHub')
+            
+            # Step 2: Exchange OIDC token for Azure access token
+            # Use GCC High endpoints for government cloud
+            if use_gcc_high:
+                login_url = f'https://login.microsoftonline.us/{tenant_id}/oauth2/v2.0/token'
+                scope = 'https://management.usgovcloudapi.net/.default'
+            else:
+                login_url = f'https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token'
+                scope = 'https://management.azure.com/.default'
+            
+            token_data = {
+                'client_id': client_id,
+                'client_assertion_type': 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+                'client_assertion': oidc_token,
+                'scope': scope,
+                'grant_type': 'client_credentials'
+            }
+            
+            encoded_data = urlencode(token_data).encode('utf-8')
+            azure_request = Request(login_url, data=encoded_data)
+            azure_request.add_header('Content-Type', 'application/x-www-form-urlencoded')
+            
+            with urlopen(azure_request) as response:
+                azure_data = json.loads(response.read().decode())
+                access_token = azure_data.get('access_token')
+            
+            if not access_token:
+                raise AnsibleError('Failed to retrieve Azure access token')
+            
+            # Step 3: Set environment variables for Azure collection modules
+            os.environ['AZURE_ACCESS_TOKEN'] = access_token
+            os.environ['AZURE_SUBSCRIPTION_ID'] = subscription_id
+            
+            # For GCC High, also set the cloud environment
+            if use_gcc_high:
+                os.environ['AZURE_CLOUD_ENVIRONMENT'] = 'AzureUSGovernment'
+            
+            result.update({
+                'changed': False,
+                'msg': 'Successfully authenticated with Azure using OIDC',
+                'ansible_facts': {
+                    'azure_authenticated': True,
+                    'azure_subscription_id': subscription_id
+                }
+            })
+            
+        except HTTPError as e:
+            error_body = e.read().decode() if e.fp else 'No error details'
+            result['failed'] = True
+            result['msg'] = f'HTTP Error {e.code}: {error_body}'
+            
+        except URLError as e:
+            result['failed'] = True
+            result['msg'] = f'URL Error: {str(e.reason)}'
+            
+        except AnsibleError as e:
+            result['failed'] = True
+            result['msg'] = str(e)
+            
+        except Exception as e:
+            result['failed'] = True
+            result['msg'] = f'Unexpected error: {str(e)}'
+        
+        return result
