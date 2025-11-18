@@ -1,97 +1,152 @@
-# Wiz Connector Deployment for Azure AKS
-
-## Overview
-
-This repository contains the standardized deployment configuration for the Wiz Security connector to Azure Kubernetes Service (AKS) clusters. The deployment follows enterprise security best practices using:
-
-- **Azure Key Vault CSI Driver** with User Managed Identity (UMI)
-- **Workload Identity (OIDC Federation)** for secure authentication
-- **Centralized Ansible roles** for consistent deployments
-- **GitHub Actions** with OIDC for automated CI/CD
-- **Private endpoints** for Key Vault access
-- **Pre-created service accounts** (no auto-creation by Helm)
-
-## Why This Documentation Exists
-
-The Wiz connector deployment process was previously undocumented, relying on tribal knowledge and requiring engineers to reverse-engineer deployments from previous implementations. This documentation standardizes the process to:
-
-- Reduce deployment time from hours to minutes
-- Ensure consistent security practices across all clusters
-- Enable self-service deployments by teams
-- Provide troubleshooting guidance
-- Maintain compliance with organizational standards
-
-## Documentation Structure
-
-- **[Prerequisites](docs/prerequisites.md)** - Required infrastructure, permissions, and tools
-- **[Architecture](docs/architecture.md)** - System design and component relationships
-- **[Deployment Guide](docs/deployment-guide.md)** - Step-by-step deployment instructions
-- **[Configuration Reference](docs/configuration.md)** - values.yaml and variable documentation
-- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
-- **[Development](docs/development.md)** - Contributing and testing changes
-
-## Quick Start
-
-1. **Ensure prerequisites are met** (see [Prerequisites](docs/prerequisites.md))
-2. **Review the architecture** (see [Architecture](docs/architecture.md))
-3. **Configure your values.yaml** (see [Configuration Reference](docs/configuration.md))
-4. **Run the deployment workflow** (see [Deployment Guide](docs/deployment-guide.md))
-
-## Architecture at a Glance
-
-```
-GitHub Actions (OIDC) → Azure SPN → AKS Cluster
-                                ↓
-                    Ansible Deployment Role
-                                ↓
-            ┌───────────────────┴───────────────────┐
-            ▼                                       ▼
-    Wiz Connector Pod                    Azure Key Vault
-            ↓                          (Private Endpoint)
-    Service Account (UMI)                          ▼
-            └──────────CSI Driver──────────> Wiz Secrets
+kubectl get csidriver
+# Should show: secrets-store.csi.k8s.io
 ```
 
-## Key Design Decisions
+### 2. Azure Key Vault
 
-### Why Ansible?
+**Created via Bicep (Infrastructure Deployment):**
+- Azure Key Vault instance
+- Private endpoint configuration
+- Wiz secrets stored (client-id, client-token)
 
-The centralized Ansible approach (`snc-devsecops/devsecops-ansible`) enforces deployment standards:
+**Required Secrets:**
+| Secret Name | Description | Source |
+|-------------|-------------|--------|
+| `wiz-client-id` | Wiz connector client ID | Generated from Wiz portal |
+| `wiz-client-token` | Wiz connector authentication token | Generated from Wiz portal |
 
-- **Consistency**: All AKS workloads follow the same patterns
-- **Reusability**: Jinja2 templates ensure uniform configurations
-- **Auditability**: Changes tracked in central repository
-- **Prevention of deviation**: Teams can't bypass standards
+### 3. User Managed Identity (UMI)
 
-### Why Not Use Wiz's Default Deployment?
+**Created via Bicep:**
+- User Managed Identity for workload identity
+- Federated credential configured for AKS OIDC
+- Key Vault access permissions (Secret Read)
 
-Wiz's provided values.yaml and deployment instructions don't align with our security requirements:
+**Federated Credential Subject Format:**
+```
+system:serviceaccount:<namespace>:<service-account-name>
+```
 
-- ❌ Generic service account creation by Helm
-- ❌ No Key Vault integration
-- ❌ No workload identity/OIDC
-- ❌ Secrets potentially stored in Kubernetes secrets
+**Example:**
+```
+system:serviceaccount:wiz-connector:wiz-connector-sa
+```
 
-Our approach adds:
+## Azure Permissions
 
-- ✅ Pre-created service accounts with explicit RBAC
-- ✅ Azure Key Vault CSI Driver for secret management
-- ✅ Workload Identity (OIDC) for zero standing credentials
-- ✅ Private endpoints for network security
-- ✅ Automated deployment via GitHub Actions
+### Service Principal (for GitHub Actions)
 
-## Support
+The GitHub Actions workflow requires a Service Principal with the following roles on the target AKS cluster:
 
-For issues or questions:
+| Role Name | Purpose |
+|-----------|---------|
+| `Reader` | Read cluster configuration |
+| `Azure Kubernetes Service Cluster User Role` | Get cluster user credentials |
+| `Azure Kubernetes Service Contributor Role` | Manage cluster resources |
+| `Azure Kubernetes Service RBAC Admin` | Create namespaces and RBAC resources |
+| `Azure Kubernetes Service RBAC Writer` | Apply Kubernetes manifests |
+| `Deployment Contributor` | Deploy resources (if managing infrastructure) |
 
-1. Check the [Troubleshooting Guide](docs/troubleshooting.md)
-2. Review existing GitHub Issues
-3. Contact the DevSecOps team
+**Note on Permissions:** This is a comprehensive set for full deployment automation. Consider reviewing if you can scope down further based on least privilege principles.
 
-## Contributing
+**How These Are Created:**
+These permissions are automatically configured during the landing zone onboarding process via Terraform, which creates the GitHub repository, Service Principal, and configures GitHub environment secrets.
 
-See [Development Guide](docs/development.md) for information on testing changes and contributing improvements.
+## GitHub Configuration
 
-## License
+### 1. GitHub App for Ansible Repository Access
 
-Internal use only - [Organization Name]
+**Required Setup:**
+- GitHub App created with access to `snc-devsecops/devsecops-ansible`
+- App credentials stored as secrets in deployment repository
+
+**Required Secrets:**
+| Secret Name | Description |
+|-------------|-------------|
+| `ANSIBLE_APP_ID` | GitHub App ID |
+| `ANSIBLE_APP_PRIVATE_KEY` | GitHub App private key (PEM format) |
+
+### 2. GitHub Environment Secrets
+
+**Created by Onboarding Terraform:**
+| Secret Name | Description | Source |
+|-------------|-------------|--------|
+| `AZURE_CLIENT_ID` | Service Principal client ID | Terraform output |
+| `AZURE_TENANT_ID` | Azure tenant ID | Terraform output |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID | Terraform output |
+
+### 3. GitHub Environment Variables
+
+| Variable Name | Description | Example |
+|---------------|-------------|---------|
+| `AKS_RESOURCE_GROUP` | AKS cluster resource group | `rg-aks-prod-eastus` |
+| `AKS_CLUSTER_NAME` | AKS cluster name | `aks-prod-eastus-001` |
+| `KEY_VAULT_NAME` | Key Vault name | `kv-wiz-prod-eastus` |
+| `UMI_CLIENT_ID` | User Managed Identity client ID | `12345678-abcd-...` |
+| `WIZ_NAMESPACE` | Kubernetes namespace for Wiz | `wiz-connector` |
+
+### 4. GitHub Runners
+
+**Required:**
+- Self-hosted internal GitHub Actions runners
+- Runners must have network access to:
+  - Azure API endpoints
+  - AKS cluster API server
+  - JFrog Helm proxy
+
+## Wiz Configuration
+
+### 1. Wiz Portal Access
+
+**Steps to Generate Connector Credentials:**
+
+1. Log in to Wiz portal
+2. Navigate to: **Settings** → **Connectors** → **Kubernetes**
+3. Click **Add Connector**
+4. Select **Azure AKS**
+5. Generate connector credentials:
+   - Client ID
+   - Client Token
+6. **Important**: Save these credentials immediately - the token is only shown once
+
+### 2. Initial values.yaml from Wiz
+
+**Note:** Wiz provides a generic `values.yaml` during connector setup. **Do not use this directly.** It does not align with our security standards.
+
+Instead, use the template provided in this repository's `values.yaml` which integrates with:
+- Key Vault CSI driver
+- Pre-created service accounts
+- Workload identity
+
+## JFrog Helm Proxy
+
+**Requirements:**
+- JFrog Artifactory configured as Helm proxy
+- Wiz Helm repository (`wiz-sec`) synced to JFrog
+- Credentials for Ansible to access JFrog
+
+**Repository URL:**
+```
+https://<jfrog-instance>/artifactory/helm-remote/
+```
+
+## Ansible Repository Access
+
+**Repository:** `snc-devsecops/devsecops-ansible`
+
+**Required Structure:**
+```
+devsecops-ansible/
+├── playbooks/
+│   └── aks/
+│       └── aks_deploy.yml
+└── roles/
+    └── aks/
+        └── deploy/
+            ├── tasks/
+            │   └── main.yml
+            ├── templates/
+            │   ├── secret-provider-class.yml.j2
+            │   └── service-account.yml.j2
+            └── defaults/
+                └── main.yml
