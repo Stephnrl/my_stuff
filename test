@@ -1,20 +1,97 @@
-# playbook.yml
----
-- name: Deploy to Azure GCC High
-  hosts: localhost
-  connection: local
-  gather_facts: false
-  
-  tasks:
-    - name: Authenticate with Azure using OIDC
-      snc.azure_utils.azure_oidc_login:
-        tenant_id: "{{ lookup('env', 'AZURE_TENANT_ID') }}"
-        client_id: "{{ lookup('env', 'AZURE_CLIENT_ID') }}"
-        subscription_id: "{{ lookup('env', 'AZURE_SUBSCRIPTION_ID') }}"
-        gcc_high: true
-    
-    - name: Create resource group in GCC High
-      azure.azcollection.azure_rm_resourcegroup:
-        name: my-rg
-        location: usgovvirginia
-        state: present
+# Wiz Connector Deployment for Azure AKS
+
+## Overview
+
+This repository contains the standardized deployment configuration for the Wiz Security connector to Azure Kubernetes Service (AKS) clusters. The deployment follows enterprise security best practices using:
+
+- **Azure Key Vault CSI Driver** with User Managed Identity (UMI)
+- **Workload Identity (OIDC Federation)** for secure authentication
+- **Centralized Ansible roles** for consistent deployments
+- **GitHub Actions** with OIDC for automated CI/CD
+- **Private endpoints** for Key Vault access
+- **Pre-created service accounts** (no auto-creation by Helm)
+
+## Why This Documentation Exists
+
+The Wiz connector deployment process was previously undocumented, relying on tribal knowledge and requiring engineers to reverse-engineer deployments from previous implementations. This documentation standardizes the process to:
+
+- Reduce deployment time from hours to minutes
+- Ensure consistent security practices across all clusters
+- Enable self-service deployments by teams
+- Provide troubleshooting guidance
+- Maintain compliance with organizational standards
+
+## Documentation Structure
+
+- **[Prerequisites](docs/prerequisites.md)** - Required infrastructure, permissions, and tools
+- **[Architecture](docs/architecture.md)** - System design and component relationships
+- **[Deployment Guide](docs/deployment-guide.md)** - Step-by-step deployment instructions
+- **[Configuration Reference](docs/configuration.md)** - values.yaml and variable documentation
+- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+- **[Development](docs/development.md)** - Contributing and testing changes
+
+## Quick Start
+
+1. **Ensure prerequisites are met** (see [Prerequisites](docs/prerequisites.md))
+2. **Review the architecture** (see [Architecture](docs/architecture.md))
+3. **Configure your values.yaml** (see [Configuration Reference](docs/configuration.md))
+4. **Run the deployment workflow** (see [Deployment Guide](docs/deployment-guide.md))
+
+## Architecture at a Glance
+
+```
+GitHub Actions (OIDC) → Azure SPN → AKS Cluster
+                                ↓
+                    Ansible Deployment Role
+                                ↓
+            ┌───────────────────┴───────────────────┐
+            ▼                                       ▼
+    Wiz Connector Pod                    Azure Key Vault
+            ↓                          (Private Endpoint)
+    Service Account (UMI)                          ▼
+            └──────────CSI Driver──────────> Wiz Secrets
+```
+
+## Key Design Decisions
+
+### Why Ansible?
+
+The centralized Ansible approach (`snc-devsecops/devsecops-ansible`) enforces deployment standards:
+
+- **Consistency**: All AKS workloads follow the same patterns
+- **Reusability**: Jinja2 templates ensure uniform configurations
+- **Auditability**: Changes tracked in central repository
+- **Prevention of deviation**: Teams can't bypass standards
+
+### Why Not Use Wiz's Default Deployment?
+
+Wiz's provided values.yaml and deployment instructions don't align with our security requirements:
+
+- ❌ Generic service account creation by Helm
+- ❌ No Key Vault integration
+- ❌ No workload identity/OIDC
+- ❌ Secrets potentially stored in Kubernetes secrets
+
+Our approach adds:
+
+- ✅ Pre-created service accounts with explicit RBAC
+- ✅ Azure Key Vault CSI Driver for secret management
+- ✅ Workload Identity (OIDC) for zero standing credentials
+- ✅ Private endpoints for network security
+- ✅ Automated deployment via GitHub Actions
+
+## Support
+
+For issues or questions:
+
+1. Check the [Troubleshooting Guide](docs/troubleshooting.md)
+2. Review existing GitHub Issues
+3. Contact the DevSecOps team
+
+## Contributing
+
+See [Development Guide](docs/development.md) for information on testing changes and contributing improvements.
+
+## License
+
+Internal use only - [Organization Name]
