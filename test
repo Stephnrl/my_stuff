@@ -1,3 +1,25 @@
+# Prerequisites
+
+This document outlines all required infrastructure, permissions, and configurations needed before deploying the Wiz connector.
+
+## Azure Infrastructure
+
+### 1. Azure Kubernetes Service (AKS) Cluster
+
+**Requirements:**
+- AKS cluster with Workload Identity enabled
+- Key Vault CSI driver installed on the cluster
+- OIDC issuer URL configured
+
+**Verify Workload Identity:**
+```bash
+az aks show --resource-group <rg-name> --name <cluster-name> \
+  --query "oidcIssuerProfile.enabled"
+# Should return: true
+```
+
+**Verify CSI Driver:**
+```bash
 kubectl get csidriver
 # Should show: secrets-store.csi.k8s.io
 ```
@@ -150,3 +172,25 @@ devsecops-ansible/
             │   └── service-account.yml.j2
             └── defaults/
                 └── main.yml
+```
+
+## Validation Checklist
+
+Before proceeding with deployment, verify:
+
+- [ ] AKS cluster has Workload Identity enabled
+- [ ] Key Vault CSI driver is installed on cluster
+- [ ] Key Vault exists with private endpoint
+- [ ] Wiz secrets uploaded to Key Vault
+- [ ] UMI created with federated credential
+- [ ] UMI has Key Vault Secret Read permission
+- [ ] GitHub SPN has required AKS roles
+- [ ] GitHub App configured for Ansible repo access
+- [ ] GitHub environment secrets/variables configured
+- [ ] Self-hosted runners available
+- [ ] JFrog Helm proxy accessible
+- [ ] Wiz connector credentials generated
+
+## Next Steps
+
+Once all prerequisites are met, proceed to the [Deployment Guide](deployment-guide.md).
