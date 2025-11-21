@@ -1,141 +1,69 @@
-# --- CONFIGURATION ---
-$StorageAccountName = "mystorageaccount"
-$ContainerName      = "script-state"
-$StateFileName      = "known_inactive_users.csv"
-$SearchServiceName  = "your-search-service"
-$IndexName          = "your-index-name"
-# API Key (Admin Key recommended)
-$SearchApiKey       = "YOUR_ADMIN_KEY_HERE" 
+# 1. Connect to MS Graph (US Government Environment)
+# We need User.Read.All to read all profiles.
+Connect-MgGraph -Scopes "User.Read.All" -Environment USGov
 
-# Connect to GCC High (For Graph API) - Assuming Managed Identity or existing context
-# Connect-MgGraph -Environment USGov -Identity
+# Define your domain and suffix variables to make the script reusable
+$Domain = "abcorp.com"
+$AdminSuffix = "-az" 
 
-# ==============================================================================
-# STEP 1: Load Yesterday's List (The "Known" List)
-# ==============================================================================
-$knownUsers = @()
-try {
-    $ctx = Get-AzStorageAccount -ResourceGroupName "MyResourceGroup" -Name $StorageAccountName
+Write-Host "Fetching all '$AdminSuffix' accounts from Entra ID..." -ForegroundColor Cyan
+
+# 2. Get all users that include the -az in their UPN
+# Note: We perform a 'EndsWith' filter for efficiency. 
+# We explicitly request AccountEnabled and DisplayName properties.
+$AzUsers = Get-MgUser -Filter "endsWith(userPrincipalName,'$AdminSuffix@$Domain')" -All -Property Id, DisplayName, UserPrincipalName, AccountEnabled
+
+$Report = @()
+
+foreach ($AzAccount in $AzUsers) {
     
-    # Check if blob exists
-    $blob = Get-AzStorageBlob -Container $ContainerName -Blob $StateFileName -Context $ctx.Context -ErrorAction SilentlyContinue
+    # 3. Derive the 'Standard' UPN
+    # This replaces 'first.last-az@abcorp.com' with 'first.last@abcorp.com'
+    $DerivedStandardUPN = $AzAccount.UserPrincipalName.Replace("$AdminSuffix@$Domain", "@$Domain")
     
-    if ($blob) {
-        # Download to temp file
-        Get-AzStorageBlobContent -Container $ContainerName -Blob $StateFileName -Destination "." -Context $ctx.Context -Force | Out-Null
-        $knownUsers = Import-Csv .\$StateFileName | Select-Object -ExpandProperty Email
-        Write-Host "Loaded $($knownUsers.Count) previously processed inactive users." -ForegroundColor Cyan
+    Write-Host "Processing $($AzAccount.UserPrincipalName)... Looking for $DerivedStandardUPN" -NoNewline
+
+    # 4. Search for the Standard User
+    # We use a try/catch or simple variable check. The -ErrorAction SilentlyContinue prevents red text if not found.
+    $StandardAccount = Get-MgUser -Filter "userPrincipalName eq '$DerivedStandardUPN'" -Property Id, AccountEnabled -ErrorAction SilentlyContinue
+
+    $Status = "Healthy"
+    $ActionRequired = $false
+
+    # 5. Logic Checks
+    if ([string]::IsNullOrWhiteSpace($StandardAccount)) {
+        # SCENARIO 1: Standard account is completely gone (Deleted from AD)
+        $Status = "ORPHANED - Standard Account Not Found"
+        $ActionRequired = $true
+        Write-Host " -> ORPHAN DETECTED" -ForegroundColor Red
+    }
+    elseif ($StandardAccount.AccountEnabled -eq $false) {
+        # SCENARIO 2: Standard account exists but is disabled in AD/Entra
+        $Status = "RISK - Standard Account Disabled"
+        $ActionRequired = $true
+        Write-Host " -> DISABLED MATCH DETECTED" -ForegroundColor Yellow
     }
     else {
-        Write-Warning "First Run Detected: No state file found. We will check ALL users."
+        # SCENARIO 3: Both active
+        Write-Host " -> OK" -ForegroundColor Green
     }
-}
-catch {
-    Write-Warning "Could not access storage. Proceeding as a fresh run."
-}
 
-# ==============================================================================
-# STEP 2: Get CURRENT Inactive Users from Azure Search (with PAGING)
-# ==============================================================================
-Write-Host "Querying Azure Search for inactive users..." -ForegroundColor Cyan
-
-$headers = @{ "api-key" = $SearchApiKey }
-# Note the GCC High URL (.azure.us)
-$baseUrl = "https://$SearchServiceName.search.azure.us/indexes/$IndexName/docs?search=*&`$filter=active eq false&`$select=email&api-version=2021-04-30-Preview"
-
-$allInactiveUsers = @()
-$nextLink = $baseUrl
-
-# --- THE PAGING LOOP ---
-do {
-    try {
-        $response = Invoke-RestMethod -Uri $nextLink -Headers $headers -Method Get
-        $allInactiveUsers += $response.value
-        
-        # Check if there is a next page
-        if ($response.'@odata.nextLink') {
-            $nextLink = $response.'@odata.nextLink'
-        } else {
-            $nextLink = $null
+    # 6. Add to Report if actionable (or remove the 'If' to see everyone)
+    if ($ActionRequired) {
+        $Report += [PSCustomObject]@{
+            AdminUPN             = $AzAccount.UserPrincipalName
+            AdminID              = $AzAccount.Id
+            AdminEnabled         = $AzAccount.AccountEnabled
+            StandardUPN_Searched = $DerivedStandardUPN
+            StandardStatus       = $Status
         }
     }
-    catch {
-        Write-Error "Failed to query Search: $($_.Exception.Message)"
-        $nextLink = $null
-    }
-} while ($nextLink -ne $null)
-
-Write-Host "Total Inactive Users Found in Index: $($allInactiveUsers.Count)" -ForegroundColor Green
-
-# ==============================================================================
-# STEP 3: Calculate the Delta (New Candidates Only)
-# ==============================================================================
-# If this is the first run, $knownUsers is empty, so we check everyone.
-# If this is Day 2, we only check emails that are NOT in $knownUsers.
-
-$usersToCheck = $allInactiveUsers | Where-Object { $_.email -notin $knownUsers }
-$countToCheck = $usersToCheck.Count
-
-if ($countToCheck -eq 0) {
-    Write-Host "No new inactive users found since last run. Exiting." -ForegroundColor Green
-}
-else {
-    Write-Host "Processing $countToCheck NEW inactive users..." -ForegroundColor Yellow
-    
-    $riskyAccounts = @()
-
-    # ==============================================================================
-    # STEP 4: Check Graph for the Delta Group
-    # ==============================================================================
-    foreach ($user in $usersToCheck) {
-        if ([string]::IsNullOrWhiteSpace($user.email)) { continue }
-
-        $baseEmail = $user.email
-        $parts = $baseEmail -split "@"
-        
-        if ($parts.Count -eq 2) {
-            $azUserUPN = "$($parts[0])-az@$($parts[1])"
-
-            try {
-                # Check Entra ID (US Gov)
-                $entraUser = Get-MgUser -UserId $azUserUPN -Property AccountEnabled -ErrorAction Stop
-                
-                if ($entraUser.AccountEnabled -eq $true) {
-                    Write-Host "[RISK] $azUserUPN is ACTIVE." -ForegroundColor Red
-                    $riskyAccounts += [PSCustomObject]@{
-                        "OriginalEmail" = $baseEmail
-                        "AdminAccount"  = $azUserUPN
-                        "Status"        = "Active - Needs Termination"
-                    }
-                }
-                else {
-                    Write-Host "[OK] $azUserUPN is disabled." -ForegroundColor Gray
-                }
-            }
-            catch {
-                # 404 Not Found - This is the ideal state
-                Write-Host "[OK] $azUserUPN not found." -ForegroundColor DarkGray
-            }
-        }
-    }
-
-    # Export Results if Risks Found
-    if ($riskyAccounts.Count -gt 0) {
-        $reportName = "risky_users_$(Get-Date -Format 'yyyyMMdd-HHmm').csv"
-        $riskyAccounts | Export-Csv $reportName -NoTypeInformation
-        Write-Host "Found $($riskyAccounts.Count) risky accounts. Saved to $reportName" -ForegroundColor Red
-        
-        # Optional: Upload report to storage so you can download it later
-        # Set-AzStorageBlobContent -File $reportName -Container $ContainerName ...
-    }
 }
 
-# ==============================================================================
-# STEP 5: Update State File (Snapshot for tomorrow)
-# ==============================================================================
-# We save the FULL list of currently inactive users to be the comparison for tomorrow
-$allInactiveUsers | Select-Object @{Name="Email";Expression={$_.email}} | Export-Csv .\$StateFileName -NoTypeInformation
+# 7. Export results
+$CsvPath = "C:\Temp\GovCloud_AdminAudit.csv"
+$Report | Export-Csv -Path $CsvPath -NoTypeInformation
 
-# Upload to Blob Storage
-Set-AzStorageBlobContent -File .\$StateFileName -Container $ContainerName -Blob $StateFileName -Context $ctx.Context -Force
-Write-Host "State file updated." -ForegroundColor Cyan
+Write-Host "---"
+Write-Host "Audit Complete. Found $( $Report.Count ) issues."
+Write-Host "Report saved to: $CsvPath" -ForegroundColor Cyan
