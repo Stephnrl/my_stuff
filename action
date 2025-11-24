@@ -13,6 +13,10 @@ inputs:
     description: 'Set to true to apply the changes'
     required: false
     default: 'false'
+  init_args:
+    description: 'Additional arguments for terraform init (e.g., -backend-config=...)'
+    required: false
+    default: ''
   github_token:
     description: 'The GitHub token (needed for setup-terraform to avoid rate limits)'
     required: false
@@ -32,7 +36,7 @@ runs:
       working-directory: ${{ inputs.working_directory }}
 
     - name: Terraform Init
-      run: terraform init
+      run: terraform init ${{ inputs.init_args }}
       shell: bash
       working-directory: ${{ inputs.working_directory }}
 
