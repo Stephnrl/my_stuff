@@ -1,0 +1,22 @@
+1. Deep Dive: 3.13.2 Security Engineering
+Requirement: Employ architectural designs, software development techniques, and systems engineering principles.
+
+You specifically asked about [c] and [f]. This is about having a "method to the madness" of how you build things.
+
+Objective [c]: Systems engineering principles are identified
+The Compliance Ask: "Do you have a philosophy for how you build infrastructure?"
+
+Your "DevOps" Answer: Yes. We don't click buttons in the Azure Portal. We follow the "Immutable Infrastructure" and "Modularity" principles.
+
+How to Articulate it:
+
+"We identify Immutable Infrastructure and Modularity as our core engineering principles. We do not allow manual changes to production environments (Immutable). We break down our Azure environment into reusable components (Landing Zones) rather than a monolithic mess (Modularity)."
+
+Objective [f]: Systems engineering principles are employed
+The Compliance Ask: "Prove you actually do it."
+
+Your "DevOps" Answer: Look at our Terraform/Bicep modules and our Landing Zone architecture.
+
+How to Articulate it:
+
+"We employ these principles through our Azure Landing Zone architecture. We use Bicep/Terraform modules to provision Resource Groups and RBAC standards automatically. By forcing all changes through GitHub Actions (the pipeline), we ensure that the 'Systems Engineering' design is applied identically to every deployment. If it isn't in the code, it doesn't exist in the environment."
