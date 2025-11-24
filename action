@@ -1,59 +1,61 @@
-name: 'Terraform Runner'
-description: 'Sets up Terraform, runs fmt, init, validate, plan, and optional apply'
-inputs:
-  terraform_version:
-    description: 'The version of Terraform to use'
-    required: false
-    default: 'latest'
-  working_directory:
-    description: 'The directory containing the Terraform configuration'
-    required: false
-    default: '.'
-  apply:
-    description: 'Set to true to apply the changes'
-    required: false
-    default: 'false'
-  init_args:
-    description: 'Additional arguments for terraform init (e.g., -backend-config=...)'
-    required: false
-    default: ''
-  github_token:
-    description: 'The GitHub token (needed for setup-terraform to avoid rate limits)'
-    required: false
+name: Deploy Infrastructure
 
-runs:
-  using: "composite"
-  steps:
-    - name: Setup Terraform
-      uses: hashicorp/setup-terraform@v3
-      with:
-        terraform_version: ${{ inputs.terraform_version }}
-        cli_config_credentials_token: ${{ inputs.github_token }}
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
-    - name: Terraform Format Check
-      run: terraform fmt -check -recursive
-      shell: bash
-      working-directory: ${{ inputs.working_directory }}
+permissions:
+  id-token: write # Required for requesting the OIDC JWT Token
+  contents: read  # Required for actions/checkout
 
-    - name: Terraform Init
-      run: terraform init ${{ inputs.init_args }}
-      shell: bash
-      working-directory: ${{ inputs.working_directory }}
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    name: Run Terraform
+    # Use a GitHub Environment for the main branch to enable manual approval gates
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }}
+    
+    # Azure OIDC Authentication
+    # Ensure you have set up Federated Credentials in Azure for this repo
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_USE_OIDC: true
 
-    - name: Terraform Validate
-      run: terraform validate
-      shell: bash
-      working-directory: ${{ inputs.working_directory }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Terraform Plan
-      id: plan
-      run: |
-        terraform plan -out=tfplan -input=false
-      shell: bash
-      working-directory: ${{ inputs.working_directory }}
+      # Example 1: Planning on a Pull Request (No Apply)
+      - name: Terraform Plan (PR)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/tf-runner
+        with:
+          terraform_version: '1.6.0'
+          working_directory: './infrastructure'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          apply: 'false'
+          # Initialize with Azure Backend Config
+          init_args: >-
+            -backend-config="resource_group_name=my-terraform-rg"
+            -backend-config="storage_account_name=myterraformstorage"
+            -backend-config="container_name=tfstate"
+            -backend-config="key=prod.terraform.tfstate"
 
-    - name: Terraform Apply
-      if: inputs.apply == 'true'
-      run: terraform apply -auto-approve -input=false tfplan
-      shell: bash
-      working-directory: ${{ inputs.working_directory }}
+      # Example 2: Applying on Merge to Main
+      - name: Terraform Apply (Main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/tf-runner
+        with:
+          terraform_version: '1.6.0'
+          working_directory: './infrastructure'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          apply: 'true'
+          init_args: >-
+            -backend-config="resource_group_name=my-terraform-rg"
+            -backend-config="storage_account_name=myterraformstorage"
+            -backend-config="container_name=tfstate"
+            -backend-config="key=prod.terraform.tfstate"
