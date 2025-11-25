@@ -1,0 +1,14 @@
+---
+# =============================================================================
+# Security Role - Handlers
+# =============================================================================
+
+- name: Validate SSH config
+  ansible.builtin.command:
+    cmd: /usr/sbin/sshd -t
+  changed_when: false
+
+- name: Restart auditd
+  ansible.builtin.command:
+    cmd: service auditd restart
+  # Note: auditd cannot be restarted with systemctl due to audit rules

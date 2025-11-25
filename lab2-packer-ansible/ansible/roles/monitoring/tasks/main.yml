@@ -1,0 +1,208 @@
+---
+# =============================================================================
+# Monitoring Role - CloudWatch Agent Configuration
+# =============================================================================
+# This role installs and configures the Amazon CloudWatch agent for
+# metrics and log collection.
+# =============================================================================
+
+- name: Download CloudWatch agent
+  ansible.builtin.get_url:
+    url: "https://s3.{{ aws_region | default('us-gov-west-1') }}.amazonaws.com/amazoncloudwatch-agent-{{ aws_region | default('us-gov-west-1') }}/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm"
+    dest: /tmp/amazon-cloudwatch-agent.rpm
+    mode: '0644'
+  register: cw_agent_download
+
+- name: Install CloudWatch agent
+  ansible.builtin.yum:
+    name: /tmp/amazon-cloudwatch-agent.rpm
+    state: present
+    disable_gpg_check: yes
+  when: cw_agent_download.changed
+
+- name: Create CloudWatch agent configuration directory
+  ansible.builtin.file:
+    path: /opt/aws/amazon-cloudwatch-agent/etc
+    state: directory
+    mode: '0755'
+
+- name: Configure CloudWatch agent
+  ansible.builtin.copy:
+    content: |
+      {
+        "agent": {
+          "metrics_collection_interval": 60,
+          "run_as_user": "root",
+          "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+        },
+        "metrics": {
+          "namespace": "GoldenAMI/EC2",
+          "metrics_collected": {
+            "cpu": {
+              "measurement": [
+                "cpu_usage_idle",
+                "cpu_usage_user",
+                "cpu_usage_system"
+              ],
+              "metrics_collection_interval": 60,
+              "totalcpu": true
+            },
+            "disk": {
+              "measurement": [
+                "used_percent",
+                "inodes_free"
+              ],
+              "metrics_collection_interval": 60,
+              "resources": [
+                "/"
+              ]
+            },
+            "diskio": {
+              "measurement": [
+                "io_time",
+                "write_bytes",
+                "read_bytes"
+              ],
+              "metrics_collection_interval": 60,
+              "resources": [
+                "*"
+              ]
+            },
+            "mem": {
+              "measurement": [
+                "mem_used_percent",
+                "mem_available_percent"
+              ],
+              "metrics_collection_interval": 60
+            },
+            "swap": {
+              "measurement": [
+                "swap_used_percent"
+              ],
+              "metrics_collection_interval": 60
+            },
+            "netstat": {
+              "measurement": [
+                "tcp_established",
+                "tcp_time_wait"
+              ],
+              "metrics_collection_interval": 60
+            }
+          },
+          "append_dimensions": {
+            "InstanceId": "${aws:InstanceId}",
+            "AutoScalingGroupName": "${aws:AutoScalingGroupName}"
+          }
+        },
+        "logs": {
+          "logs_collected": {
+            "files": {
+              "collect_list": [
+                {
+                  "file_path": "/var/log/messages",
+                  "log_group_name": "/golden-ami/var/log/messages",
+                  "log_stream_name": "{instance_id}",
+                  "retention_in_days": 30
+                },
+                {
+                  "file_path": "/var/log/secure",
+                  "log_group_name": "/golden-ami/var/log/secure",
+                  "log_stream_name": "{instance_id}",
+                  "retention_in_days": 30
+                },
+                {
+                  "file_path": "/var/log/audit/audit.log",
+                  "log_group_name": "/golden-ami/var/log/audit",
+                  "log_stream_name": "{instance_id}",
+                  "retention_in_days": 30
+                },
+                {
+                  "file_path": "/var/log/cloud-init.log",
+                  "log_group_name": "/golden-ami/var/log/cloud-init",
+                  "log_stream_name": "{instance_id}",
+                  "retention_in_days": 7
+                }
+              ]
+            }
+          }
+        }
+      }
+    dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    mode: '0644'
+  notify: Restart CloudWatch agent
+
+- name: Create CloudWatch agent systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/amazon-cloudwatch-agent.service.d
+    state: directory
+    mode: '0755'
+
+- name: Configure CloudWatch agent to start after network
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      After=network-online.target
+      Wants=network-online.target
+    dest: /etc/systemd/system/amazon-cloudwatch-agent.service.d/override.conf
+    mode: '0644'
+  notify: Reload systemd
+
+# Note: We don't start the agent during AMI build
+# It will be started on first boot via cloud-init or user data
+- name: Enable CloudWatch agent (but don't start during build)
+  ansible.builtin.systemd:
+    name: amazon-cloudwatch-agent
+    enabled: yes
+    daemon_reload: yes
+
+# -----------------------------------------------------------------------------
+# SSM Agent (Usually pre-installed on Amazon Linux 2)
+# -----------------------------------------------------------------------------
+- name: Ensure SSM agent is installed
+  ansible.builtin.yum:
+    name: amazon-ssm-agent
+    state: present
+
+- name: Enable SSM agent
+  ansible.builtin.systemd:
+    name: amazon-ssm-agent
+    enabled: yes
+
+# -----------------------------------------------------------------------------
+# CloudWatch Agent Helper Script
+# -----------------------------------------------------------------------------
+- name: Create CloudWatch agent control script
+  ansible.builtin.copy:
+    content: |
+      #!/bin/bash
+      # CloudWatch Agent Control Script
+      
+      AGENT_CTL="/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
+      CONFIG_FILE="/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
+      
+      case "$1" in
+        start)
+          $AGENT_CTL -a fetch-config -m ec2 -s -c file:$CONFIG_FILE
+          ;;
+        stop)
+          $AGENT_CTL -a stop
+          ;;
+        status)
+          $AGENT_CTL -a status
+          ;;
+        restart)
+          $AGENT_CTL -a stop
+          $AGENT_CTL -a fetch-config -m ec2 -s -c file:$CONFIG_FILE
+          ;;
+        *)
+          echo "Usage: $0 {start|stop|status|restart}"
+          exit 1
+          ;;
+      esac
+    dest: /opt/scripts/cloudwatch-agent-ctl.sh
+    mode: '0755'
+
+- name: Clean up downloaded RPM
+  ansible.builtin.file:
+    path: /tmp/amazon-cloudwatch-agent.rpm
+    state: absent

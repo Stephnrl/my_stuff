@@ -1,0 +1,170 @@
+---
+# =============================================================================
+# Base Role - Core OS Configuration
+# =============================================================================
+# This role handles fundamental OS configuration that should be present
+# on all instances built from this AMI.
+# =============================================================================
+
+- name: Set timezone to UTC
+  ansible.builtin.timezone:
+    name: UTC
+
+- name: Configure hostname settings
+  ansible.builtin.copy:
+    content: |
+      # Preserve hostname set by cloud-init
+      preserve_hostname: false
+      # Use FQDN for hostname
+      fqdn_as_hostname: true
+    dest: /etc/cloud/cloud.cfg.d/99_hostname.cfg
+    mode: '0644'
+
+- name: Install essential packages
+  ansible.builtin.yum:
+    name: "{{ base_packages }}"
+    state: present
+  vars:
+    base_packages:
+      - vim
+      - curl
+      - wget
+      - unzip
+      - tar
+      - gzip
+      - htop
+      - tree
+      - jq
+      - git
+      - yum-utils
+      - ntp
+      - chrony
+      - lsof
+      - tcpdump
+      - bind-utils
+      - nc
+      - telnet
+      - traceroute
+
+- name: Install AWS CLI v2
+  block:
+    - name: Download AWS CLI v2
+      ansible.builtin.get_url:
+        url: "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+        dest: /tmp/awscliv2.zip
+        mode: '0644'
+      register: awscli_download
+    
+    - name: Extract AWS CLI v2
+      ansible.builtin.unarchive:
+        src: /tmp/awscliv2.zip
+        dest: /tmp
+        remote_src: yes
+      when: awscli_download.changed
+    
+    - name: Install AWS CLI v2
+      ansible.builtin.command:
+        cmd: /tmp/aws/install --update
+        creates: /usr/local/bin/aws
+    
+    - name: Clean up AWS CLI installer
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/awscliv2.zip
+        - /tmp/aws
+  tags: [awscli]
+
+- name: Configure chrony for time synchronization
+  block:
+    - name: Configure chrony to use Amazon Time Sync
+      ansible.builtin.copy:
+        content: |
+          # Use Amazon Time Sync Service
+          server 169.254.169.123 prefer iburst minpoll 4 maxpoll 4
+          
+          # Record the rate at which the system clock gains/losses time
+          driftfile /var/lib/chrony/drift
+          
+          # Allow the system clock to be stepped in the first three updates
+          makestep 1.0 3
+          
+          # Enable kernel synchronization of the real-time clock (RTC)
+          rtcsync
+          
+          # Log files location
+          logdir /var/log/chrony
+        dest: /etc/chrony.conf
+        mode: '0644'
+        backup: yes
+      notify: Restart chrony
+    
+    - name: Enable and start chrony
+      ansible.builtin.systemd:
+        name: chronyd
+        state: started
+        enabled: yes
+
+- name: Configure system limits
+  ansible.builtin.copy:
+    content: |
+      # Increase file descriptor limits
+      * soft nofile 65536
+      * hard nofile 65536
+      
+      # Increase process limits
+      * soft nproc 65536
+      * hard nproc 65536
+    dest: /etc/security/limits.d/99-golden-ami.conf
+    mode: '0644'
+
+- name: Configure sysctl parameters
+  ansible.builtin.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-golden-ami.conf
+    reload: yes
+  loop:
+    - { key: 'net.core.somaxconn', value: '65535' }
+    - { key: 'net.ipv4.tcp_max_syn_backlog', value: '65535' }
+    - { key: 'net.ipv4.ip_local_port_range', value: '1024 65535' }
+    - { key: 'vm.swappiness', value: '10' }
+    - { key: 'fs.file-max', value: '2097152' }
+
+- name: Create standard directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /opt/scripts
+    - /opt/app
+    - /var/log/app
+
+- name: Configure vim defaults
+  ansible.builtin.copy:
+    content: |
+      " Golden AMI vim defaults
+      set nocompatible
+      syntax on
+      set number
+      set tabstop=2
+      set shiftwidth=2
+      set expandtab
+      set autoindent
+      set hlsearch
+      set incsearch
+      set ignorecase
+      set smartcase
+      set backspace=indent,eol,start
+      set ruler
+      set showcmd
+    dest: /etc/vimrc.local
+    mode: '0644'
+
+- name: Source vimrc.local from vimrc
+  ansible.builtin.lineinfile:
+    path: /etc/vimrc
+    line: 'source /etc/vimrc.local'
+    state: present

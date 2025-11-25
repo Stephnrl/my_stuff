@@ -1,0 +1,19 @@
+---
+# =============================================================================
+# Local Inventory for Packer Builds
+# =============================================================================
+# This inventory is used when running Ansible locally (outside of Packer)
+# for testing purposes. Packer generates its own inventory dynamically.
+# =============================================================================
+
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: /usr/bin/python3
+  vars:
+    # Default variables for local testing
+    ami_name: "golden-ami-local-test"
+    ami_version: "0.0.0-test"
+    environment: "lab"
+    aws_region: "us-gov-west-1"
