@@ -1,15 +1,16 @@
-Sample Write-Up Structure for [c] and [f]
-Here's a practical template you could adapt:
+Revised [c] and [f]
 [c] – Identified Systems Engineering Principles
 
 The DevSecOps team has identified and documented the following security engineering principles that govern infrastructure provisioning and CI/CD operations:
 
-Least Privilege Access – All Azure operations are performed via Service Principal Names (SPNs) scoped to specific GitHub repositories and environments with minimal RBAC permissions required for the task.
+Least Privilege Access – All Azure operations are performed via Service Principals scoped to specific GitHub repositories and environments with minimal RBAC permissions required for the task.
 Logical Security Boundaries – Azure Landing Zones enforce subscription-level isolation. Each team receives a dedicated Resource Group with RBAC assignments, preventing cross-tenant or cross-team resource access.
 Infrastructure as Code (IaC) – All baseline infrastructure is defined in Terraform, stored in version-controlled GitHub repositories, enabling audit trails, peer review, and repeatable deployments.
 Cryptographic Standards Compliance – Self-hosted GitHub runners operate on Azure AKS nodes configured with FIPS 140-2 validated cryptographic modules within the Azure GCC High environment.
 Controlled Execution Environments – GitHub Actions workflows execute on managed, self-hosted runners rather than public shared infrastructure, reducing supply chain risk.
+Secretless Authentication – GitHub-to-Azure authentication uses OpenID Connect (OIDC) Workload Identity Federation, eliminating static credentials and reducing credential theft risk.
 Secure Development Practices – SonarQube is integrated for code quality and security analysis.
+
 
 
 [f] – Employment of Identified Principles
@@ -18,7 +19,8 @@ Evidence of implementation:
 
 Terraform configurations in GitHub repositories enforce Landing Zone architecture (subscription isolation, RBAC, resource group provisioning)
 GitHub Environment Protection Rules require approvals and restrict which branches can deploy to production
-SPN credentials are stored in GitHub Secrets, scoped per environment, and rotated per policy
+Service Principal authentication uses OIDC federated credentials bound to specific repositories and environments — no client secrets are stored or rotated
+Azure AD App Registrations define federated credential subject claims restricting authentication to authorized repo/environment combinations
 AKS node pools are provisioned with FIPS-enabled OS images (documented in Terraform/ARM templates)
 SonarQube scan results are available for repositories under DevSecOps management
 Pull Request workflows enforce review requirements before infrastructure changes merge
