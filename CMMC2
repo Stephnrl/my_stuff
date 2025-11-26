@@ -1,22 +1,4 @@
-"Less is More" Version
-[c] – Identified Systems Engineering Principles
-
-The DevSecOps team has identified the following security engineering principles for infrastructure provisioning and CI/CD operations:
-
-Least Privilege Access – Service Principals are scoped to specific repositories and environments with minimal RBAC permissions.
-Logical Security Boundaries – Azure Landing Zones enforce subscription-level isolation with dedicated Resource Groups and RBAC assignments per team.
-Infrastructure as Code – Baseline infrastructure is defined in Terraform, version-controlled in GitHub, enabling audit trails and peer review.
-Secretless Authentication – GitHub-to-Azure authentication uses OIDC Workload Identity Federation, eliminating static credentials.
-Controlled Execution Environments – GitHub Actions execute on self-hosted runners within Azure GCC High on FIPS 140-2 enabled AKS nodes.
-
-
-
-[f] – Employment of Identified Principles
-
-Evidence of implementation:
-
-Terraform configurations enforce Landing Zone architecture (subscription isolation, RBAC, resource group provisioning)
-Service Principal authentication uses OIDC federated credentials bound to specific repositories and environments
-AKS node pools are provisioned with FIPS-enabled OS images
-Pull Request workflows enforce review requirements before infrastructure changes merge
-GitHub Environment Protection Rules restrict deployments to approved branches
+az storage account show \
+  --name <storage-account-name> \
+  --resource-group <resource-group> \
+  --query "{Kind:kind, SKU:sku.name, HierarchicalNamespace:isHnsEnabled, LargeFileShares:largeFileSharesState}"
