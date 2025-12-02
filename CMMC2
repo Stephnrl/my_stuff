@@ -1,4 +1,0 @@
-az storage account show \
-  --name <storage-account-name> \
-  --resource-group <resource-group> \
-  --query "{Kind:kind, SKU:sku.name, HierarchicalNamespace:isHnsEnabled, LargeFileShares:largeFileSharesState}"
