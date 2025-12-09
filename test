@@ -1,74 +1,104 @@
 ################################################################################
-# Wiz Connector EKS Infrastructure
-# This Terraform creates the supporting AWS infrastructure for deploying
-# the Wiz Kubernetes Connector to an existing EKS cluster.
+# Variables
 ################################################################################
 
-terraform {
-  required_version = ">= 1.5.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.25"
-    }
-  }
-
-  backend "s3" {
-    # Configure these values in backend.hcl or via -backend-config
-    # bucket         = "your-terraform-state-bucket"
-    # key            = "wiz-connector/terraform.tfstate"
-    # region         = "us-east-1"
-    # encrypt        = true
-    # dynamodb_table = "terraform-state-lock" # Optional but recommended
-  }
+variable "aws_region" {
+  description = "AWS region to deploy resources"
+  type        = string
+  default     = "us-east-1"
 }
 
-################################################################################
-# Provider Configuration
-################################################################################
-
-provider "aws" {
-  region = var.aws_region
-
-  default_tags {
-    tags = {
-      Project     = "wiz-connector"
-      Environment = var.environment
-      ManagedBy   = "terraform"
-      Repository  = "abc-devsecops/entapps-wiz-connector"
-    }
-  }
+variable "environment" {
+  description = "Environment name (dev, staging, prod)"
+  type        = string
+  default     = "dev"
 }
 
-# Get EKS cluster info for Kubernetes provider
-data "aws_eks_cluster" "this" {
-  name = var.eks_cluster_name
+variable "eks_cluster_name" {
+  description = "Name of the existing EKS cluster"
+  type        = string
 }
 
-data "aws_eks_cluster_auth" "this" {
-  name = var.eks_cluster_name
+variable "wiz_namespace" {
+  description = "Kubernetes namespace for Wiz connector"
+  type        = string
+  default     = "wiz"
 }
 
-provider "kubernetes" {
-  host                   = data.aws_eks_cluster.this.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.this.token
+variable "wiz_service_account_name" {
+  description = "Name of the Kubernetes service account for Wiz"
+  type        = string
+  default     = "wiz-connector"
 }
 
-################################################################################
-# Data Sources
-################################################################################
+variable "create_namespace" {
+  description = "Whether to create the Kubernetes namespace"
+  type        = bool
+  default     = true
+}
 
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-data "aws_partition" "current" {}
+# GitHub OIDC Configuration
+variable "github_org" {
+  description = "GitHub organization name"
+  type        = string
+  default     = "abc-devsecops"
+}
 
-# Get existing OIDC provider (you mentioned it's already set up)
-data "aws_iam_openid_connect_provider" "github" {
-  url = "https://token.actions.githubusercontent.com"
+variable "github_repo" {
+  description = "GitHub repository name"
+  type        = string
+  default     = "entapps-wiz-connector"
+}
+
+variable "github_environment" {
+  description = "GitHub environment for OIDC trust"
+  type        = string
+  default     = "dev"
+}
+
+# Secrets Configuration
+variable "wiz_client_id" {
+  description = "Wiz API Client ID (will be stored in Secrets Manager)"
+  type        = string
+  sensitive   = true
+  default     = "" # Pass via TF_VAR or prompt
+}
+
+variable "wiz_client_secret" {
+  description = "Wiz API Client Secret/Token (will be stored in Secrets Manager)"
+  type        = string
+  sensitive   = true
+  default     = "" # Pass via TF_VAR or prompt
+}
+
+variable "create_secrets" {
+  description = "Whether to create secrets in Secrets Manager (set to false if secrets already exist)"
+  type        = bool
+  default     = true
+}
+
+# EKS Addon Configuration
+variable "install_secrets_csi_driver" {
+  description = "Whether to install the Secrets Store CSI Driver addon"
+  type        = bool
+  default     = true
+}
+
+variable "secrets_csi_driver_version" {
+  description = "Version of the Secrets Store CSI Driver addon"
+  type        = string
+  default     = null # Uses latest compatible version if null
+}
+
+# Terraform State
+variable "terraform_state_bucket" {
+  description = "S3 bucket name for Terraform state"
+  type        = string
+}
+
+# Tags
+variable "additional_tags" {
+  description = "Additional tags to apply to resources"
+  type        = map(string)
+  default     = {}
 }
