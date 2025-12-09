@@ -1,143 +1,74 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: |
-  Bootstrap IAM Role for GitHub Actions OIDC
+################################################################################
+# Wiz Connector EKS Infrastructure
+# This Terraform creates the supporting AWS infrastructure for deploying
+# the Wiz Kubernetes Connector to an existing EKS cluster.
+################################################################################
 
-Parameters:
-  GitHubOrg:
-    Type: String
-    Default: abc-devsecops
-    Description: GitHub organization name
+terraform {
+  required_version = ">= 1.5.0"
 
-  GitHubRepo:
-    Type: String
-    Default: entapps-wiz-connector
-    Description: GitHub repository name
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.25"
+    }
+  }
 
-  GitHubEnvironment:
-    Type: String
-    Default: dev
-    Description: GitHub environment name
+  backend "s3" {
+    # Configure these values in backend.hcl or via -backend-config
+    # bucket         = "your-terraform-state-bucket"
+    # key            = "wiz-connector/terraform.tfstate"
+    # region         = "us-east-1"
+    # encrypt        = true
+    # dynamodb_table = "terraform-state-lock" # Optional but recommended
+  }
+}
 
-  TerraformStateBucket:
-    Type: String
-    Description: S3 bucket for Terraform state
+################################################################################
+# Provider Configuration
+################################################################################
 
-  EKSClusterName:
-    Type: String
-    Description: Name of the EKS cluster
+provider "aws" {
+  region = var.aws_region
 
-Resources:
-  GitHubActionsBootstrapRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: wiz-connector-github-actions-bootstrap
-      Description: Bootstrap role for GitHub Actions to run initial Terraform
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${GitHubEnvironment}
-      Policies:
-        - PolicyName: TerraformBootstrapPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - eks:DescribeCluster
-                  - eks:ListClusters
-                  - eks:DescribeAddon
-                  - eks:ListAddons
-                  - eks:CreateAddon
-                  - eks:UpdateAddon
-                  - eks:DeleteAddon
-                  - eks:DescribePodIdentityAssociation
-                  - eks:CreatePodIdentityAssociation
-                  - eks:DeletePodIdentityAssociation
-                  - eks:ListPodIdentityAssociations
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
-                  - iam:GetRole
-                  - iam:UpdateRole
-                  - iam:TagRole
-                  - iam:UntagRole
-                  - iam:ListRoleTags
-                  - iam:PutRolePolicy
-                  - iam:GetRolePolicy
-                  - iam:DeleteRolePolicy
-                  - iam:ListRolePolicies
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
-                  - iam:ListAttachedRolePolicies
-                  - iam:PassRole
-                Resource:
-                  - !Sub arn:aws:iam::${AWS::AccountId}:role/wiz-connector-*
-              - Effect: Allow
-                Action:
-                  - iam:GetOpenIDConnectProvider
-                Resource:
-                  - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
-              - Effect: Allow
-                Action:
-                  - secretsmanager:CreateSecret
-                  - secretsmanager:DeleteSecret
-                  - secretsmanager:DescribeSecret
-                  - secretsmanager:GetSecretValue
-                  - secretsmanager:PutSecretValue
-                  - secretsmanager:UpdateSecret
-                  - secretsmanager:TagResource
-                  - secretsmanager:UntagResource
-                  - secretsmanager:ListSecrets
-                Resource:
-                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:wiz-connector/*
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub arn:aws:s3:::${TerraformStateBucket}
-                  - !Sub arn:aws:s3:::${TerraformStateBucket}/*
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:DeleteItem
-                Resource:
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/terraform-state-lock
-      Tags:
-        - Key: Purpose
-          Value: GitHub Actions Bootstrap
-        - Key: ManagedBy
-          Value: CloudFormation
+  default_tags {
+    tags = {
+      Project     = "wiz-connector"
+      Environment = var.environment
+      ManagedBy   = "terraform"
+      Repository  = "abc-devsecops/entapps-wiz-connector"
+    }
+  }
+}
 
-Outputs:
-  RoleArn:
-    Description: ARN of the bootstrap IAM role - add this to your GitHub environment
-    Value: !GetAtt GitHubActionsBootstrapRole.Arn
-    Export:
-      Name: !Sub ${AWS::StackName}-RoleArn
+# Get EKS cluster info for Kubernetes provider
+data "aws_eks_cluster" "this" {
+  name = var.eks_cluster_name
+}
 
-  RoleName:
-    Description: Name of the bootstrap IAM role
-    Value: !Ref GitHubActionsBootstrapRole
+data "aws_eks_cluster_auth" "this" {
+  name = var.eks_cluster_name
+}
 
-  NextSteps:
-    Description: What to do next
-    Value: !Sub |
-      1. Add the Role ARN to your GitHub Environment '${GitHubEnvironment}':
-         ${GitHubActionsBootstrapRole.Arn}
-      2. Run your Terraform workflow
-      3. After Terraform creates its own role, update GitHub to use the new role
-      4. Optionally delete this CloudFormation stack
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.this.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.this.token
+}
+
+################################################################################
+# Data Sources
+################################################################################
+
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+data "aws_partition" "current" {}
+
+# Get existing OIDC provider (you mentioned it's already set up)
+data "aws_iam_openid_connect_provider" "github" {
+  url = "https://token.actions.githubusercontent.com"
+}
