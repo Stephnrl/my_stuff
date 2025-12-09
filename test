@@ -1,111 +1,199 @@
 ################################################################################
-# Outputs
+# IAM Role for GitHub Actions (OIDC)
+# This role allows GitHub Actions to deploy to AWS via OIDC federation
 ################################################################################
 
-# GitHub Actions Role (for your GitHub environment)
-output "github_actions_role_arn" {
-  description = "IAM Role ARN for GitHub Actions - add this to your GitHub environment"
-  value       = aws_iam_role.github_actions.arn
+resource "aws_iam_role" "github_actions" {
+  name = "wiz-connector-github-actions-${var.environment}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = data.aws_iam_openid_connect_provider.github.arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            # Trust the specific repo and environment
+            "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:environment:${var.github_environment}"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(var.additional_tags, {
+    Name = "wiz-connector-github-actions-${var.environment}"
+  })
 }
 
-output "github_actions_role_name" {
-  description = "IAM Role name for GitHub Actions"
-  value       = aws_iam_role.github_actions.name
-}
+# Policy for GitHub Actions role - permissions needed to run Terraform
+resource "aws_iam_role_policy" "github_actions" {
+  name = "wiz-connector-github-actions-policy"
+  role = aws_iam_role.github_actions.id
 
-# Pod Identity Role
-output "wiz_connector_pod_role_arn" {
-  description = "IAM Role ARN for Wiz connector pod (Pod Identity)"
-  value       = aws_iam_role.wiz_connector_pod.arn
-}
-
-output "wiz_connector_pod_role_name" {
-  description = "IAM Role name for Wiz connector pod"
-  value       = aws_iam_role.wiz_connector_pod.name
-}
-
-# Secrets Manager
-output "wiz_client_id_secret_arn" {
-  description = "ARN of the Wiz Client ID secret in Secrets Manager"
-  value       = aws_secretsmanager_secret.wiz_client_id.arn
-}
-
-output "wiz_client_secret_secret_arn" {
-  description = "ARN of the Wiz Client Secret in Secrets Manager"
-  value       = aws_secretsmanager_secret.wiz_client_secret.arn
-}
-
-# Kubernetes Resources
-output "service_account_name" {
-  description = "Name of the Kubernetes service account"
-  value       = kubernetes_service_account.wiz_connector.metadata[0].name
-}
-
-output "namespace" {
-  description = "Kubernetes namespace for Wiz connector"
-  value       = var.wiz_namespace
-}
-
-output "secret_provider_class_name" {
-  description = "Name of the SecretProviderClass"
-  value       = "wiz-connector-secrets"
-}
-
-# Pod Identity Association
-output "pod_identity_association_id" {
-  description = "ID of the EKS Pod Identity Association"
-  value       = aws_eks_pod_identity_association.wiz_connector.association_id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      # EKS permissions
+      {
+        Effect = "Allow"
+        Action = [
+          "eks:DescribeCluster",
+          "eks:ListClusters",
+          "eks:DescribeAddon",
+          "eks:ListAddons",
+          "eks:CreateAddon",
+          "eks:UpdateAddon",
+          "eks:DeleteAddon",
+          "eks:DescribePodIdentityAssociation",
+          "eks:CreatePodIdentityAssociation",
+          "eks:DeletePodIdentityAssociation",
+          "eks:ListPodIdentityAssociations"
+        ]
+        Resource = "*"
+      },
+      # IAM permissions for managing Pod Identity role
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:CreateRole",
+          "iam:DeleteRole",
+          "iam:GetRole",
+          "iam:UpdateRole",
+          "iam:TagRole",
+          "iam:UntagRole",
+          "iam:ListRoleTags",
+          "iam:PutRolePolicy",
+          "iam:GetRolePolicy",
+          "iam:DeleteRolePolicy",
+          "iam:ListRolePolicies",
+          "iam:AttachRolePolicy",
+          "iam:DetachRolePolicy",
+          "iam:ListAttachedRolePolicies",
+          "iam:PassRole"
+        ]
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/wiz-connector-*"
+        ]
+      },
+      # Secrets Manager permissions
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:CreateSecret",
+          "secretsmanager:DeleteSecret",
+          "secretsmanager:DescribeSecret",
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:UpdateSecret",
+          "secretsmanager:TagResource",
+          "secretsmanager:UntagResource",
+          "secretsmanager:ListSecrets"
+        ]
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:wiz-connector/*"
+        ]
+      },
+      # S3 permissions for Terraform state
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:s3:::${var.terraform_state_bucket}",
+          "arn:${data.aws_partition.current.partition}:s3:::${var.terraform_state_bucket}/*"
+        ]
+      },
+      # DynamoDB for state locking (optional but recommended)
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem"
+        ]
+        Resource = "arn:${data.aws_partition.current.partition}:dynamodb:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:table/terraform-state-lock"
+      }
+    ]
+  })
 }
 
 ################################################################################
-# Usage Instructions
+# IAM Role for Wiz Connector Pod (Pod Identity)
+# This role is assumed by the Wiz connector pod via EKS Pod Identity
 ################################################################################
 
-output "next_steps" {
-  description = "Next steps after applying this Terraform"
-  value       = <<-EOT
+resource "aws_iam_role" "wiz_connector_pod" {
+  name = "wiz-connector-pod-${var.environment}"
 
-    ====================================================================
-    NEXT STEPS
-    ====================================================================
-    
-    1. Add the GitHub Actions Role ARN to your GitHub Environment:
-       - Go to: https://github.com/${var.github_org}/${var.github_repo}/settings/environments
-       - Select environment: ${var.github_environment}
-       - Add secret: AWS_ROLE_ARN = ${aws_iam_role.github_actions.arn}
+  # Pod Identity trust policy
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "pods.eks.amazonaws.com"
+        }
+        Action = [
+          "sts:AssumeRole",
+          "sts:TagSession"
+        ]
+      }
+    ]
+  })
 
-    2. If you haven't populated the Wiz secrets yet, run:
-       aws secretsmanager put-secret-value \
-         --secret-id ${aws_secretsmanager_secret.wiz_client_id.name} \
-         --secret-string "YOUR_WIZ_CLIENT_ID"
-       
-       aws secretsmanager put-secret-value \
-         --secret-id ${aws_secretsmanager_secret.wiz_client_secret.name} \
-         --secret-string "YOUR_WIZ_CLIENT_SECRET"
+  tags = merge(var.additional_tags, {
+    Name = "wiz-connector-pod-${var.environment}"
+  })
+}
 
-    3. Deploy your Wiz connector using the following in your pod spec:
-       
-       serviceAccountName: ${kubernetes_service_account.wiz_connector.metadata[0].name}
-       
-       volumes:
-         - name: secrets-store
-           csi:
-             driver: secrets-store.csi.k8s.io
-             readOnly: true
-             volumeAttributes:
-               secretProviderClass: wiz-connector-secrets
-       
-       containers:
-         - name: wiz-connector
-           volumeMounts:
-             - name: secrets-store
-               mountPath: "/mnt/secrets"
-               readOnly: true
-           # OR use environment variables from synced K8s secret:
-           envFrom:
-             - secretRef:
-                 name: wiz-connector-credentials
+# Policy for Wiz connector pod - access to Secrets Manager
+resource "aws_iam_role_policy" "wiz_connector_secrets" {
+  name = "wiz-connector-secrets-access"
+  role = aws_iam_role.wiz_connector_pod.id
 
-    ====================================================================
-  EOT
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.wiz_client_id.arn,
+          aws_secretsmanager_secret.wiz_client_secret.arn
+        ]
+      }
+    ]
+  })
+}
+
+################################################################################
+# EKS Pod Identity Association
+# Links the IAM role to the Kubernetes service account
+################################################################################
+
+resource "aws_eks_pod_identity_association" "wiz_connector" {
+  cluster_name    = var.eks_cluster_name
+  namespace       = var.wiz_namespace
+  service_account = var.wiz_service_account_name
+  role_arn        = aws_iam_role.wiz_connector_pod.arn
+
+  tags = merge(var.additional_tags, {
+    Name = "wiz-connector-pod-identity-${var.environment}"
+  })
 }
