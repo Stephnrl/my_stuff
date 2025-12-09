@@ -1,383 +1,83 @@
 ################################################################################
-# EKS Application Deployment Module
-# Supports: Pod Identity, Access Entry, RBAC, Secrets Store CSI, Helm from JFrog
-################################################################################
-
-terraform {
-  required_version = ">= 1.3.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = ">= 2.20"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = ">= 2.10"
-    }
-  }
-}
-
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
-
-data "aws_eks_cluster" "this" {
-  name = var.cluster_name
-}
-
-locals {
-  account_id = data.aws_caller_identity.current.account_id
-  region     = data.aws_region.current.name
-  
-  # Default RBAC rules if none provided
-  default_rbac_rules = [
-    {
-      api_groups = [""]
-      resources  = ["pods", "nodes", "namespaces", "services", "configmaps", "secrets"]
-      verbs      = ["get", "list", "watch"]
-    },
-    {
-      api_groups = ["apps"]
-      resources  = ["deployments", "daemonsets", "replicasets", "statefulsets"]
-      verbs      = ["get", "list", "watch"]
-    }
-  ]
-  
-  rbac_rules = length(var.cluster_role_rules) > 0 ? var.cluster_role_rules : local.default_rbac_rules
-}
-
-################################################################################
 # Namespace
 ################################################################################
 
-resource "kubernetes_namespace" "this" {
-  count = var.create_namespace ? 1 : 0
-
-  metadata {
-    name = var.namespace
-    labels = merge(
-      { "app.kubernetes.io/managed-by" = "terraform" },
-      var.namespace_labels
-    )
-  }
+output "namespace" {
+  description = "The namespace where resources are deployed"
+  value       = var.namespace
 }
 
 ################################################################################
 # Service Account
 ################################################################################
 
-resource "kubernetes_service_account" "this" {
-  count = var.create_service_account ? 1 : 0
-
-  metadata {
-    name      = var.service_account_name
-    namespace = var.namespace
-    labels = merge(
-      { "app.kubernetes.io/managed-by" = "terraform" },
-      var.service_account_labels
-    )
-    annotations = var.service_account_annotations
-  }
-
-  depends_on = [kubernetes_namespace.this]
+output "service_account_name" {
+  description = "Name of the created service account"
+  value       = var.create_service_account ? kubernetes_service_account.this[0].metadata[0].name : var.service_account_name
 }
 
 ################################################################################
-# IAM Role for Pod Identity
+# Pod Identity
 ################################################################################
 
-data "aws_iam_policy_document" "pod_identity_assume_role" {
-  count = var.create_pod_identity_role ? 1 : 0
-
-  statement {
-    effect = "Allow"
-    
-    principals {
-      type        = "Service"
-      identifiers = ["pods.eks.amazonaws.com"]
-    }
-    
-    actions = [
-      "sts:AssumeRole",
-      "sts:TagSession"
-    ]
-  }
+output "pod_identity_role_arn" {
+  description = "ARN of the IAM role created for Pod Identity"
+  value       = var.create_pod_identity_role ? aws_iam_role.pod_identity[0].arn : var.existing_pod_identity_role_arn
 }
 
-resource "aws_iam_role" "pod_identity" {
-  count = var.create_pod_identity_role ? 1 : 0
-
-  name               = "${var.app_name}-${var.cluster_name}-pod-identity"
-  assume_role_policy = data.aws_iam_policy_document.pod_identity_assume_role[0].json
-  
-  tags = merge(
-    { "eks-cluster" = var.cluster_name },
-    var.tags
-  )
+output "pod_identity_role_name" {
+  description = "Name of the IAM role created for Pod Identity"
+  value       = var.create_pod_identity_role ? aws_iam_role.pod_identity[0].name : null
 }
 
-resource "aws_iam_role_policy_attachment" "pod_identity" {
-  for_each = var.create_pod_identity_role ? toset(var.pod_identity_policy_arns) : []
-
-  role       = aws_iam_role.pod_identity[0].name
-  policy_arn = each.value
-}
-
-resource "aws_iam_role_policy" "pod_identity_inline" {
-  count = var.create_pod_identity_role && var.pod_identity_inline_policy != null ? 1 : 0
-
-  name   = "${var.app_name}-inline-policy"
-  role   = aws_iam_role.pod_identity[0].id
-  policy = var.pod_identity_inline_policy
+output "pod_identity_association_id" {
+  description = "ID of the EKS Pod Identity association"
+  value       = var.create_pod_identity_association ? aws_eks_pod_identity_association.this[0].association_id : null
 }
 
 ################################################################################
-# EKS Pod Identity Association
+# RBAC
 ################################################################################
 
-resource "aws_eks_pod_identity_association" "this" {
-  count = var.create_pod_identity_association ? 1 : 0
+output "cluster_role_name" {
+  description = "Name of the created ClusterRole"
+  value       = var.create_cluster_role ? kubernetes_cluster_role.this[0].metadata[0].name : null
+}
 
-  cluster_name    = var.cluster_name
-  namespace       = var.namespace
-  service_account = var.service_account_name
-  role_arn        = var.create_pod_identity_role ? aws_iam_role.pod_identity[0].arn : var.existing_pod_identity_role_arn
-
-  tags = var.tags
-
-  depends_on = [
-    kubernetes_service_account.this,
-    kubernetes_namespace.this
-  ]
+output "cluster_role_binding_name" {
+  description = "Name of the created ClusterRoleBinding"
+  value       = var.create_cluster_role ? kubernetes_cluster_role_binding.this[0].metadata[0].name : null
 }
 
 ################################################################################
-# EKS Access Entry (for deployment/CI-CD identity)
+# Secrets
 ################################################################################
 
-resource "aws_eks_access_entry" "this" {
-  for_each = var.access_entries
-
-  cluster_name      = var.cluster_name
-  principal_arn     = each.value.principal_arn
-  type              = lookup(each.value, "type", "STANDARD")
-  kubernetes_groups = lookup(each.value, "kubernetes_groups", null)
-
-  tags = var.tags
-}
-
-resource "aws_eks_access_policy_association" "this" {
-  for_each = var.access_entries
-
-  cluster_name  = var.cluster_name
-  principal_arn = each.value.principal_arn
-  policy_arn    = each.value.policy_arn
-
-  access_scope {
-    type       = lookup(each.value, "access_scope_type", "cluster")
-    namespaces = lookup(each.value, "access_scope_namespaces", null)
-  }
-
-  depends_on = [aws_eks_access_entry.this]
+output "secret_provider_class_name" {
+  description = "Name of the created SecretProviderClass"
+  value       = var.create_secret_provider_class ? "${var.app_name}-secrets" : null
 }
 
 ################################################################################
-# Cluster Role & Binding
+# Helm
 ################################################################################
 
-resource "kubernetes_cluster_role" "this" {
-  count = var.create_cluster_role ? 1 : 0
-
-  metadata {
-    name = "${var.app_name}-cluster-role"
-    labels = merge(
-      { "app.kubernetes.io/managed-by" = "terraform" },
-      var.cluster_role_labels
-    )
-  }
-
-  dynamic "rule" {
-    for_each = local.rbac_rules
-    content {
-      api_groups = rule.value.api_groups
-      resources  = rule.value.resources
-      verbs      = rule.value.verbs
-    }
-  }
+output "helm_release_name" {
+  description = "Name of the Helm release"
+  value       = var.deploy_helm_chart ? helm_release.this[0].name : null
 }
 
-resource "kubernetes_cluster_role_binding" "this" {
-  count = var.create_cluster_role ? 1 : 0
-
-  metadata {
-    name = "${var.app_name}-cluster-role-binding"
-    labels = merge(
-      { "app.kubernetes.io/managed-by" = "terraform" },
-      var.cluster_role_labels
-    )
-  }
-
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "ClusterRole"
-    name      = kubernetes_cluster_role.this[0].metadata[0].name
-  }
-
-  subject {
-    kind      = "ServiceAccount"
-    name      = var.service_account_name
-    namespace = var.namespace
-  }
+output "helm_release_version" {
+  description = "Version of the deployed Helm chart"
+  value       = var.deploy_helm_chart ? helm_release.this[0].version : null
 }
 
-################################################################################
-# Role & RoleBinding (namespace-scoped, optional)
-################################################################################
-
-resource "kubernetes_role" "this" {
-  count = var.create_namespace_role ? 1 : 0
-
-  metadata {
-    name      = "${var.app_name}-role"
-    namespace = var.namespace
-    labels = {
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  dynamic "rule" {
-    for_each = var.namespace_role_rules
-    content {
-      api_groups = rule.value.api_groups
-      resources  = rule.value.resources
-      verbs      = rule.value.verbs
-    }
-  }
-
-  depends_on = [kubernetes_namespace.this]
+output "helm_release_status" {
+  description = "Status of the Helm release"
+  value       = var.deploy_helm_chart ? helm_release.this[0].status : null
 }
 
-resource "kubernetes_role_binding" "this" {
-  count = var.create_namespace_role ? 1 : 0
-
-  metadata {
-    name      = "${var.app_name}-role-binding"
-    namespace = var.namespace
-  }
-
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.this[0].metadata[0].name
-  }
-
-  subject {
-    kind      = "ServiceAccount"
-    name      = var.service_account_name
-    namespace = var.namespace
-  }
-
-  depends_on = [kubernetes_namespace.this]
-}
-
-################################################################################
-# Secrets Store CSI - SecretProviderClass
-################################################################################
-
-resource "kubernetes_manifest" "secret_provider_class" {
-  count = var.create_secret_provider_class ? 1 : 0
-
-  manifest = {
-    apiVersion = "secrets-store.csi.x-k8s.io/v1"
-    kind       = "SecretProviderClass"
-    metadata = {
-      name      = "${var.app_name}-secrets"
-      namespace = var.namespace
-    }
-    spec = {
-      provider = "aws"
-      parameters = {
-        objects = yamlencode([
-          for secret in var.secrets_manager_secrets : {
-            objectName = secret.secret_name
-            objectType = lookup(secret, "object_type", "secretsmanager")
-            objectAlias = lookup(secret, "alias", null)
-          }
-        ])
-      }
-      secretObjects = var.sync_as_kubernetes_secret ? [
-        {
-          secretName = "${var.app_name}-k8s-secret"
-          type       = "Opaque"
-          data = [
-            for secret in var.secrets_manager_secrets : {
-              objectName = lookup(secret, "alias", secret.secret_name)
-              key        = secret.key
-            }
-          ]
-        }
-      ] : []
-    }
-  }
-
-  depends_on = [kubernetes_namespace.this]
-}
-
-################################################################################
-# Helm Release
-################################################################################
-
-resource "helm_release" "this" {
-  count = var.deploy_helm_chart ? 1 : 0
-
-  name             = var.helm_release_name != null ? var.helm_release_name : var.app_name
-  namespace        = var.namespace
-  create_namespace = false # We manage namespace separately
-
-  repository          = var.helm_repository
-  repository_username = var.helm_repository_username
-  repository_password = var.helm_repository_password
-  chart               = var.helm_chart_name
-  version             = var.helm_chart_version
-
-  timeout         = var.helm_timeout
-  atomic          = var.helm_atomic
-  cleanup_on_fail = var.helm_cleanup_on_fail
-  wait            = var.helm_wait
-  wait_for_jobs   = var.helm_wait_for_jobs
-
-  # Base values
-  values = var.helm_values
-
-  # Dynamic set blocks for individual overrides
-  dynamic "set" {
-    for_each = var.helm_set_values
-    content {
-      name  = set.value.name
-      value = set.value.value
-      type  = lookup(set.value, "type", null)
-    }
-  }
-
-  # Sensitive values
-  dynamic "set_sensitive" {
-    for_each = var.helm_set_sensitive_values
-    content {
-      name  = set_sensitive.value.name
-      value = set_sensitive.value.value
-      type  = lookup(set_sensitive.value, "type", null)
-    }
-  }
-
-  depends_on = [
-    kubernetes_namespace.this,
-    kubernetes_service_account.this,
-    kubernetes_cluster_role_binding.this,
-    kubernetes_manifest.secret_provider_class,
-    aws_eks_pod_identity_association.this
-  ]
+output "helm_release_metadata" {
+  description = "Metadata of the Helm release"
+  value       = var.deploy_helm_chart ? helm_release.this[0].metadata : null
 }
