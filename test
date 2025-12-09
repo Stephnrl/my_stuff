@@ -1,104 +1,38 @@
 ################################################################################
-# Variables
+# AWS Secrets Manager - Wiz Credentials
+# These secrets store the Wiz API credentials that will be mounted into the pod
 ################################################################################
 
-variable "aws_region" {
-  description = "AWS region to deploy resources"
-  type        = string
-  default     = "us-east-1"
+resource "aws_secretsmanager_secret" "wiz_client_id" {
+  name                    = "wiz-connector/${var.environment}/client-id"
+  description             = "Wiz API Client ID for ${var.environment} environment"
+  recovery_window_in_days = 7
+
+  tags = merge(var.additional_tags, {
+    Name        = "wiz-connector-client-id-${var.environment}"
+    Application = "wiz-connector"
+  })
 }
 
-variable "environment" {
-  description = "Environment name (dev, staging, prod)"
-  type        = string
-  default     = "dev"
+resource "aws_secretsmanager_secret_version" "wiz_client_id" {
+  count         = var.create_secrets && var.wiz_client_id != "" ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.wiz_client_id.id
+  secret_string = var.wiz_client_id
 }
 
-variable "eks_cluster_name" {
-  description = "Name of the existing EKS cluster"
-  type        = string
+resource "aws_secretsmanager_secret" "wiz_client_secret" {
+  name                    = "wiz-connector/${var.environment}/client-secret"
+  description             = "Wiz API Client Secret/Token for ${var.environment} environment"
+  recovery_window_in_days = 7
+
+  tags = merge(var.additional_tags, {
+    Name        = "wiz-connector-client-secret-${var.environment}"
+    Application = "wiz-connector"
+  })
 }
 
-variable "wiz_namespace" {
-  description = "Kubernetes namespace for Wiz connector"
-  type        = string
-  default     = "wiz"
-}
-
-variable "wiz_service_account_name" {
-  description = "Name of the Kubernetes service account for Wiz"
-  type        = string
-  default     = "wiz-connector"
-}
-
-variable "create_namespace" {
-  description = "Whether to create the Kubernetes namespace"
-  type        = bool
-  default     = true
-}
-
-# GitHub OIDC Configuration
-variable "github_org" {
-  description = "GitHub organization name"
-  type        = string
-  default     = "abc-devsecops"
-}
-
-variable "github_repo" {
-  description = "GitHub repository name"
-  type        = string
-  default     = "entapps-wiz-connector"
-}
-
-variable "github_environment" {
-  description = "GitHub environment for OIDC trust"
-  type        = string
-  default     = "dev"
-}
-
-# Secrets Configuration
-variable "wiz_client_id" {
-  description = "Wiz API Client ID (will be stored in Secrets Manager)"
-  type        = string
-  sensitive   = true
-  default     = "" # Pass via TF_VAR or prompt
-}
-
-variable "wiz_client_secret" {
-  description = "Wiz API Client Secret/Token (will be stored in Secrets Manager)"
-  type        = string
-  sensitive   = true
-  default     = "" # Pass via TF_VAR or prompt
-}
-
-variable "create_secrets" {
-  description = "Whether to create secrets in Secrets Manager (set to false if secrets already exist)"
-  type        = bool
-  default     = true
-}
-
-# EKS Addon Configuration
-variable "install_secrets_csi_driver" {
-  description = "Whether to install the Secrets Store CSI Driver addon"
-  type        = bool
-  default     = true
-}
-
-variable "secrets_csi_driver_version" {
-  description = "Version of the Secrets Store CSI Driver addon"
-  type        = string
-  default     = null # Uses latest compatible version if null
-}
-
-# Terraform State
-variable "terraform_state_bucket" {
-  description = "S3 bucket name for Terraform state"
-  type        = string
-}
-
-# Tags
-variable "additional_tags" {
-  description = "Additional tags to apply to resources"
-  type        = map(string)
-  default     = {}
+resource "aws_secretsmanager_secret_version" "wiz_client_secret" {
+  count         = var.create_secrets && var.wiz_client_secret != "" ? 1 : 0
+  secret_id     = aws_secretsmanager_secret.wiz_client_secret.id
+  secret_string = var.wiz_client_secret
 }
