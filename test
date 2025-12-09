@@ -1,38 +1,111 @@
 ################################################################################
-# AWS Secrets Manager - Wiz Credentials
-# These secrets store the Wiz API credentials that will be mounted into the pod
+# Outputs
 ################################################################################
 
-resource "aws_secretsmanager_secret" "wiz_client_id" {
-  name                    = "wiz-connector/${var.environment}/client-id"
-  description             = "Wiz API Client ID for ${var.environment} environment"
-  recovery_window_in_days = 7
-
-  tags = merge(var.additional_tags, {
-    Name        = "wiz-connector-client-id-${var.environment}"
-    Application = "wiz-connector"
-  })
+# GitHub Actions Role (for your GitHub environment)
+output "github_actions_role_arn" {
+  description = "IAM Role ARN for GitHub Actions - add this to your GitHub environment"
+  value       = aws_iam_role.github_actions.arn
 }
 
-resource "aws_secretsmanager_secret_version" "wiz_client_id" {
-  count         = var.create_secrets && var.wiz_client_id != "" ? 1 : 0
-  secret_id     = aws_secretsmanager_secret.wiz_client_id.id
-  secret_string = var.wiz_client_id
+output "github_actions_role_name" {
+  description = "IAM Role name for GitHub Actions"
+  value       = aws_iam_role.github_actions.name
 }
 
-resource "aws_secretsmanager_secret" "wiz_client_secret" {
-  name                    = "wiz-connector/${var.environment}/client-secret"
-  description             = "Wiz API Client Secret/Token for ${var.environment} environment"
-  recovery_window_in_days = 7
-
-  tags = merge(var.additional_tags, {
-    Name        = "wiz-connector-client-secret-${var.environment}"
-    Application = "wiz-connector"
-  })
+# Pod Identity Role
+output "wiz_connector_pod_role_arn" {
+  description = "IAM Role ARN for Wiz connector pod (Pod Identity)"
+  value       = aws_iam_role.wiz_connector_pod.arn
 }
 
-resource "aws_secretsmanager_secret_version" "wiz_client_secret" {
-  count         = var.create_secrets && var.wiz_client_secret != "" ? 1 : 0
-  secret_id     = aws_secretsmanager_secret.wiz_client_secret.id
-  secret_string = var.wiz_client_secret
+output "wiz_connector_pod_role_name" {
+  description = "IAM Role name for Wiz connector pod"
+  value       = aws_iam_role.wiz_connector_pod.name
+}
+
+# Secrets Manager
+output "wiz_client_id_secret_arn" {
+  description = "ARN of the Wiz Client ID secret in Secrets Manager"
+  value       = aws_secretsmanager_secret.wiz_client_id.arn
+}
+
+output "wiz_client_secret_secret_arn" {
+  description = "ARN of the Wiz Client Secret in Secrets Manager"
+  value       = aws_secretsmanager_secret.wiz_client_secret.arn
+}
+
+# Kubernetes Resources
+output "service_account_name" {
+  description = "Name of the Kubernetes service account"
+  value       = kubernetes_service_account.wiz_connector.metadata[0].name
+}
+
+output "namespace" {
+  description = "Kubernetes namespace for Wiz connector"
+  value       = var.wiz_namespace
+}
+
+output "secret_provider_class_name" {
+  description = "Name of the SecretProviderClass"
+  value       = "wiz-connector-secrets"
+}
+
+# Pod Identity Association
+output "pod_identity_association_id" {
+  description = "ID of the EKS Pod Identity Association"
+  value       = aws_eks_pod_identity_association.wiz_connector.association_id
+}
+
+################################################################################
+# Usage Instructions
+################################################################################
+
+output "next_steps" {
+  description = "Next steps after applying this Terraform"
+  value       = <<-EOT
+
+    ====================================================================
+    NEXT STEPS
+    ====================================================================
+    
+    1. Add the GitHub Actions Role ARN to your GitHub Environment:
+       - Go to: https://github.com/${var.github_org}/${var.github_repo}/settings/environments
+       - Select environment: ${var.github_environment}
+       - Add secret: AWS_ROLE_ARN = ${aws_iam_role.github_actions.arn}
+
+    2. If you haven't populated the Wiz secrets yet, run:
+       aws secretsmanager put-secret-value \
+         --secret-id ${aws_secretsmanager_secret.wiz_client_id.name} \
+         --secret-string "YOUR_WIZ_CLIENT_ID"
+       
+       aws secretsmanager put-secret-value \
+         --secret-id ${aws_secretsmanager_secret.wiz_client_secret.name} \
+         --secret-string "YOUR_WIZ_CLIENT_SECRET"
+
+    3. Deploy your Wiz connector using the following in your pod spec:
+       
+       serviceAccountName: ${kubernetes_service_account.wiz_connector.metadata[0].name}
+       
+       volumes:
+         - name: secrets-store
+           csi:
+             driver: secrets-store.csi.k8s.io
+             readOnly: true
+             volumeAttributes:
+               secretProviderClass: wiz-connector-secrets
+       
+       containers:
+         - name: wiz-connector
+           volumeMounts:
+             - name: secrets-store
+               mountPath: "/mnt/secrets"
+               readOnly: true
+           # OR use environment variables from synced K8s secret:
+           envFrom:
+             - secretRef:
+                 name: wiz-connector-credentials
+
+    ====================================================================
+  EOT
 }
