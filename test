@@ -1,83 +1,312 @@
 ################################################################################
-# Namespace
+# General
 ################################################################################
 
-output "namespace" {
-  description = "The namespace where resources are deployed"
-  value       = var.namespace
+variable "app_name" {
+  description = "Name of the application being deployed"
+  type        = string
+}
+
+variable "cluster_name" {
+  description = "Name of the EKS cluster"
+  type        = string
+}
+
+variable "namespace" {
+  description = "Kubernetes namespace for the application"
+  type        = string
+}
+
+variable "create_namespace" {
+  description = "Whether to create the namespace"
+  type        = bool
+  default     = true
+}
+
+variable "namespace_labels" {
+  description = "Labels to apply to the namespace"
+  type        = map(string)
+  default     = {}
+}
+
+variable "tags" {
+  description = "Tags to apply to AWS resources"
+  type        = map(string)
+  default     = {}
 }
 
 ################################################################################
 # Service Account
 ################################################################################
 
-output "service_account_name" {
-  description = "Name of the created service account"
-  value       = var.create_service_account ? kubernetes_service_account.this[0].metadata[0].name : var.service_account_name
+variable "create_service_account" {
+  description = "Whether to create a Kubernetes service account"
+  type        = bool
+  default     = true
+}
+
+variable "service_account_name" {
+  description = "Name of the Kubernetes service account"
+  type        = string
+}
+
+variable "service_account_labels" {
+  description = "Labels to apply to the service account"
+  type        = map(string)
+  default     = {}
+}
+
+variable "service_account_annotations" {
+  description = "Annotations to apply to the service account"
+  type        = map(string)
+  default     = {}
 }
 
 ################################################################################
 # Pod Identity
 ################################################################################
 
-output "pod_identity_role_arn" {
-  description = "ARN of the IAM role created for Pod Identity"
-  value       = var.create_pod_identity_role ? aws_iam_role.pod_identity[0].arn : var.existing_pod_identity_role_arn
+variable "create_pod_identity_role" {
+  description = "Whether to create an IAM role for Pod Identity"
+  type        = bool
+  default     = true
 }
 
-output "pod_identity_role_name" {
-  description = "Name of the IAM role created for Pod Identity"
-  value       = var.create_pod_identity_role ? aws_iam_role.pod_identity[0].name : null
+variable "create_pod_identity_association" {
+  description = "Whether to create the EKS Pod Identity association"
+  type        = bool
+  default     = true
 }
 
-output "pod_identity_association_id" {
-  description = "ID of the EKS Pod Identity association"
-  value       = var.create_pod_identity_association ? aws_eks_pod_identity_association.this[0].association_id : null
+variable "existing_pod_identity_role_arn" {
+  description = "ARN of an existing IAM role to use for Pod Identity (if not creating one)"
+  type        = string
+  default     = null
+}
+
+variable "pod_identity_policy_arns" {
+  description = "List of IAM policy ARNs to attach to the Pod Identity role"
+  type        = list(string)
+  default     = []
+}
+
+variable "pod_identity_inline_policy" {
+  description = "Inline IAM policy JSON for the Pod Identity role"
+  type        = string
+  default     = null
 }
 
 ################################################################################
-# RBAC
+# Access Entries
 ################################################################################
 
-output "cluster_role_name" {
-  description = "Name of the created ClusterRole"
-  value       = var.create_cluster_role ? kubernetes_cluster_role.this[0].metadata[0].name : null
+variable "access_entries" {
+  description = <<-EOT
+    Map of EKS access entries for cluster authentication.
+    Each entry should contain:
+      - principal_arn: IAM principal ARN
+      - policy_arn: EKS access policy ARN
+      - type: (optional) STANDARD or EC2_LINUX or EC2_WINDOWS
+      - kubernetes_groups: (optional) List of Kubernetes groups
+      - access_scope_type: (optional) cluster or namespace
+      - access_scope_namespaces: (optional) List of namespaces if scope is namespace
+  EOT
+  type        = map(any)
+  default     = {}
 }
 
-output "cluster_role_binding_name" {
-  description = "Name of the created ClusterRoleBinding"
-  value       = var.create_cluster_role ? kubernetes_cluster_role_binding.this[0].metadata[0].name : null
+################################################################################
+# RBAC - Cluster Role
+################################################################################
+
+variable "create_cluster_role" {
+  description = "Whether to create a ClusterRole and ClusterRoleBinding"
+  type        = bool
+  default     = true
+}
+
+variable "cluster_role_rules" {
+  description = <<-EOT
+    List of RBAC rules for the ClusterRole.
+    Each rule should contain:
+      - api_groups: List of API groups
+      - resources: List of resources
+      - verbs: List of verbs
+  EOT
+  type = list(object({
+    api_groups = list(string)
+    resources  = list(string)
+    verbs      = list(string)
+  }))
+  default = []
+}
+
+variable "cluster_role_labels" {
+  description = "Labels to apply to the ClusterRole and ClusterRoleBinding"
+  type        = map(string)
+  default     = {}
 }
 
 ################################################################################
-# Secrets
+# RBAC - Namespace Role (optional)
 ################################################################################
 
-output "secret_provider_class_name" {
-  description = "Name of the created SecretProviderClass"
-  value       = var.create_secret_provider_class ? "${var.app_name}-secrets" : null
+variable "create_namespace_role" {
+  description = "Whether to create a namespace-scoped Role and RoleBinding"
+  type        = bool
+  default     = false
+}
+
+variable "namespace_role_rules" {
+  description = "List of RBAC rules for the namespace-scoped Role"
+  type = list(object({
+    api_groups = list(string)
+    resources  = list(string)
+    verbs      = list(string)
+  }))
+  default = []
+}
+
+################################################################################
+# Secrets Store CSI
+################################################################################
+
+variable "create_secret_provider_class" {
+  description = "Whether to create a SecretProviderClass for AWS Secrets Manager"
+  type        = bool
+  default     = false
+}
+
+variable "secrets_manager_secrets" {
+  description = <<-EOT
+    List of secrets to fetch from AWS Secrets Manager.
+    Each secret should contain:
+      - secret_name: Name/ARN of the secret in Secrets Manager
+      - key: Key name for the Kubernetes secret
+      - alias: (optional) Alias for the secret
+      - object_type: (optional) secretsmanager or ssmparameter
+  EOT
+  type = list(object({
+    secret_name = string
+    key         = string
+    alias       = optional(string)
+    object_type = optional(string, "secretsmanager")
+  }))
+  default = []
+}
+
+variable "sync_as_kubernetes_secret" {
+  description = "Whether to sync secrets as Kubernetes secrets"
+  type        = bool
+  default     = true
 }
 
 ################################################################################
 # Helm
 ################################################################################
 
-output "helm_release_name" {
-  description = "Name of the Helm release"
-  value       = var.deploy_helm_chart ? helm_release.this[0].name : null
+variable "deploy_helm_chart" {
+  description = "Whether to deploy a Helm chart"
+  type        = bool
+  default     = true
 }
 
-output "helm_release_version" {
-  description = "Version of the deployed Helm chart"
-  value       = var.deploy_helm_chart ? helm_release.this[0].version : null
+variable "helm_release_name" {
+  description = "Helm release name (defaults to app_name)"
+  type        = string
+  default     = null
 }
 
-output "helm_release_status" {
-  description = "Status of the Helm release"
-  value       = var.deploy_helm_chart ? helm_release.this[0].status : null
+variable "helm_repository" {
+  description = "Helm chart repository URL (e.g., JFrog Artifactory)"
+  type        = string
+  default     = null
 }
 
-output "helm_release_metadata" {
-  description = "Metadata of the Helm release"
-  value       = var.deploy_helm_chart ? helm_release.this[0].metadata : null
+variable "helm_repository_username" {
+  description = "Username for Helm repository authentication"
+  type        = string
+  default     = null
+}
+
+variable "helm_repository_password" {
+  description = "Password for Helm repository authentication"
+  type        = string
+  sensitive   = true
+  default     = null
+}
+
+variable "helm_chart_name" {
+  description = "Name of the Helm chart"
+  type        = string
+  default     = null
+}
+
+variable "helm_chart_version" {
+  description = "Version of the Helm chart"
+  type        = string
+  default     = null
+}
+
+variable "helm_values" {
+  description = "List of values files (as strings) to pass to the Helm chart"
+  type        = list(string)
+  default     = []
+}
+
+variable "helm_set_values" {
+  description = <<-EOT
+    List of values to set via --set.
+    Each item should contain:
+      - name: The name of the value
+      - value: The value to set
+      - type: (optional) auto, string, or file
+  EOT
+  type = list(object({
+    name  = string
+    value = string
+    type  = optional(string)
+  }))
+  default = []
+}
+
+variable "helm_set_sensitive_values" {
+  description = "List of sensitive values to set (same structure as helm_set_values)"
+  type = list(object({
+    name  = string
+    value = string
+    type  = optional(string)
+  }))
+  sensitive = true
+  default   = []
+}
+
+variable "helm_timeout" {
+  description = "Timeout for Helm operations in seconds"
+  type        = number
+  default     = 600
+}
+
+variable "helm_atomic" {
+  description = "Whether to use atomic installation (rollback on failure)"
+  type        = bool
+  default     = true
+}
+
+variable "helm_cleanup_on_fail" {
+  description = "Whether to cleanup on failed installation"
+  type        = bool
+  default     = true
+}
+
+variable "helm_wait" {
+  description = "Whether to wait for resources to be ready"
+  type        = bool
+  default     = true
+}
+
+variable "helm_wait_for_jobs" {
+  description = "Whether to wait for jobs to complete"
+  type        = bool
+  default     = false
 }
