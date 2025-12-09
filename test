@@ -1,312 +1,264 @@
 ################################################################################
-# General
+# Example: Deploying Wiz Kubernetes Connector using the EKS App Module
 ################################################################################
 
-variable "app_name" {
-  description = "Name of the application being deployed"
-  type        = string
+terraform {
+  required_version = ">= 1.3.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = ">= 2.20"
+    }
+    helm = {
+      source  = "hashicorp/helm"
+      version = ">= 2.10"
+    }
+  }
+
+  # backend "s3" {
+  #   bucket = "your-terraform-state-bucket"
+  #   key    = "eks-apps/wiz-connector/terraform.tfstate"
+  #   region = "us-east-1"
+  # }
 }
+
+################################################################################
+# Variables
+################################################################################
 
 variable "cluster_name" {
-  description = "Name of the EKS cluster"
+  description = "EKS cluster name"
   type        = string
 }
 
-variable "namespace" {
-  description = "Kubernetes namespace for the application"
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "jfrog_url" {
+  description = "JFrog Artifactory Helm repository URL"
   type        = string
 }
 
-variable "create_namespace" {
-  description = "Whether to create the namespace"
-  type        = bool
-  default     = true
-}
-
-variable "namespace_labels" {
-  description = "Labels to apply to the namespace"
-  type        = map(string)
-  default     = {}
-}
-
-variable "tags" {
-  description = "Tags to apply to AWS resources"
-  type        = map(string)
-  default     = {}
-}
-
-################################################################################
-# Service Account
-################################################################################
-
-variable "create_service_account" {
-  description = "Whether to create a Kubernetes service account"
-  type        = bool
-  default     = true
-}
-
-variable "service_account_name" {
-  description = "Name of the Kubernetes service account"
+variable "jfrog_username" {
+  description = "JFrog username"
   type        = string
 }
 
-variable "service_account_labels" {
-  description = "Labels to apply to the service account"
-  type        = map(string)
-  default     = {}
-}
-
-variable "service_account_annotations" {
-  description = "Annotations to apply to the service account"
-  type        = map(string)
-  default     = {}
-}
-
-################################################################################
-# Pod Identity
-################################################################################
-
-variable "create_pod_identity_role" {
-  description = "Whether to create an IAM role for Pod Identity"
-  type        = bool
-  default     = true
-}
-
-variable "create_pod_identity_association" {
-  description = "Whether to create the EKS Pod Identity association"
-  type        = bool
-  default     = true
-}
-
-variable "existing_pod_identity_role_arn" {
-  description = "ARN of an existing IAM role to use for Pod Identity (if not creating one)"
-  type        = string
-  default     = null
-}
-
-variable "pod_identity_policy_arns" {
-  description = "List of IAM policy ARNs to attach to the Pod Identity role"
-  type        = list(string)
-  default     = []
-}
-
-variable "pod_identity_inline_policy" {
-  description = "Inline IAM policy JSON for the Pod Identity role"
-  type        = string
-  default     = null
-}
-
-################################################################################
-# Access Entries
-################################################################################
-
-variable "access_entries" {
-  description = <<-EOT
-    Map of EKS access entries for cluster authentication.
-    Each entry should contain:
-      - principal_arn: IAM principal ARN
-      - policy_arn: EKS access policy ARN
-      - type: (optional) STANDARD or EC2_LINUX or EC2_WINDOWS
-      - kubernetes_groups: (optional) List of Kubernetes groups
-      - access_scope_type: (optional) cluster or namespace
-      - access_scope_namespaces: (optional) List of namespaces if scope is namespace
-  EOT
-  type        = map(any)
-  default     = {}
-}
-
-################################################################################
-# RBAC - Cluster Role
-################################################################################
-
-variable "create_cluster_role" {
-  description = "Whether to create a ClusterRole and ClusterRoleBinding"
-  type        = bool
-  default     = true
-}
-
-variable "cluster_role_rules" {
-  description = <<-EOT
-    List of RBAC rules for the ClusterRole.
-    Each rule should contain:
-      - api_groups: List of API groups
-      - resources: List of resources
-      - verbs: List of verbs
-  EOT
-  type = list(object({
-    api_groups = list(string)
-    resources  = list(string)
-    verbs      = list(string)
-  }))
-  default = []
-}
-
-variable "cluster_role_labels" {
-  description = "Labels to apply to the ClusterRole and ClusterRoleBinding"
-  type        = map(string)
-  default     = {}
-}
-
-################################################################################
-# RBAC - Namespace Role (optional)
-################################################################################
-
-variable "create_namespace_role" {
-  description = "Whether to create a namespace-scoped Role and RoleBinding"
-  type        = bool
-  default     = false
-}
-
-variable "namespace_role_rules" {
-  description = "List of RBAC rules for the namespace-scoped Role"
-  type = list(object({
-    api_groups = list(string)
-    resources  = list(string)
-    verbs      = list(string)
-  }))
-  default = []
-}
-
-################################################################################
-# Secrets Store CSI
-################################################################################
-
-variable "create_secret_provider_class" {
-  description = "Whether to create a SecretProviderClass for AWS Secrets Manager"
-  type        = bool
-  default     = false
-}
-
-variable "secrets_manager_secrets" {
-  description = <<-EOT
-    List of secrets to fetch from AWS Secrets Manager.
-    Each secret should contain:
-      - secret_name: Name/ARN of the secret in Secrets Manager
-      - key: Key name for the Kubernetes secret
-      - alias: (optional) Alias for the secret
-      - object_type: (optional) secretsmanager or ssmparameter
-  EOT
-  type = list(object({
-    secret_name = string
-    key         = string
-    alias       = optional(string)
-    object_type = optional(string, "secretsmanager")
-  }))
-  default = []
-}
-
-variable "sync_as_kubernetes_secret" {
-  description = "Whether to sync secrets as Kubernetes secrets"
-  type        = bool
-  default     = true
-}
-
-################################################################################
-# Helm
-################################################################################
-
-variable "deploy_helm_chart" {
-  description = "Whether to deploy a Helm chart"
-  type        = bool
-  default     = true
-}
-
-variable "helm_release_name" {
-  description = "Helm release name (defaults to app_name)"
-  type        = string
-  default     = null
-}
-
-variable "helm_repository" {
-  description = "Helm chart repository URL (e.g., JFrog Artifactory)"
-  type        = string
-  default     = null
-}
-
-variable "helm_repository_username" {
-  description = "Username for Helm repository authentication"
-  type        = string
-  default     = null
-}
-
-variable "helm_repository_password" {
-  description = "Password for Helm repository authentication"
+variable "jfrog_password" {
+  description = "JFrog password"
   type        = string
   sensitive   = true
-  default     = null
 }
 
-variable "helm_chart_name" {
-  description = "Name of the Helm chart"
+variable "wiz_client_id" {
+  description = "Wiz API Client ID"
   type        = string
-  default     = null
+  sensitive   = true
 }
 
-variable "helm_chart_version" {
-  description = "Version of the Helm chart"
+variable "wiz_client_secret" {
+  description = "Wiz API Client Secret"
   type        = string
-  default     = null
+  sensitive   = true
 }
 
-variable "helm_values" {
-  description = "List of values files (as strings) to pass to the Helm chart"
-  type        = list(string)
-  default     = []
+################################################################################
+# Provider Configuration
+################################################################################
+
+provider "aws" {
+  region = var.aws_region
 }
 
-variable "helm_set_values" {
-  description = <<-EOT
-    List of values to set via --set.
-    Each item should contain:
-      - name: The name of the value
-      - value: The value to set
-      - type: (optional) auto, string, or file
-  EOT
-  type = list(object({
-    name  = string
-    value = string
-    type  = optional(string)
-  }))
-  default = []
+data "aws_eks_cluster" "this" {
+  name = var.cluster_name
 }
 
-variable "helm_set_sensitive_values" {
-  description = "List of sensitive values to set (same structure as helm_set_values)"
-  type = list(object({
-    name  = string
-    value = string
-    type  = optional(string)
-  }))
-  sensitive = true
-  default   = []
+data "aws_eks_cluster_auth" "this" {
+  name = var.cluster_name
 }
 
-variable "helm_timeout" {
-  description = "Timeout for Helm operations in seconds"
-  type        = number
-  default     = 600
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.this.endpoint
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+  token                  = data.aws_eks_cluster_auth.this.token
 }
 
-variable "helm_atomic" {
-  description = "Whether to use atomic installation (rollback on failure)"
-  type        = bool
-  default     = true
+provider "helm" {
+  kubernetes {
+    host                   = data.aws_eks_cluster.this.endpoint
+    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
+    token                  = data.aws_eks_cluster_auth.this.token
+  }
 }
 
-variable "helm_cleanup_on_fail" {
-  description = "Whether to cleanup on failed installation"
-  type        = bool
-  default     = true
+################################################################################
+# IAM Policy for Wiz (what the connector needs to access)
+################################################################################
+
+data "aws_iam_policy_document" "wiz_connector" {
+  # Wiz typically needs read access to various AWS resources
+  statement {
+    sid    = "WizReadAccess"
+    effect = "Allow"
+    actions = [
+      "ec2:Describe*",
+      "eks:Describe*",
+      "eks:List*",
+      "ecr:GetAuthorizationToken",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+    ]
+    resources = ["*"]
+  }
 }
 
-variable "helm_wait" {
-  description = "Whether to wait for resources to be ready"
-  type        = bool
-  default     = true
+resource "aws_iam_policy" "wiz_connector" {
+  name        = "wiz-connector-${var.cluster_name}"
+  description = "IAM policy for Wiz Kubernetes Connector"
+  policy      = data.aws_iam_policy_document.wiz_connector.json
 }
 
-variable "helm_wait_for_jobs" {
-  description = "Whether to wait for jobs to complete"
-  type        = bool
-  default     = false
+################################################################################
+# Deploy Wiz Connector using the Module
+################################################################################
+
+module "wiz_connector" {
+  source = "../modules/eks-app"
+
+  # General
+  app_name     = "wiz-connector"
+  cluster_name = var.cluster_name
+  namespace    = "wiz"
+
+  # Service Account
+  service_account_name = "wiz-connector-sa"
+
+  # Pod Identity - creates IAM role and association
+  create_pod_identity_role        = true
+  create_pod_identity_association = true
+  pod_identity_policy_arns        = [aws_iam_policy.wiz_connector.arn]
+
+  # RBAC - Wiz needs cluster-wide read access
+  create_cluster_role = true
+  cluster_role_rules = [
+    {
+      api_groups = [""]
+      resources  = ["pods", "nodes", "namespaces", "services", "configmaps", "secrets", "persistentvolumes", "persistentvolumeclaims"]
+      verbs      = ["get", "list", "watch"]
+    },
+    {
+      api_groups = ["apps"]
+      resources  = ["deployments", "daemonsets", "replicasets", "statefulsets"]
+      verbs      = ["get", "list", "watch"]
+    },
+    {
+      api_groups = ["batch"]
+      resources  = ["jobs", "cronjobs"]
+      verbs      = ["get", "list", "watch"]
+    },
+    {
+      api_groups = ["networking.k8s.io"]
+      resources  = ["networkpolicies", "ingresses"]
+      verbs      = ["get", "list", "watch"]
+    },
+    {
+      api_groups = ["rbac.authorization.k8s.io"]
+      resources  = ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+      verbs      = ["get", "list", "watch"]
+    },
+    {
+      api_groups = ["policy"]
+      resources  = ["podsecuritypolicies"]
+      verbs      = ["get", "list", "watch"]
+    }
+  ]
+
+  # Secrets Store CSI - fetch Wiz credentials from Secrets Manager
+  create_secret_provider_class = true
+  sync_as_kubernetes_secret    = true
+  secrets_manager_secrets = [
+    {
+      secret_name = "wiz/api-credentials"
+      key         = "client-id"
+      alias       = "wiz-client-id"
+    },
+    {
+      secret_name = "wiz/api-credentials"
+      key         = "client-secret"
+      alias       = "wiz-client-secret"
+    }
+  ]
+
+  # Helm - deploy from internal JFrog
+  deploy_helm_chart        = true
+  helm_repository          = var.jfrog_url
+  helm_repository_username = var.jfrog_username
+  helm_repository_password = var.jfrog_password
+  helm_chart_name          = "wiz-kubernetes-connector"
+  helm_chart_version       = "2.0.0" # Specify your version
+  helm_timeout             = 600
+  helm_atomic              = true
+
+  # Helm values
+  helm_values = [
+    yamlencode({
+      global = {
+        clusterName = var.cluster_name
+      }
+      serviceAccount = {
+        create = false
+        name   = "wiz-connector-sa"
+      }
+      # Use the synced Kubernetes secret from CSI driver
+      existingSecret = "wiz-connector-k8s-secret"
+    })
+  ]
+
+  # Additional overrides
+  helm_set_values = [
+    {
+      name  = "resources.requests.memory"
+      value = "256Mi"
+    },
+    {
+      name  = "resources.requests.cpu"
+      value = "100m"
+    }
+  ]
+
+  tags = {
+    Environment = "production"
+    Application = "wiz-connector"
+    ManagedBy   = "terraform"
+  }
+}
+
+################################################################################
+# Outputs
+################################################################################
+
+output "wiz_namespace" {
+  value = module.wiz_connector.namespace
+}
+
+output "wiz_service_account" {
+  value = module.wiz_connector.service_account_name
+}
+
+output "wiz_pod_identity_role_arn" {
+  value = module.wiz_connector.pod_identity_role_arn
+}
+
+output "wiz_helm_release_status" {
+  value = module.wiz_connector.helm_release_status
 }
