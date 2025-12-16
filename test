@@ -1,264 +1,329 @@
-################################################################################
-# Example: Deploying Wiz Kubernetes Connector using the EKS App Module
-################################################################################
+#------------------------------------------------------------------------------
+# Azure Isolated VNet Module
+# Creates an isolated VNet with VPN Gateway, Private DNS, NSG, Route Tables
+# Designed for peering to Palo Alto firewall (no NAT)
+#------------------------------------------------------------------------------
 
-terraform {
-  required_version = ">= 1.3.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.0"
-    }
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = ">= 2.20"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = ">= 2.10"
-    }
-  }
-
-  # backend "s3" {
-  #   bucket = "your-terraform-state-bucket"
-  #   key    = "eks-apps/wiz-connector/terraform.tfstate"
-  #   region = "us-east-1"
-  # }
+#------------------------------------------------------------------------------
+# Resource Group (optional - can use existing)
+#------------------------------------------------------------------------------
+resource "azurerm_resource_group" "this" {
+  count    = var.create_resource_group ? 1 : 0
+  name     = var.resource_group_name
+  location = var.location
+  tags     = var.tags
 }
 
-################################################################################
-# Variables
-################################################################################
-
-variable "cluster_name" {
-  description = "EKS cluster name"
-  type        = string
+locals {
+  resource_group_name = var.create_resource_group ? azurerm_resource_group.this[0].name : var.resource_group_name
+  location            = var.create_resource_group ? azurerm_resource_group.this[0].location : var.location
 }
 
-variable "aws_region" {
-  description = "AWS region"
-  type        = string
-  default     = "us-east-1"
+#------------------------------------------------------------------------------
+# Virtual Network
+#------------------------------------------------------------------------------
+resource "azurerm_virtual_network" "this" {
+  name                = var.vnet_name
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  address_space       = var.vnet_address_space
+  dns_servers         = var.dns_servers
+
+  tags = var.tags
 }
 
-variable "jfrog_url" {
-  description = "JFrog Artifactory Helm repository URL"
-  type        = string
+#------------------------------------------------------------------------------
+# Subnets
+#------------------------------------------------------------------------------
+
+# Gateway Subnet (required for VPN/ExpressRoute Gateway)
+resource "azurerm_subnet" "gateway" {
+  count                = var.create_vpn_gateway ? 1 : 0
+  name                 = "GatewaySubnet" # Must be named exactly "GatewaySubnet"
+  resource_group_name  = local.resource_group_name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = [var.gateway_subnet_prefix]
 }
 
-variable "jfrog_username" {
-  description = "JFrog username"
-  type        = string
+# Private Endpoint Subnet
+resource "azurerm_subnet" "private_endpoints" {
+  name                                      = var.private_endpoint_subnet_name
+  resource_group_name                       = local.resource_group_name
+  virtual_network_name                      = azurerm_virtual_network.this.name
+  address_prefixes                          = [var.private_endpoint_subnet_prefix]
+  private_endpoint_network_policies         = "Disabled"
+  private_link_service_network_policies_enabled = false
 }
 
-variable "jfrog_password" {
-  description = "JFrog password"
-  type        = string
-  sensitive   = true
-}
+# Workload Subnets
+resource "azurerm_subnet" "workload" {
+  for_each             = var.workload_subnets
+  name                 = each.key
+  resource_group_name  = local.resource_group_name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = [each.value.address_prefix]
+  service_endpoints    = lookup(each.value, "service_endpoints", [])
 
-variable "wiz_client_id" {
-  description = "Wiz API Client ID"
-  type        = string
-  sensitive   = true
-}
-
-variable "wiz_client_secret" {
-  description = "Wiz API Client Secret"
-  type        = string
-  sensitive   = true
-}
-
-################################################################################
-# Provider Configuration
-################################################################################
-
-provider "aws" {
-  region = var.aws_region
-}
-
-data "aws_eks_cluster" "this" {
-  name = var.cluster_name
-}
-
-data "aws_eks_cluster_auth" "this" {
-  name = var.cluster_name
-}
-
-provider "kubernetes" {
-  host                   = data.aws_eks_cluster.this.endpoint
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-  token                  = data.aws_eks_cluster_auth.this.token
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = data.aws_eks_cluster.this.endpoint
-    cluster_ca_certificate = base64decode(data.aws_eks_cluster.this.certificate_authority[0].data)
-    token                  = data.aws_eks_cluster_auth.this.token
-  }
-}
-
-################################################################################
-# IAM Policy for Wiz (what the connector needs to access)
-################################################################################
-
-data "aws_iam_policy_document" "wiz_connector" {
-  # Wiz typically needs read access to various AWS resources
-  statement {
-    sid    = "WizReadAccess"
-    effect = "Allow"
-    actions = [
-      "ec2:Describe*",
-      "eks:Describe*",
-      "eks:List*",
-      "ecr:GetAuthorizationToken",
-      "ecr:BatchCheckLayerAvailability",
-      "ecr:GetDownloadUrlForLayer",
-      "ecr:BatchGetImage",
-    ]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_policy" "wiz_connector" {
-  name        = "wiz-connector-${var.cluster_name}"
-  description = "IAM policy for Wiz Kubernetes Connector"
-  policy      = data.aws_iam_policy_document.wiz_connector.json
-}
-
-################################################################################
-# Deploy Wiz Connector using the Module
-################################################################################
-
-module "wiz_connector" {
-  source = "../modules/eks-app"
-
-  # General
-  app_name     = "wiz-connector"
-  cluster_name = var.cluster_name
-  namespace    = "wiz"
-
-  # Service Account
-  service_account_name = "wiz-connector-sa"
-
-  # Pod Identity - creates IAM role and association
-  create_pod_identity_role        = true
-  create_pod_identity_association = true
-  pod_identity_policy_arns        = [aws_iam_policy.wiz_connector.arn]
-
-  # RBAC - Wiz needs cluster-wide read access
-  create_cluster_role = true
-  cluster_role_rules = [
-    {
-      api_groups = [""]
-      resources  = ["pods", "nodes", "namespaces", "services", "configmaps", "secrets", "persistentvolumes", "persistentvolumeclaims"]
-      verbs      = ["get", "list", "watch"]
-    },
-    {
-      api_groups = ["apps"]
-      resources  = ["deployments", "daemonsets", "replicasets", "statefulsets"]
-      verbs      = ["get", "list", "watch"]
-    },
-    {
-      api_groups = ["batch"]
-      resources  = ["jobs", "cronjobs"]
-      verbs      = ["get", "list", "watch"]
-    },
-    {
-      api_groups = ["networking.k8s.io"]
-      resources  = ["networkpolicies", "ingresses"]
-      verbs      = ["get", "list", "watch"]
-    },
-    {
-      api_groups = ["rbac.authorization.k8s.io"]
-      resources  = ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
-      verbs      = ["get", "list", "watch"]
-    },
-    {
-      api_groups = ["policy"]
-      resources  = ["podsecuritypolicies"]
-      verbs      = ["get", "list", "watch"]
-    }
-  ]
-
-  # Secrets Store CSI - fetch Wiz credentials from Secrets Manager
-  create_secret_provider_class = true
-  sync_as_kubernetes_secret    = true
-  secrets_manager_secrets = [
-    {
-      secret_name = "wiz/api-credentials"
-      key         = "client-id"
-      alias       = "wiz-client-id"
-    },
-    {
-      secret_name = "wiz/api-credentials"
-      key         = "client-secret"
-      alias       = "wiz-client-secret"
-    }
-  ]
-
-  # Helm - deploy from internal JFrog
-  deploy_helm_chart        = true
-  helm_repository          = var.jfrog_url
-  helm_repository_username = var.jfrog_username
-  helm_repository_password = var.jfrog_password
-  helm_chart_name          = "wiz-kubernetes-connector"
-  helm_chart_version       = "2.0.0" # Specify your version
-  helm_timeout             = 600
-  helm_atomic              = true
-
-  # Helm values
-  helm_values = [
-    yamlencode({
-      global = {
-        clusterName = var.cluster_name
+  dynamic "delegation" {
+    for_each = lookup(each.value, "delegation", null) != null ? [each.value.delegation] : []
+    content {
+      name = delegation.value.name
+      service_delegation {
+        name    = delegation.value.service_delegation_name
+        actions = lookup(delegation.value, "actions", null)
       }
-      serviceAccount = {
-        create = false
-        name   = "wiz-connector-sa"
-      }
-      # Use the synced Kubernetes secret from CSI driver
-      existingSecret = "wiz-connector-k8s-secret"
-    })
-  ]
-
-  # Additional overrides
-  helm_set_values = [
-    {
-      name  = "resources.requests.memory"
-      value = "256Mi"
-    },
-    {
-      name  = "resources.requests.cpu"
-      value = "100m"
     }
-  ]
-
-  tags = {
-    Environment = "production"
-    Application = "wiz-connector"
-    ManagedBy   = "terraform"
   }
 }
 
-################################################################################
-# Outputs
-################################################################################
+#------------------------------------------------------------------------------
+# Network Security Groups
+#------------------------------------------------------------------------------
 
-output "wiz_namespace" {
-  value = module.wiz_connector.namespace
+# NSG for Private Endpoints
+resource "azurerm_network_security_group" "private_endpoints" {
+  name                = "${var.vnet_name}-pe-nsg"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  tags                = var.tags
 }
 
-output "wiz_service_account" {
-  value = module.wiz_connector.service_account_name
+# NSG Rules for Private Endpoints - Allow HTTPS inbound from VNet
+resource "azurerm_network_security_rule" "pe_allow_https_inbound" {
+  name                        = "Allow-HTTPS-Inbound"
+  priority                    = 100
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "443"
+  source_address_prefix       = "VirtualNetwork"
+  destination_address_prefix  = "*"
+  resource_group_name         = local.resource_group_name
+  network_security_group_name = azurerm_network_security_group.private_endpoints.name
 }
 
-output "wiz_pod_identity_role_arn" {
-  value = module.wiz_connector.pod_identity_role_arn
+# NSG Rules for Private Endpoints - Deny all other inbound
+resource "azurerm_network_security_rule" "pe_deny_all_inbound" {
+  name                        = "Deny-All-Inbound"
+  priority                    = 4096
+  direction                   = "Inbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = local.resource_group_name
+  network_security_group_name = azurerm_network_security_group.private_endpoints.name
 }
 
-output "wiz_helm_release_status" {
-  value = module.wiz_connector.helm_release_status
+# Associate NSG with Private Endpoint Subnet
+resource "azurerm_subnet_network_security_group_association" "private_endpoints" {
+  subnet_id                 = azurerm_subnet.private_endpoints.id
+  network_security_group_id = azurerm_network_security_group.private_endpoints.id
 }
+
+# NSG for Workload Subnets
+resource "azurerm_network_security_group" "workload" {
+  for_each            = var.workload_subnets
+  name                = "${var.vnet_name}-${each.key}-nsg"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  tags                = var.tags
+}
+
+# Default NSG Rules for Workload Subnets
+resource "azurerm_network_security_rule" "workload_allow_vnet_inbound" {
+  for_each                    = var.workload_subnets
+  name                        = "Allow-VNet-Inbound"
+  priority                    = 100
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = "VirtualNetwork"
+  destination_address_prefix  = "VirtualNetwork"
+  resource_group_name         = local.resource_group_name
+  network_security_group_name = azurerm_network_security_group.workload[each.key].name
+}
+
+resource "azurerm_network_security_rule" "workload_deny_all_inbound" {
+  for_each                    = var.workload_subnets
+  name                        = "Deny-All-Inbound"
+  priority                    = 4096
+  direction                   = "Inbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_range      = "*"
+  source_address_prefix       = "*"
+  destination_address_prefix  = "*"
+  resource_group_name         = local.resource_group_name
+  network_security_group_name = azurerm_network_security_group.workload[each.key].name
+}
+
+# Associate NSGs with Workload Subnets
+resource "azurerm_subnet_network_security_group_association" "workload" {
+  for_each                  = var.workload_subnets
+  subnet_id                 = azurerm_subnet.workload[each.key].id
+  network_security_group_id = azurerm_network_security_group.workload[each.key].id
+}
+
+#------------------------------------------------------------------------------
+# Route Tables
+#------------------------------------------------------------------------------
+
+# Route Table for Workload Subnets (routes to Palo Alto)
+resource "azurerm_route_table" "workload" {
+  name                = "${var.vnet_name}-workload-rt"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  tags                = var.tags
+
+  # Disable BGP route propagation if using Palo Alto as next hop
+  bgp_route_propagation_enabled = var.enable_bgp_route_propagation
+}
+
+# Default route to Palo Alto
+resource "azurerm_route" "default_to_palo_alto" {
+  count                  = var.palo_alto_next_hop_ip != null ? 1 : 0
+  name                   = "default-to-paloalto"
+  resource_group_name    = local.resource_group_name
+  route_table_name       = azurerm_route_table.workload.name
+  address_prefix         = "0.0.0.0/0"
+  next_hop_type          = "VirtualAppliance"
+  next_hop_in_ip_address = var.palo_alto_next_hop_ip
+}
+
+# DNS Whitelist Routes (ensure DNS traffic goes to correct destination)
+resource "azurerm_route" "dns_whitelist" {
+  for_each               = toset(var.dns_whitelist_ips)
+  name                   = "dns-${replace(each.value, ".", "-")}"
+  resource_group_name    = local.resource_group_name
+  route_table_name       = azurerm_route_table.workload.name
+  address_prefix         = "${each.value}/32"
+  next_hop_type          = var.dns_route_next_hop_type
+  next_hop_in_ip_address = var.dns_route_next_hop_type == "VirtualAppliance" ? var.dns_route_next_hop_ip : null
+}
+
+# Azure DNS route (168.63.129.16) - Required for Private DNS resolution
+resource "azurerm_route" "azure_dns" {
+  count               = var.allow_azure_dns ? 1 : 0
+  name                = "azure-dns"
+  resource_group_name = local.resource_group_name
+  route_table_name    = azurerm_route_table.workload.name
+  address_prefix      = "168.63.129.16/32"
+  next_hop_type       = "Internet" # Must route to Internet for Azure DNS
+}
+
+# Associate Route Table with Workload Subnets
+resource "azurerm_subnet_route_table_association" "workload" {
+  for_each       = var.workload_subnets
+  subnet_id      = azurerm_subnet.workload[each.key].id
+  route_table_id = azurerm_route_table.workload.id
+}
+
+# Route Table for Private Endpoints (separate if needed)
+resource "azurerm_route_table" "private_endpoints" {
+  name                          = "${var.vnet_name}-pe-rt"
+  location                      = local.location
+  resource_group_name           = local.resource_group_name
+  bgp_route_propagation_enabled = false
+  tags                          = var.tags
+}
+
+resource "azurerm_route" "pe_azure_dns" {
+  name                = "azure-dns"
+  resource_group_name = local.resource_group_name
+  route_table_name    = azurerm_route_table.private_endpoints.name
+  address_prefix      = "168.63.129.16/32"
+  next_hop_type       = "Internet"
+}
+
+resource "azurerm_subnet_route_table_association" "private_endpoints" {
+  subnet_id      = azurerm_subnet.private_endpoints.id
+  route_table_id = azurerm_route_table.private_endpoints.id
+}
+
+#------------------------------------------------------------------------------
+# Virtual Network Gateway
+#------------------------------------------------------------------------------
+resource "azurerm_public_ip" "vpn_gateway" {
+  count               = var.create_vpn_gateway ? 1 : 0
+  name                = "${var.vnet_name}-vpngw-pip"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  zones               = var.vpn_gateway_zones
+  tags                = var.tags
+}
+
+resource "azurerm_virtual_network_gateway" "this" {
+  count               = var.create_vpn_gateway ? 1 : 0
+  name                = "${var.vnet_name}-vpngw"
+  location            = local.location
+  resource_group_name = local.resource_group_name
+  type                = var.vpn_gateway_type
+  vpn_type            = var.vpn_type
+  sku                 = var.vpn_gateway_sku
+  active_active       = var.vpn_gateway_active_active
+  enable_bgp          = var.vpn_gateway_enable_bgp
+
+  ip_configuration {
+    name                          = "vnetGatewayConfig"
+    public_ip_address_id          = azurerm_public_ip.vpn_gateway[0].id
+    private_ip_address_allocation = "Dynamic"
+    subnet_id                     = azurerm_subnet.gateway[0].id
+  }
+
+  dynamic "bgp_settings" {
+    for_each = var.vpn_gateway_enable_bgp ? [1] : []
+    content {
+      asn = var.vpn_gateway_bgp_asn
+    }
+  }
+
+  tags = var.tags
+}
+
+#------------------------------------------------------------------------------
+# Private DNS Zones
+#------------------------------------------------------------------------------
+resource "azurerm_private_dns_zone" "this" {
+  for_each            = toset(var.private_dns_zones)
+  name                = each.value
+  resource_group_name = local.resource_group_name
+  tags                = var.tags
+}
+
+# Link Private DNS Zones to VNet
+resource "azurerm_private_dns_zone_virtual_network_link" "this" {
+  for_each              = toset(var.private_dns_zones)
+  name                  = "${var.vnet_name}-link"
+  resource_group_name   = local.resource_group_name
+  private_dns_zone_name = azurerm_private_dns_zone.this[each.value].name
+  virtual_network_id    = azurerm_virtual_network.this.id
+  registration_enabled  = each.value == var.auto_registration_dns_zone ? true : false
+  tags                  = var.tags
+}
+
+#------------------------------------------------------------------------------
+# VNet Peering to Palo Alto
+#------------------------------------------------------------------------------
+resource "azurerm_virtual_network_peering" "to_palo_alto" {
+  count                        = var.palo_alto_vnet_id != null ? 1 : 0
+  name                         = "peer-to-paloalto"
+  resource_group_name          = local.resource_group_name
+  virtual_network_name         = azurerm_virtual_network.this.name
+  remote_virtual_network_id    = var.palo_alto_vnet_id
+  allow_virtual_network_access = true
+  allow_forwarded_traffic      = true
+  allow_gateway_transit        = var.create_vpn_gateway ? var.allow_gateway_transit : false
+  use_remote_gateway           = var.use_remote_gateway
+}
+
+# Note: You'll need to create the reverse peering in the Palo Alto VNet
+# This can be done via a separate resource or in another module
