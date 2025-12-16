@@ -1,0 +1,63 @@
+#------------------------------------------------------------------------------
+# Outputs
+#------------------------------------------------------------------------------
+
+output "resource_group_name" {
+  description = "Name of the resource group"
+  value       = module.isolated_vnet.resource_group_name
+}
+
+output "vnet_id" {
+  description = "ID of the virtual network"
+  value       = module.isolated_vnet.vnet_id
+}
+
+output "vnet_name" {
+  description = "Name of the virtual network"
+  value       = module.isolated_vnet.vnet_name
+}
+
+output "vnet_address_space" {
+  description = "Address space of the VNet"
+  value       = module.isolated_vnet.vnet_address_space
+}
+
+output "gateway_subnet_id" {
+  description = "ID of the Gateway subnet"
+  value       = module.isolated_vnet.gateway_subnet_id
+}
+
+output "private_endpoint_subnet_id" {
+  description = "ID of the private endpoint subnet"
+  value       = module.isolated_vnet.private_endpoint_subnet_id
+}
+
+output "workload_subnet_ids" {
+  description = "Map of workload subnet IDs"
+  value       = module.isolated_vnet.workload_subnet_ids
+}
+
+output "vpn_gateway_id" {
+  description = "ID of the VPN Gateway"
+  value       = module.isolated_vnet.vpn_gateway_id
+}
+
+output "vpn_gateway_public_ip" {
+  description = "Public IP of the VPN Gateway"
+  value       = module.isolated_vnet.vpn_gateway_public_ip
+}
+
+output "private_dns_zone_ids" {
+  description = "Map of private DNS zone IDs"
+  value       = module.isolated_vnet.private_dns_zone_ids
+}
+
+output "workload_nsg_ids" {
+  description = "Map of workload NSG IDs"
+  value       = module.isolated_vnet.workload_nsg_ids
+}
+
+output "workload_route_table_id" {
+  description = "ID of the workload route table"
+  value       = module.isolated_vnet.workload_route_table_id
+}
