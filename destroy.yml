@@ -1,0 +1,152 @@
+---
+# playbooks/destroy.yml
+# Teardown playbook for removing deployed applications
+
+- name: Destroy Helm Application
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    cloud: azure
+    apps_dir: "{{ playbook_dir }}/../apps"
+    destroy_all: false
+    preserve_namespace: false
+    preserve_pvcs: true
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - app is defined or destroy_all | bool
+        fail_msg: "Either 'app' must be defined or 'destroy_all' must be true"
+
+    - name: Confirm destruction
+      ansible.builtin.pause:
+        prompt: |
+          
+          ⚠️  WARNING: This will destroy the following:
+          {% if destroy_all %}
+          - ALL applications
+          {% else %}
+          - Application: {{ app }}
+          {% endif %}
+          - Cloud: {{ cloud }}
+          
+          Type 'yes' to confirm
+      register: confirm
+      when: not (auto_confirm | default(false))
+
+    - name: Check confirmation
+      ansible.builtin.fail:
+        msg: "Destruction cancelled"
+      when: 
+        - not (auto_confirm | default(false))
+        - confirm.user_input != 'yes'
+
+    - name: Get list of all apps
+      ansible.builtin.find:
+        paths: "{{ apps_dir }}"
+        file_type: directory
+      register: all_apps
+      when: destroy_all | bool
+
+    - name: Set apps to destroy
+      ansible.builtin.set_fact:
+        apps_to_destroy: >-
+          {{
+            all_apps.files | map(attribute='path') | map('basename') | list
+            if destroy_all | bool
+            else [app]
+          }}
+
+  tasks:
+    - name: Destroy each application
+      block:
+        - name: Load app configuration
+          ansible.builtin.include_vars:
+            file: "{{ apps_dir }}/{{ current_app }}/config.yml"
+
+        - name: Uninstall Helm release
+          kubernetes.core.helm:
+            name: "{{ app_name }}"
+            release_namespace: "{{ namespace }}"
+            state: absent
+            wait: true
+          ignore_errors: true
+
+        - name: Remove SecretProviderClass
+          kubernetes.core.k8s:
+            api_version: secrets-store.csi.x-k8s.io/v1
+            kind: SecretProviderClass
+            namespace: "{{ namespace }}"
+            name: "{{ app_name }}-azure-keyvault"
+            state: absent
+          ignore_errors: true
+          when: cloud == 'azure'
+
+        - name: Remove SecretProviderClass (AWS)
+          kubernetes.core.k8s:
+            api_version: secrets-store.csi.x-k8s.io/v1
+            kind: SecretProviderClass
+            namespace: "{{ namespace }}"
+            name: "{{ app_name }}-aws-secrets"
+            state: absent
+          ignore_errors: true
+          when: cloud == 'aws'
+
+        - name: Remove Service Account
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: ServiceAccount
+            namespace: "{{ namespace }}"
+            name: "{{ service_account.name | default(app_name ~ '-sa') }}"
+            state: absent
+          ignore_errors: true
+          when: service_account.create | default(false)
+
+        - name: Remove ConfigMaps
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ namespace }}"
+            name: "{{ item.name }}"
+            state: absent
+          loop: "{{ configmaps | default([]) }}"
+          ignore_errors: true
+
+        - name: Remove Secrets
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ namespace }}"
+            name: "{{ item.name }}"
+            state: absent
+          loop: "{{ secrets | default([]) }}"
+          ignore_errors: true
+
+        - name: Remove namespace
+          kubernetes.core.k8s:
+            api_version: v1
+            kind: Namespace
+            name: "{{ namespace }}"
+            state: absent
+          when: not (preserve_namespace | bool)
+          ignore_errors: true
+
+      loop: "{{ apps_to_destroy }}"
+      loop_control:
+        loop_var: current_app
+        label: "{{ current_app }}"
+
+  post_tasks:
+    - name: Destruction complete
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Destruction Complete
+          ========================================
+          Apps destroyed: {{ apps_to_destroy | join(', ') }}
+          Namespaces preserved: {{ preserve_namespace }}
+          PVCs preserved: {{ preserve_pvcs }}
+          ========================================
