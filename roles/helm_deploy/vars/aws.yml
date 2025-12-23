@@ -1,0 +1,27 @@
+---
+# roles/helm_deploy/vars/aws.yml
+# AWS-specific variables and defaults
+
+# CSI Driver provider for AWS
+csi_driver_provider: aws-secrets-manager
+
+# AWS-specific resource naming conventions
+aws_resource_prefix: "{{ app_name }}"
+
+# IRSA (IAM Roles for Service Accounts) settings
+aws_irsa_enabled: true
+aws_sts_regional_endpoints: true
+
+# Common AWS resource tags
+aws_tags:
+  ManagedBy: ansible
+  Application: "{{ app_name }}"
+  Environment: "{{ env | default('dev') }}"
+
+# EKS specific settings
+aws_eks_cluster_endpoint: ""
+aws_eks_cluster_ca: ""
+
+# Secrets Manager settings
+aws_secrets_manager_kms_key: ""  # Use default KMS if empty
+aws_secrets_rotation_enabled: false
