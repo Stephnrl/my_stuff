@@ -1,0 +1,61 @@
+# apps/wiz-connector/values.yml
+# Wiz Kubernetes Connector Helm values
+
+# Cluster identification
+clusterName: "my-aks-cluster"
+clusterExternalId: ""  # Auto-generated if empty
+
+# Use existing secret (created by CSI driver)
+wizCredentials:
+  existingSecret: wiz-connector-credentials
+  clientIdKey: clientId
+  clientSecretKey: clientSecret
+
+# Wiz API endpoint
+wizApiEndpoint: "https://api.us1.app.wiz.io"  # Update based on your Wiz tenant
+
+# Service account
+serviceAccount:
+  create: false
+  name: wiz-connector-sa
+
+# Pod annotations for workload identity
+podAnnotations:
+  azure.workload.identity/use: "true"
+
+# Volume mounts for CSI
+volumes:
+  - name: secrets-store
+    csi:
+      driver: secrets-store.csi.k8s.io
+      readOnly: true
+      volumeAttributes:
+        secretProviderClass: wiz-connector-azure-keyvault
+
+volumeMounts:
+  - name: secrets-store
+    mountPath: /mnt/secrets-store
+    readOnly: true
+
+# Resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Enable Kubernetes Admission Controller
+admissionController:
+  enabled: true
+
+# Enable image scanning
+imageScanning:
+  enabled: true
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
