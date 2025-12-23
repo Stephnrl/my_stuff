@@ -1,0 +1,107 @@
+---
+# roles/helm_deploy/tasks/post_deploy.yml
+# Post-deployment tasks: ingress, monitoring, validation
+
+- name: Post-deployment tasks
+  ansible.builtin.debug:
+    msg: "Running post-deployment tasks for {{ app_name }}"
+
+# Apply custom post-deployment manifests
+- name: Process post-deployment manifests
+  block:
+    - name: Render and apply post-deployment manifests (j2 templates)
+      kubernetes.core.k8s:
+        state: present
+        definition: "{{ lookup('template', item) | from_yaml_all | list }}"
+        context: "{{ k8s_context | default(omit) }}"
+      loop: "{{ post_deploy_manifests | select('match', '.*\\.j2$') | list }}"
+      when: post_deploy_manifests | select('match', '.*\\.j2$') | list | length > 0
+
+    - name: Apply post-deployment manifests (raw yaml)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+        context: "{{ k8s_context | default(omit) }}"
+      loop: "{{ post_deploy_manifests | reject('match', '.*\\.j2$') | list }}"
+      when: post_deploy_manifests | reject('match', '.*\\.j2$') | list | length > 0
+  when: post_deploy_manifests | length > 0
+
+# Apply extra Kubernetes resources
+- name: Apply extra Kubernetes resources
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ item }}"
+    context: "{{ k8s_context | default(omit) }}"
+  loop: "{{ extra_resources }}"
+  when: extra_resources | length > 0
+
+# Verify deployment health
+- name: Verify pods are running
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ namespace }}"
+    label_selectors:
+      - "app.kubernetes.io/instance={{ app_name }}"
+  register: pod_status
+  until: >-
+    pod_status.resources | length > 0 and
+    pod_status.resources | map(attribute='status.phase') | select('equalto', 'Running') | list | length == pod_status.resources | length
+  retries: 30
+  delay: 10
+  when: wait_for_resources | bool
+  ignore_errors: true
+
+- name: Pod status report
+  ansible.builtin.debug:
+    msg: |
+      Pods in namespace {{ namespace }}:
+      {% for pod in pod_status.resources | default([]) %}
+      - {{ pod.metadata.name }}: {{ pod.status.phase }}
+      {% endfor %}
+  when: 
+    - debug_mode | default(false)
+    - pod_status.resources is defined
+
+# Get service endpoints
+- name: Get service information
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ namespace }}"
+  register: services
+  when: debug_mode | default(false)
+
+- name: Display service endpoints
+  ansible.builtin.debug:
+    msg: |
+      Services in namespace {{ namespace }}:
+      {% for svc in services.resources | default([]) %}
+      - {{ svc.metadata.name }}: {{ svc.spec.type }} 
+        {% if svc.spec.type == 'LoadBalancer' and svc.status.loadBalancer.ingress is defined %}
+        External: {{ svc.status.loadBalancer.ingress[0].ip | default(svc.status.loadBalancer.ingress[0].hostname) | default('pending') }}
+        {% endif %}
+      {% endfor %}
+  when:
+    - debug_mode | default(false)
+    - services.resources is defined
+
+# Get ingress information
+- name: Get ingress information
+  kubernetes.core.k8s_info:
+    api_version: networking.k8s.io/v1
+    kind: Ingress
+    namespace: "{{ namespace }}"
+  register: ingresses
+
+- name: Display ingress endpoints
+  ansible.builtin.debug:
+    msg: |
+      Ingresses in namespace {{ namespace }}:
+      {% for ing in ingresses.resources | default([]) %}
+      - {{ ing.metadata.name }}:
+        {% for rule in ing.spec.rules | default([]) %}
+        Host: {{ rule.host | default('*') }}
+        {% endfor %}
+      {% endfor %}
+  when: ingresses.resources | default([]) | length > 0
