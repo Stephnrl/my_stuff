@@ -1,0 +1,107 @@
+---
+# roles/helm_deploy/defaults/main.yml
+# Default variables for helm deployment role
+
+# Cloud provider: azure | aws
+cloud_provider: azure
+
+# Deployment type: simple | complex
+deployment_type: simple
+
+# Kubernetes context (leave empty to use current context)
+k8s_context: ""
+
+# Namespace settings
+namespace: "{{ app_name }}"
+create_namespace: true
+namespace_labels: {}
+namespace_annotations: {}
+
+# Helm settings
+helm:
+  chart: ""
+  repo_name: ""
+  repo_url: ""
+  version: ""
+  values_file: "values.yml"
+  additional_values_files: []
+  set_values: {}
+  set_string_values: {}
+  wait: true
+  timeout: "10m"
+  atomic: true
+  create_namespace: true
+  dependency_update: true
+
+# Pre/Post deployment manifests (j2 templates or raw yaml)
+pre_deploy_manifests: []
+post_deploy_manifests: []
+
+# Wait for resources after helm install
+wait_for_resources: true
+wait_timeout: 300
+
+# Rollback settings
+enable_rollback: true
+rollback_on_failure: true
+max_history: 5
+
+# Service Account settings
+service_account:
+  create: false
+  name: "{{ app_name }}-sa"
+  annotations: {}
+  labels: {}
+
+# CSI Driver settings
+csi_driver:
+  enabled: false
+  provider: ""  # azure-keyvault | aws-secrets-manager
+  
+# Azure-specific defaults (overridden in vars/azure.yml or app config)
+azure:
+  subscription_id: ""
+  resource_group: ""
+  aks_cluster: ""
+  tenant_id: ""
+  keyvault_name: ""
+  managed_identity_client_id: ""
+  use_workload_identity: true
+
+# AWS-specific defaults (overridden in vars/aws.yml or app config)
+aws:
+  region: ""
+  eks_cluster: ""
+  account_id: ""
+  role_arn: ""
+  secrets_manager_prefix: ""
+
+# Secret mappings for CSI driver
+secrets: []
+# Example:
+# secrets:
+#   - name: db-password
+#     keyvault_secret: myapp-db-password  # Azure
+#     aws_secret: myapp/db-password       # AWS
+#     key: password
+#     type: Opaque
+
+# ConfigMaps to create
+configmaps: []
+# Example:
+# configmaps:
+#   - name: myapp-config
+#     data:
+#       APP_ENV: production
+#       LOG_LEVEL: info
+
+# Extra Kubernetes resources to apply
+extra_resources: []
+
+# Cleanup settings
+cleanup_on_destroy: true
+preserve_pvcs: true
+
+# Debug settings
+debug_mode: false
+dry_run: false
