@@ -1,0 +1,121 @@
+name: Release Helm Chart to JFrog
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CHART_NAME: platform-prereqs
+  JFROG_URL: https://your-company.jfrog.io/artifactory
+  JFROG_REPO: helm-local
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.gitversion.outputs.semVer }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v1
+        with:
+          versionSpec: '6.x'
+
+      - name: Determine version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v1
+        with:
+          useConfigFile: true
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint
+        run: helm lint charts/${{ env.CHART_NAME }}
+
+  release:
+    needs: [version, lint]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: ${{ env.JFROG_URL }}
+          JF_ACCESS_TOKEN: ${{ secrets.JFROG_ACCESS_TOKEN }}
+
+      - name: Update Chart.yaml version
+        run: |
+          VERSION="${{ needs.version.outputs.semver }}"
+          sed -i "s/^version:.*/version: $VERSION/" charts/${{ env.CHART_NAME }}/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" charts/${{ env.CHART_NAME }}/Chart.yaml
+          
+          echo "📋 Updated Chart.yaml:"
+          cat charts/${{ env.CHART_NAME }}/Chart.yaml
+
+      - name: Package chart
+        run: |
+          helm package charts/${{ env.CHART_NAME }} -d .packages
+          ls -la .packages/
+
+      - name: Push to JFrog (CLI)
+        run: |
+          jf rt upload \
+            ".packages/${{ env.CHART_NAME }}-${{ needs.version.outputs.semver }}.tgz" \
+            "${{ env.JFROG_REPO }}/${{ env.CHART_NAME }}/" \
+            --flat
+
+      - name: Reindex Helm repo
+        run: |
+          # Trigger reindex of the Helm repository
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.JFROG_ACCESS_TOKEN }}" \
+            "${{ env.JFROG_URL }}/api/helm/${{ env.JFROG_REPO }}/reindex"
+
+      - name: Verify upload
+        run: |
+          # List charts in repo
+          curl -s \
+            -H "Authorization: Bearer ${{ secrets.JFROG_ACCESS_TOKEN }}" \
+            "${{ env.JFROG_URL }}/api/helm/${{ env.JFROG_REPO }}/index.yaml" | head -50
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.semver }}
+          name: Release v${{ needs.version.outputs.semver }}
+          generate_release_notes: true
+          files: .packages/*.tgz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## 🎉 Chart Published to JFrog!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.version.outputs.semver }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Add repo:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "helm repo add platform ${{ env.JFROG_URL }}/${{ env.JFROG_REPO }} --username USER --password API_KEY" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Install:**" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "helm install prereqs platform/${{ env.CHART_NAME }} --version ${{ needs.version.outputs.semver }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
