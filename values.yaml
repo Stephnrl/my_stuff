@@ -1,0 +1,180 @@
+# ------------------------------------------------------------------------------
+# Namespace
+# ------------------------------------------------------------------------------
+namespace:
+  create: false
+  name: ""
+  labels: {}
+  annotations: {}
+
+# ------------------------------------------------------------------------------
+# Service Account
+# ------------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+    # Azure Workload Identity
+    # azure.workload.identity/client-id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    # AWS IRSA
+    # eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/my-role
+  labels: {}
+
+# ------------------------------------------------------------------------------
+# RBAC
+# ------------------------------------------------------------------------------
+rbac:
+  create: false
+  rules: []
+  # - apiGroups: [""]
+  #   resources: ["pods", "secrets"]
+  #   verbs: ["get", "list", "watch"]
+
+# ------------------------------------------------------------------------------
+# Azure Key Vault CSI SecretProviderClass
+# ------------------------------------------------------------------------------
+secretProviderClass:
+  enabled: false
+  name: ""
+  provider: azure  # azure, aws, vault
+  
+  # Azure Key Vault settings
+  azure:
+    keyvaultName: ""
+    tenantId: ""
+    clientId: ""  # Workload identity client ID
+    usePodIdentity: false
+    useVMManagedIdentity: false
+    secrets: []
+    # - name: my-secret          # Name in Key Vault
+    #   alias: my-secret-alias   # Optional alias
+    #   objectType: secret       # secret, key, cert
+    #   objectVersion: ""        # Optional specific version
+    keys: []
+    # - name: my-key
+    #   objectType: key
+    certificates: []
+    # - name: my-cert
+    #   objectType: cert
+
+  # AWS Secrets Manager settings
+  aws:
+    region: us-east-1
+    secrets: []
+    # - arn: arn:aws:secretsmanager:us-east-1:123456789:secret:my-secret
+    #   alias: my-secret
+    #   jmesPath: []  # Optional JSON key extraction
+    #     - path: username
+    #       objectAlias: db-username
+
+  # HashiCorp Vault settings
+  vault:
+    address: ""
+    roleName: ""
+    secrets: []
+    # - name: my-secret
+    #   path: secret/data/myapp
+    #   key: password
+
+  # Sync CSI secret to Kubernetes secret
+  syncSecret:
+    enabled: false
+    secretName: ""
+    type: Opaque  # Opaque, kubernetes.io/tls, etc.
+    data: []
+    # - objectName: my-secret   # Must match alias or secret name above
+    #   key: password           # Key name in K8s secret
+
+# ------------------------------------------------------------------------------
+# Persistent Volume (cluster-scoped)
+# ------------------------------------------------------------------------------
+persistentVolume:
+  enabled: false
+  name: ""
+  storageClass: ""
+  capacity: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  
+  # Volume source (pick one)
+  hostPath:
+    enabled: false
+    path: ""
+    type: DirectoryOrCreate
+  
+  nfs:
+    enabled: false
+    server: ""
+    path: ""
+  
+  azureDisk:
+    enabled: false
+    diskName: ""
+    diskURI: ""
+    kind: Managed  # Managed, Shared, Dedicated
+    fsType: ext4
+  
+  azureFile:
+    enabled: false
+    secretName: ""
+    shareName: ""
+    readOnly: false
+
+  awsEbs:
+    enabled: false
+    volumeID: ""
+    fsType: ext4
+
+  csi:
+    enabled: false
+    driver: ""
+    volumeHandle: ""
+    fsType: ext4
+    volumeAttributes: {}
+
+# ------------------------------------------------------------------------------
+# Persistent Volume Claim
+# ------------------------------------------------------------------------------
+persistentVolumeClaim:
+  enabled: false
+  name: ""
+  storageClass: ""
+  volumeName: ""  # Bind to specific PV
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  labels: {}
+  annotations: {}
+
+# ------------------------------------------------------------------------------
+# ConfigMaps
+# ------------------------------------------------------------------------------
+configMaps: []
+# - name: my-config
+#   data:
+#     config.yaml: |
+#       key: value
+#     settings.json: |
+#       {"setting": "value"}
+
+# ------------------------------------------------------------------------------
+# Secrets (non-CSI)
+# ------------------------------------------------------------------------------
+secrets: []
+# - name: my-secret
+#   type: Opaque
+#   stringData:
+#     username: admin
+#   data:
+#     password: cGFzc3dvcmQ=  # base64 encoded
+
+# ------------------------------------------------------------------------------
+# Common labels applied to all resources
+# ------------------------------------------------------------------------------
+commonLabels: {}
+
+# ------------------------------------------------------------------------------
+# Common annotations applied to all resources
+# ------------------------------------------------------------------------------
+commonAnnotations: {}
