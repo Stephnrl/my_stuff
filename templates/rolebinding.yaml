@@ -1,0 +1,21 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "platform-prereqs.fullname" . }}
+  namespace: {{ include "platform-prereqs.namespace" . }}
+  labels:
+    {{- include "platform-prereqs.labels" . | nindent 4 }}
+  {{- if .Values.commonAnnotations }}
+  annotations:
+    {{- include "platform-prereqs.annotations" . | nindent 4 }}
+  {{- end }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "platform-prereqs.serviceAccountName" . }}
+    namespace: {{ include "platform-prereqs.namespace" . }}
+roleRef:
+  kind: Role
+  name: {{ include "platform-prereqs.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
