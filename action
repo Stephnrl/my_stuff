@@ -1,53 +1,28 @@
-name: 'Generate Key Vault HSM CSR'
-description: 'Generates a CSR from an Azure Key Vault HSM-backed certificate'
+name: 'Fetch Key Vault CSR'
+description: 'Retrieves a CSR already initiated by Terraform'
 inputs:
   keyvault_name:
-    description: 'Name of the Azure Key Vault'
     required: true
   cert_name:
-    description: 'Name of the certificate to create/request'
     required: true
-  subject_name:
-    description: 'Subject name (e.g., CN=example.com)'
-    required: true
-  key_size:
-    description: 'RSA Key size (2048, 3072, or 4096)'
-    default: '4096'
-
-outputs:
-  csr_content:
-    description: 'The generated CSR content'
-    value: ${{ steps.gen-csr.outputs.csr }}
 
 runs:
   using: "composite"
   steps:
-    - name: Generate CSR via PowerShell
-      id: gen-csr
+    - name: Fetch Pending CSR
       shell: pwsh
       run: |
-        # 1. Define the policy for an HSM-backed cert
-        $policy = New-AzKeyVaultCertificatePolicy `
-            -SubjectName "${{ inputs.subject_name }}" `
-            -IssuerName "Unknown" `
-            -KeyType "RSA-HSM" `
-            -KeySize ${{ inputs.key_size }} `
-            -Exportable:$false
+        # Get the operation status from Azure
+        $op = Get-AzKeyVaultCertificateOperation `
+                -VaultName "${{ inputs.keyvault_name }}" `
+                -Name "${{ inputs.cert_name }}"
 
-        # 2. Start the creation (This generates the private key in HSM)
-        Write-Host "Starting certificate operation for ${{ inputs.cert_name }}..."
-        $op = Add-AzKeyVaultCertificate `
-            -VaultName "${{ inputs.key_name }}" `
-            -Name "${{ inputs.cert_name }}" `
-            -CertificatePolicy $policy
-
-        # 3. Extract the CSR
-        $csr = $op.Csr
-        
-        # 4. Set the output for GitHub Actions (handling multi-line strings)
-        $csrValue = "CSR_OUTPUT<<EOF`n$csr`nEOF"
-        $csrValue >> $env:GITHUB_OUTPUT
-        
-        # 5. Also save to a file for easy artifact upload
-        $csr | Out-File "request.csr"
-        Write-Host "CSR generated successfully."
+        if ($op.Status -eq "inProgress") {
+            # Wrap in standard PEM headers
+            $csr = "-----BEGIN CERTIFICATE REQUEST-----`n$($op.Csr)`n-----END CERTIFICATE REQUEST-----"
+            $csr | Out-File "request.csr" -Encoding ascii
+            Write-Host "CSR successfully fetched and saved to request.csr"
+        } else {
+            Write-Error "Certificate is not in a pending state. Current status: $($op.Status)"
+            exit 1
+        }
