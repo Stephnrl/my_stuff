@@ -1,43 +1,34 @@
-name: 'Azure Gov Code Sign'
-description: 'Signs binaries using existing Azure Context'
-inputs:
-  key-vault-name:
-    description: 'Name of the Azure Key Vault'
-    required: true
-  certificate-name:
-    description: 'Name of the Certificate in Key Vault'
-    required: true
-  files-to-sign:
-    description: 'Path to the binaries to sign'
-    required: true
-
 runs:
   using: "composite"
   steps:
     - name: Verify Azure Login
       shell: pwsh
       run: |
-        # Optional: Fail fast if the user forgot to login upstream
         if (-not (az account show 2>$null)) {
-          Write-Error "No Azure context found. You must run 'azure/login@v2' before using this action."
+          Write-Error "No Azure context found. Please run azure/login before this action."
           exit 1
         }
+
+    - name: Install AzureSignTool (from Artifactory)
+      shell: pwsh
+      run: |
+        # 'update' is idempotent: it installs if missing, or updates if present.
+        # We explicitly add your internal mirror as a source for this command.
+        dotnet tool update --global AzureSignTool `
+          --add-source "https://<your-artifactory-domain>/artifactory/api/nuget/<repository-key>"
 
     - name: Fetch Key Vault Access Token
       shell: pwsh
       id: get_token
       run: |
-        # We rely on the upstream login. Note the Gov Cloud resource URL.
         $token = az account get-access-token --resource "https://vault.usgovcloudapi.net" --query accessToken -o tsv
-        
         echo "::add-mask::$token"
         echo "KV_TOKEN=$token" >> $env:GITHUB_ENV
 
     - name: Sign Artifacts
       shell: pwsh
       run: |
-        dotnet tool update --global AzureSignTool
-        
+        # The tool is now installed globally, so we can just call it by name.
         AzureSignTool sign -kvu "https://${{ inputs.key-vault-name }}.vault.usgovcloudapi.net" `
           -kvc "${{ inputs.certificate-name }}" `
           -kva "$env:KV_TOKEN" `
