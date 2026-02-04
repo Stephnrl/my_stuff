@@ -1,21 +1,16 @@
-# MyActionModule.psm1
+# Assuming $startDateTime and $endDateTime are strings like "2023-10-25 14:30:00"
 
-# 1. Define the paths
-$subFolders = @('Private', 'Public')
+# Define the style flags (combining them with -bor)
+$style = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
 
-# 2. Loop through folders in order (Private first, then Public)
-foreach ($folder in $subFolders) {
-    $path = Join-Path -Path $PSScriptRoot -ChildPath $folder
-    
-    if (Test-Path -Path $path) {
-        $scripts = Get-ChildItem -Path $path -Filter *.ps1
-        foreach ($script in $scripts) {
-            Write-Debug "Dot-sourcing: $($script.FullName)"
-            . $script.FullName
-        }
-    }
-}
+# Fixed: Changed ;; to ::, added missing ), changed yyy to yyyy
+$startTimeUtc = [DateTime]::ParseExact($startDateTime, 'yyyy-MM-dd HH:mm:ss', $null, $style)
+$endTimeUtc   = [DateTime]::ParseExact($endDateTime, 'yyyy-MM-dd HH:mm:ss', $null, $style)
 
-# 3. Final Step: Export ONLY what is in the Public folder
-$publicFunctions = Get-ChildItem -Path "$PSScriptRoot\Public\*.ps1" | Select-Object -ExpandProperty BaseName
-Export-ModuleMember -Function $publicFunctions
+$currentTimeUtc = (Get-Date).ToUniversalTime()
+
+$isValid = (
+      $changeAllowed -eq $true -and 
+      $currentTimeUtc -gt $startTimeUtc -and 
+      $currentTimeUtc -lt $endTimeUtc
+)
