@@ -1,3 +1,14 @@
-Guide: Transitioning from Service Accounts to GitHub Apps
-Executive Summary
-Our organization is moving away from the use of dedicated "Service Accounts" and Personal Access Tokens (PATs) for automation. Instead, all new and existing integrations should utilize GitHub Apps. This transition improves our security posture, simplifies credential management, and optimizes our GitHub Enterprise licensing.
+Why the Change?
+1. Cost & Licensing
+Every service account created in GitHub Enterprise Server consumes a user seat. By moving to GitHub Apps, we free up these licenses for actual employees, as GitHub Apps are "first-class actors" that do not require a paid seat.
+
+2. Security & Token Lifecycle
+Short-Lived Credentials: PATs are often long-lived (or never expire), creating a significant risk if leaked. GitHub Apps use Installation Access Tokens that expire automatically after 1 hour (default), significantly reducing the window of exploitation.
+
+No Manual Rotation: Because tokens are generated programmatically on-demand using a private key, teams no longer need to manually rotate secrets or update Vault/Jenkins/Actions variables every 30-90 days.
+
+3. Granular Permissions
+Unlike PATs, which often grant broad "repo" or "admin" access to everything the service account can see, GitHub Apps allow for Narrow Scoping. You can grant an app "Read-only" access to code and "Read/Write" access to Pull Requests for only specific repositories.
+
+4. Professional Identity
+Automation actions will no longer appear as "SVC_Account_User." Instead, they will be attributed to the App (e.g., [Bot] Deployment-Manager), providing better clarity in audit logs and PR comments.
