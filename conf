@@ -1,14 +1,26 @@
-Why the Change?
-1. Cost & Licensing
-Every service account created in GitHub Enterprise Server consumes a user seat. By moving to GitHub Apps, we free up these licenses for actual employees, as GitHub Apps are "first-class actors" that do not require a paid seat.
+How to Get Started
+Step 1: Register the App
+Navigate to your Organization Settings > Developer Settings > GitHub Apps.
 
-2. Security & Token Lifecycle
-Short-Lived Credentials: PATs are often long-lived (or never expire), creating a significant risk if leaked. GitHub Apps use Installation Access Tokens that expire automatically after 1 hour (default), significantly reducing the window of exploitation.
+Click New GitHub App.
 
-No Manual Rotation: Because tokens are generated programmatically on-demand using a private key, teams no longer need to manually rotate secrets or update Vault/Jenkins/Actions variables every 30-90 days.
+Name: Follow our naming convention: [TeamName]-[Purpose]-Bot.
 
-3. Granular Permissions
-Unlike PATs, which often grant broad "repo" or "admin" access to everything the service account can see, GitHub Apps allow for Narrow Scoping. You can grant an app "Read-only" access to code and "Read/Write" access to Pull Requests for only specific repositories.
+Homepage URL: Link to your team's Confluence space or the repo documentation.
 
-4. Professional Identity
-Automation actions will no longer appear as "SVC_Account_User." Instead, they will be attributed to the App (e.g., [Bot] Deployment-Manager), providing better clarity in audit logs and PR comments.
+Webhooks: If you only need to call the API (CLI/Scripts), you can uncheck "Active" for webhooks.
+
+Step 2: Configure Permissions
+Only select the minimum permissions required.
+
+Example (CI/CD): Repository permissions > Contents: Read; Metadata: Read.
+
+Example (Bot): Repository permissions > Issues: Read & Write; Pull Requests: Read & Write.
+
+Step 3: Install & Authenticate
+Install the App: In the app settings, go to Install App and install it on the specific repositories it needs to access.
+
+Generate Private Key: Under the app settings, scroll to "Private keys" and click Generate a private key. Download the .pem file—this is your "master key" and should be stored securely (e.g., as a secret in GitHub Actions or your vault).
+
+Step 4: Using the App in Workflows
+If you are using GitHub Actions, you don't need to manually handle JWT generation. Use the official action:
