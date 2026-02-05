@@ -1,11 +1,4 @@
-- name: Generate Token
-  uses: actions/create-github-app-token@v1
-  id: app-token
-  with:
-    app-id: ${{ secrets.APP_ID }}
-    private-key: ${{ secrets.APP_PRIVATE_KEY }}
+FAQ & Resources
+What if I need to access GitHub Packages? GitHub Apps currently do not support all Package registry authentications; a PAT may still be required for this specific use case.
 
-- name: Use Token
-  run: |
-    curl -H "Authorization: Bearer ${{ steps.app-token.outputs.token }}" \
-    https://[YOUR-GHES-URL]/api/v3/repos/owner/repo/issues
+Who owns the App? Apps created under the Organization are managed by Organization Owners or designated GitHub App Managers. This ensures the app doesn't "break" if a specific developer leaves the company.
