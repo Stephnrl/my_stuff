@@ -1,0 +1,14 @@
+cloud_environment: AzureUSGovernment
+
+include_vm_resource_groups:
+  - your-resource-group-name
+
+include_host_filters:
+  - "computer_name is defined and computer_name.lower().startswith('tfs')"
+
+hostnames:
+  - computer_name
+  - default
+
+conditional_groups:
+  windows_tfs: "computer_name is defined and computer_name.lower().startswith('tfs')"
