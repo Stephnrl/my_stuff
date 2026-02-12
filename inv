@@ -1,14 +1,5 @@
-cloud_environment: AzureUSGovernment
-
-include_vm_resource_groups:
-  - your-resource-group-name
-
-include_host_filters:
-  - "computer_name is defined and computer_name.lower().startswith('tfs')"
-
-hostnames:
-  - computer_name
-  - default
-
-conditional_groups:
-  windows_tfs: "computer_name is defined and computer_name.lower().startswith('tfs')"
+resources
+| where type =~ "Microsoft.Logic/workflows"
+| extend accessEndpoint = tostring(properties.accessEndpoint)
+| where accessEndpoint contains "12312312312312312321" // Replace with your Workflow ID
+| project name, resourceGroup, subscriptionId, accessEndpoint
