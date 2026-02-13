@@ -1,5 +1,0 @@
-resources
-| where type =~ "Microsoft.Logic/workflows"
-| extend accessEndpoint = tostring(properties.accessEndpoint)
-| where accessEndpoint contains "12312312312312312321" // Replace with your Workflow ID
-| project name, resourceGroup, subscriptionId, accessEndpoint
