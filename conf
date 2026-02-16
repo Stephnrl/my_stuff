@@ -1,9 +1,15 @@
-Get-ChildItem -Path C:\Users\12345345345 -Directory -ErrorAction SilentlyContinue | 
-    ForEach-Object {
-        $size = (Get-ChildItem -Path $_.FullName -Recurse -ErrorAction SilentlyContinue | 
-                 Measure-Object -Property Length -Sum).Sum
-        [PSCustomObject]@{
-            Path = $_.FullName
-            SizeGB = [math]::Round($size / 1GB, 2)
-        }
-    } | Sort-Object SizeGB -Descending | Select-Object -First 10
+plugin: azure.azcollection.azure_rm
+cloud_environment: AzureUSGovernment
+
+# Only pull Arc machines, no regular VMs
+include_vm_resource_groups: []
+include_arc_resource_groups:
+  - '*'
+
+# Filter to only hosts whose name starts with TFS (case-insensitive)
+include_host_filters:
+  - name | upper is match('^TFS.*')
+
+# Arc machines don't have powerstate/provisioning_state like regular VMs,
+# so override the default filters that would exclude them
+default_host_filters: []
