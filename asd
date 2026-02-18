@@ -1,18 +1,12 @@
-{
-  "version": "1.0.0",
-  "channelId": "VisualStudio.{{ vs_version_major }}.Release",
-  "product": {
-    "id": "Microsoft.VisualStudio.Product.BuildTools"
-  },
-  "installChannelUri": ".\\ChannelManifest.json",
-  "installCatalogUri": ".\\Catalog.json",
-  "add": [
-{% set all_items = vs_workloads + vs_components %}
-{% for item in all_items %}
-    { "id": "{{ item }}"{{ "" if loop.last else "," }} }
-{% endfor %}
-  ],
-  "addProductLang": [
-    "en-US"
-  ]
-}
+---
+- name: "[{{ vs_install_label }}] Check install sentinel"
+  ansible.windows.win_stat:
+    path: "{{ vs_install_sentinel }}"
+  register: vs_sentinel_stat
+
+- name: "[{{ vs_install_label }}] Run VS install tasks"
+  ansible.builtin.include_tasks: install_vs.yml
+  when: not vs_sentinel_stat.stat.exists
+
+- name: "[{{ vs_install_label }}] Configure runner PATH and env"
+  ansible.builtin.include_tasks: configure_runner.yml
