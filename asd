@@ -1,74 +1,14 @@
-Title: Configure GitHub App Authentication for AAP 2.5 SCM Sync
+Here are polished answers for both fields:
 
-Set up SCM integration between our GitHub repository and the existing Red Hat AAP 2.5 instance using GitHub App authentication (instead of PAT/SSH).
+Scope and Level of Access Requested
+Service account to be used exclusively by Red Hat Ansible Automation Platform (AAP) 2.5 for automated configuration management and infrastructure operations within our Azure Government Cloud tenant. The account requires elevated permissions including, but not limited to:
 
-Tasks:
-- [ ] Register/obtain GitHub App credentials from org admin
-- [ ] Configure SCM credential in AAP 2.5 using GitHub App auth
-- [ ] Link project in AAP 2.5 to this repository
-- [ ] Validate SCM sync triggers on push/webhook
+Virtual Machine Contributor or equivalent RBAC role to provision, configure, start/stop, and decommission virtual machines
+Reader access at the subscription or resource group level for inventory and state management
+Any additional permissions required to manage associated VM resources (disks, NICs, NSGs) as needed by Ansible playbook execution
 
-Notes: We do not own the AAP 2.5 platform — coordinate with platform team for credential setup access.
+Access should be scoped to the designated Azure Gov Cloud tenant/subscription(s) and follow the principle of least privilege within those boundaries.
 
-
-
-
-Title: Build and Publish Custom Execution Environment for Team Use
-
-Create a team-owned Execution Environment (EE) image to standardize dependencies and collections.
-
-Tasks:
-- [ ] Define ee.yml with required Ansible collections and Python deps
-- [ ] Build EE image using ansible-builder
-- [ ] Push image to registry accessible by AAP 2.5
-- [ ] Register EE in AAP 2.5 (coordinate with platform team)
-- [ ] Validate EE is selectable in job templates
-
-Notes: Target AAP 2.5 / ansible-builder 3.x compatibility.
-
-
-
-
-
-Title: Configure Dynamic Inventory Source for Virtual Machines
-
-Set up an inventory in AAP 2.5 to dynamically pull virtual machines for use in playbooks.
-
-Tasks:
-- [ ] Identify inventory source type (VMware, Azure, AWS, etc.)
-- [ ] Create inventory credential in AAP 2.5
-- [ ] Configure inventory source with appropriate filters/groups
-- [ ] Test sync and validate hosts are populated
-- [ ] Document group/variable structure for playbook targeting
-
-
-
-
-Title: Request Service Account for Windows Server Connectivity (FIPS-Compliant)
-
-AAP 2.5 is running with FIPS enabled, blocking NTLM/HTTP-based WinRM connections due to MD4 hash restriction.
-
-Tasks:
-- [ ] Submit service account request to AD/domain team
-- [ ] Require account to support Kerberos authentication (NTLM blocked in FIPS mode)
-- [ ] Configure WinRM to use Kerberos + HTTPS on target servers
-- [ ] Update AAP 2.5 Windows machine credential to use Kerberos
-- [ ] Validate connectivity from AAP 2.5 EE to a test Windows host
-
-Blocker: `unsupported hash type md4 (in FIPS mode)` — NTLM over HTTP is not viable. Kerberos over HTTPS is the path forward.
-
-
-
-
-Title: Develop Ansible Role for TFS Windows Server Deployment & Configuration
-
-Build a reusable Ansible role to deploy and manage configuration on our TFS Windows servers.
-
-Tasks:
-- [ ] Define role structure (handlers, defaults, tasks, templates)
-- [ ] Implement idempotent configuration tasks for TFS servers
-- [ ] Integrate with team's custom EE (Issue #2)
-- [ ] Test against inventory from dynamic source (Issue #3)
-- [ ] Store role in this repo and document usage
-
-Dependencies: Blocked on service account/Kerberos auth (Issue #4) for WinRM connectivity.
+Detailed Business Justification
+Our team is transitioning to an immutable infrastructure and configuration management model using Red Hat Ansible Automation Platform 2.5. To support this initiative, a dedicated service account is required to allow AAP to authenticate and execute Ansible playbooks against our Azure Government Cloud environment in an automated, non-interactive manner.
+Using a dedicated service account rather than individual user credentials ensures that automation pipelines remain functional independent of personnel changes, reduces the risk of credential sprawl, and provides a clear audit trail of all automated actions performed against the environment. This account will enable our team to enforce consistent, repeatable, and auditable VM configuration across the environment, reducing manual intervention, configuration drift, and human error — directly supporting our broader DevOps and security compliance objectives.
