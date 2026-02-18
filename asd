@@ -1,14 +1,13 @@
-Here are polished answers for both fields:
+Good clarification — that's a much simpler and more focused request. Here are the updated answers:
 
 Scope and Level of Access Requested
-Service account to be used exclusively by Red Hat Ansible Automation Platform (AAP) 2.5 for automated configuration management and infrastructure operations within our Azure Government Cloud tenant. The account requires elevated permissions including, but not limited to:
+Service account requiring SSH (Linux) and/or WinRM (Windows) access to managed virtual machines within our Azure Government Cloud environment. The account will need:
 
-Virtual Machine Contributor or equivalent RBAC role to provision, configure, start/stop, and decommission virtual machines
-Reader access at the subscription or resource group level for inventory and state management
-Any additional permissions required to manage associated VM resources (disks, NICs, NSGs) as needed by Ansible playbook execution
+Local administrator or sudo/root privileges on target Linux hosts (SSH)
+Local administrator privileges on target Windows hosts (WinRM)
+No Azure control plane or data plane access required — Azure inventory and API interactions are handled separately via an existing Service Principal (SPN)
 
-Access should be scoped to the designated Azure Gov Cloud tenant/subscription(s) and follow the principle of least privilege within those boundaries.
 
 Detailed Business Justification
-Our team is transitioning to an immutable infrastructure and configuration management model using Red Hat Ansible Automation Platform 2.5. To support this initiative, a dedicated service account is required to allow AAP to authenticate and execute Ansible playbooks against our Azure Government Cloud environment in an automated, non-interactive manner.
-Using a dedicated service account rather than individual user credentials ensures that automation pipelines remain functional independent of personnel changes, reduces the risk of credential sprawl, and provides a clear audit trail of all automated actions performed against the environment. This account will enable our team to enforce consistent, repeatable, and auditable VM configuration across the environment, reducing manual intervention, configuration drift, and human error — directly supporting our broader DevOps and security compliance objectives.
+Our team is implementing Red Hat Ansible Automation Platform 2.5 to automate configuration management across virtual machines in our Azure Government Cloud environment. A dedicated service account with SSH and WinRM credentials is required to allow AAP to remotely connect to and configure target Linux and Windows hosts via Ansible playbooks.
+A dedicated service account ensures automation workflows are not tied to individual user credentials, provides a consistent and auditable identity for all Ansible-driven configuration activity, and supports our initiative to enforce immutable, repeatable infrastructure configuration. Azure inventory collection and all control/data plane interactions are already handled through an existing SPN — this account is strictly for remote host access and management.
