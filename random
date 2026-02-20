@@ -1,16 +1,23 @@
-# Check for VS Build Tools / Visual Studio installs
-Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, 
-                 HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | 
-  Where-Object { $_.DisplayName -like "*Visual Studio*" -or 
-                 $_.DisplayName -like "*Build Tools*" -or 
-                 $_.DisplayName -like "*Azure SDK*" } | 
-  Select-Object DisplayName, DisplayVersion
+# Check Application log for last night - adjust date accordingly
+Get-WinEvent -LogName "Application" | 
+  Where-Object { $_.TimeCreated -gt (Get-Date).Date.AddDays(-1) } |
+  Select-Object TimeCreated, LevelDisplayName, ProviderName, Message |
+  Format-List
 
+# Windows installer events
+Get-WinEvent -LogName "Application" | 
+  Where-Object { $_.ProviderName -like "*MsiInstaller*" -and $_.TimeCreated -gt (Get-Date).Date.AddDays(-1) } |
+  Select-Object TimeCreated, Message
 
-"C:\Program Files\Microsoft SDKs",
-"C:\Program Files (x86)\Microsoft SDKs",
-"C:\Program Files\Microsoft Visual Studio",
-"C:\Program Files (x86)\Microsoft Visual Studio" | ForEach-Object {
-    Get-ChildItem -Path $_ -Recurse -Filter "*Azure.Management.Compute*" -ErrorAction SilentlyContinue |
-    Select-Object FullName
-}
+# Installers often drop verbose logs here
+Get-ChildItem "C:\Windows\Temp" -Filter "*.log" | 
+  Where-Object { $_.LastWriteTime -gt (Get-Date).Date.AddDays(-1) } |
+  Select-Object FullName, LastWriteTime
+
+Get-ChildItem "$env:TEMP" -Filter "*.log" | 
+  Where-Object { $_.LastWriteTime -gt (Get-Date).Date.AddDays(-1) } |
+  Select-Object FullName, LastWriteTime
+
+Get-ChildItem "C:\inetpub\logs" -Recurse -Filter "*.log" | 
+  Where-Object { $_.LastWriteTime -gt (Get-Date).Date.AddDays(-1) } |
+  Select-Object FullName, LastWriteTime
