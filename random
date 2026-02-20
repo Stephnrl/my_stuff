@@ -1,5 +1,9 @@
-# Find both v1 and v2 of the action
-Get-ChildItem "C:\actions-runner\_work\_actions" -Recurse -Filter "*Compute*"
+# Check installed programs - run on both servers and compare
+Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | 
+  Where-Object { $_.DisplayName -like "*Azure*" -or $_.DisplayName -like "*Azure Pack*" } | 
+  Select-Object DisplayName, DisplayVersion
 
-# List everything in v1 vs v2 folder structure
-Get-ChildItem "C:\actions-runner\_work\_actions\<your-action-org>\<action-name>" -Recurse | Select-Object FullName
+# Also check 64-bit
+Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | 
+  Where-Object { $_.DisplayName -like "*Azure*" } | 
+  Select-Object DisplayName, DisplayVersion
