@@ -1,0 +1,40 @@
+---
+galaxy_info:
+  role_name: vs_buildtools
+  author: your_team
+  description: >
+    Installs and configures Visual Studio Build Tools on Windows Server 2019
+    GitHub self-hosted runners. Supports multiple side-by-side VS versions
+    (e.g. VS2019 + VS2022) via parameterized invocations. Fixes MSB4186
+    (IsTargetFrameworkCompatible not found) by ensuring MSBuild 17 and the
+    .NET 8 SDK are correctly installed.
+
+  company: your_company
+
+  # Matches Ansible Galaxy license identifiers
+  license: MIT
+
+  # Minimum Ansible version required
+  min_ansible_version: "2.12"
+
+  platforms:
+    - name: Windows
+      versions:
+        - 2019
+        - 2022
+
+  galaxy_tags:
+    - windows
+    - visualstudio
+    - msbuild
+    - dotnet
+    - github_actions
+    - ci
+    - buildtools
+    - devops
+
+# Role dependencies — none required
+# This role is self-contained. WinRM setup on the target host is a
+# prerequisite handled at the inventory/connection level, not as a
+# role dependency.
+dependencies: []
