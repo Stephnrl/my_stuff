@@ -1,40 +1,258 @@
+# vs_buildtools
+
+Ansible role to install and configure **Visual Studio Build Tools** on Windows Server 2019 GitHub self-hosted runners. Supports multiple side-by-side installations (e.g. VS2019 + VS2022) via parameterized role invocations.
+
 ---
-galaxy_info:
-  role_name: vs_buildtools
-  author: your_team
-  description: >
-    Installs and configures Visual Studio Build Tools on Windows Server 2019
-    GitHub self-hosted runners. Supports multiple side-by-side VS versions
-    (e.g. VS2019 + VS2022) via parameterized invocations. Fixes MSB4186
-    (IsTargetFrameworkCompatible not found) by ensuring MSBuild 17 and the
-    .NET 8 SDK are correctly installed.
 
-  company: your_company
+## Why This Role Exists
 
-  # Matches Ansible Galaxy license identifiers
-  license: MIT
+### The MSB4186 Error
 
-  # Minimum Ansible version required
-  min_ansible_version: "2.12"
+```
+error MSB4186: Invalid static method invocation syntax:
+"[MSBuild]::IsTargetFrameworkCompatible($(TargetFramework), 'net8.0-windows')".
+Method 'MSBuild]::IsTargetFrameworkCompatible' not found.
+```
 
-  platforms:
-    - name: Windows
-      versions:
-        - 2019
-        - 2022
+This error occurs when a project targeting `net8.0-windows` is built against MSBuild 16 (VS2019) or earlier. `IsTargetFrameworkCompatible` is a built-in MSBuild intrinsic function that was introduced in **MSBuild 17 (VS2022)**. It does not exist in earlier versions.
 
-  galaxy_tags:
-    - windows
-    - visualstudio
-    - msbuild
-    - dotnet
-    - github_actions
-    - ci
-    - buildtools
-    - devops
+The fix is not a workaround — it is installing the correct toolchain:
 
-# Role dependencies — none required
-# This role is self-contained. WinRM setup on the target host is a
-# prerequisite handled at the inventory/connection level, not as a
-# role dependency.
-dependencies: []
+- VS2022 Build Tools (MSBuild 17)
+- `Microsoft.NetCore.Component.SDK` (brings in .NET SDK including .NET 8)
+- `Microsoft.NetCore.Component.Runtime.8.0`
+
+The error only appears in CI because the local developer has VS2022 installed, while the runner only had VS2019/MSBuild 16.
+
+---
+
+## Requirements
+
+- Ansible 2.12+
+- `ansible.windows` collection
+- Windows Server 2019 target
+- WinRM configured on the target host
+- Outbound internet access on the runner (or Artifactory proxy — see [Artifactory Mirror](#artifactory-mirror))
+
+---
+
+## Role Variables
+
+### defaults/main.yml
+
+| Variable | Default | Description |
+|---|---|---|
+| `vs_install_label` | `vs2022` | Unique tag per install — used in paths, sentinel files, and env vars. Change per invocation for side-by-side installs. |
+| `vs_installer_url` | `https://aka.ms/vs/17/release/vs_buildtools.exe` | Bootstrap executable URL. Override to point at Artifactory. |
+| `vs_version_major` | `17` | MSBuild major version. Used to locate `msbuild.exe` after install. |
+| `vs_installer_dest` | `C:\Windows\Temp\vs_buildtools_{{ vs_install_label }}.exe` | Local path where the bootstrapper is downloaded. |
+| `vs_install_path` | `C:\BuildTools\{{ vs_install_label }}` | Installation root. Each label gets its own directory for side-by-side support. |
+| `vs_workloads` | See defaults | List of workload IDs to install. |
+| `vs_components` | See defaults | List of individual component IDs to install. |
+| `vs_register_msbuild_path` | `true` | If true, adds the MSBuild bin directory to the system PATH. |
+| `vs_install_timeout` | `3600` | Ansible async timeout in seconds for the install task. VS can be slow. |
+| `vs_install_log` | `C:\Windows\Temp\vs_install_{{ vs_install_label }}.log` | Path where the VS installer writes its log. |
+| `vs_artifactory_user` | `""` | Optional. Artifactory username for authenticated binary downloads. |
+| `vs_artifactory_token` | `""` | Optional. Artifactory API token. Store in ansible-vault. |
+
+---
+
+## Workloads and Components Explained
+
+### What is a Workload?
+
+A workload is a **pre-grouped bundle of tools** curated by Microsoft around a specific development scenario. Installing a workload automatically pulls in all components marked as `Required` for that scenario.
+
+### What is a Component?
+
+A component is a **single discrete installable piece** — one SDK, one targeting pack, one tool. Components are the atoms that workloads are built from. You specify components explicitly when you need something a workload marks as `Recommended` or `Optional` that won't be pulled in automatically.
+
+### Workloads Used in This Role
+
+| Workload ID | Purpose |
+|---|---|
+| `Microsoft.VisualStudio.Workload.MSBuildTools` | Baseline. Installs MSBuild, Roslyn compilers, and VS Build Tools core. Nothing works without this. |
+| `Microsoft.VisualStudio.Workload.ManagedDesktopBuildTools` | Required for `net8.0-windows` targets. Brings in managed desktop toolchain (WPF, WinForms, console). |
+
+> `Microsoft.VisualStudio.Workload.NetCoreBuildTools` was intentionally removed — it is marked **out of support** in the VS2022 channel and its components are superseded by explicit `Microsoft.NetCore.*` components below.
+
+### Components Used in This Role
+
+| Component ID | Purpose |
+|---|---|
+| `Microsoft.Net.Component.4.8.SDK` | .NET Framework 4.8 SDK. Required if any projects target full .NET Framework. |
+| `Microsoft.Net.Component.4.8.TargetingPack` | Reference assemblies for .NET 4.8. Lets MSBuild know what APIs are available without installing a runtime. |
+| `Microsoft.VisualStudio.Component.NuGet.BuildTools` | NuGet MSBuild targets and tasks. Required for package restore during CI builds. |
+| `Microsoft.NetCore.Component.Runtime.8.0` | .NET 8 runtime binaries. Required if the runner needs to execute .NET 8 code (including the runner agent itself). |
+| `Microsoft.NetCore.Component.SDK` | **The MSB4186 fix.** Installs the current .NET SDK (covering .NET 8+9 in VS2022) and brings in the MSBuild intrinsic functions including `IsTargetFrameworkCompatible`. |
+
+---
+
+## Key Install Flags
+
+| Flag | Why |
+|---|---|
+| `--wait` | **Required.** The bootstrapper spawns a child installer process and returns immediately without this flag. Ansible would mark the task complete before the install finishes. |
+| `--nocache` | Prevents the installer from dropping package caches on the runner's disk. Since Artifactory is the source of truth for binaries, local caching is redundant. |
+| `--quiet` | Suppresses all UI. Required for headless/server installs. |
+| `--norestart` | Prevents the installer from initiating a reboot. The role handles reboots explicitly via `win_reboot` when exit code `3010` is returned. |
+| `--installPath` | Specifies the installation root per invocation. **Critical for side-by-side support** — without this, VS installers default to shared locations and can clobber each other. |
+| `--config` | Points the installer at the response file. All workload and component selections are driven from here. |
+
+### Exit Codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `3010` | Success — reboot required. The role handles this via `win_reboot`. |
+
+---
+
+## Side-by-Side MSBuild Support
+
+Call the role multiple times in `site.yml` with different `vs_install_label` and `vs_installer_url` values. Each install lands in its own `--installPath`.
+
+```yaml
+# site.yml example
+roles:
+  - role: vs_buildtools
+    vars:
+      vs_install_label: "vs2022"
+      vs_installer_url: "https://aka.ms/vs/17/release/vs_buildtools.exe"
+      vs_version_major: 17
+
+  - role: vs_buildtools
+    vars:
+      vs_install_label: "vs2019"
+      vs_installer_url: "https://aka.ms/vs/16/release/vs_buildtools.exe"
+      vs_version_major: 16
+```
+
+Each install registers its own environment variable:
+
+| Label | Env Var | Path |
+|---|---|---|
+| `vs2022` | `MSBUILD_VS2022_PATH` | `C:\BuildTools\vs2022\MSBuild\Current\Bin\MSBuild.exe` |
+| `vs2019` | `MSBUILD_VS2019_PATH` | `C:\BuildTools\vs2019\MSBuild\Current\Bin\MSBuild.exe` |
+
+### Pinning the Version in GitHub Actions
+
+Once multiple versions are installed, pin the version in your workflow to avoid ambiguity:
+
+```yaml
+- uses: microsoft/setup-msbuild@v2
+  with:
+    vs-version: '[17,18)'   # pins to VS2022 / MSBuild 17
+```
+
+---
+
+## Idempotency
+
+The role writes a sentinel file after a confirmed successful install:
+
+```
+C:\BuildTools\.installed_{{ vs_install_label }}
+```
+
+On subsequent Ansible runs, the sentinel check skips the install entirely. The VS installer's own exit codes are not reliable enough for idempotency across re-runs — the sentinel gives Ansible a cheap, deterministic way to skip reinstalls.
+
+---
+
+## Artifactory Mirror
+
+If your runners have restricted outbound internet access, Artifactory can serve as a mirror for the VS bootstrapper.
+
+### Remote Proxy Repository (Caching)
+
+Create a **Generic** remote repository in Artifactory pointing at `https://download.visualstudio.microsoft.com`. Artifactory caches the artifact after the first pull.
+
+> Note: `aka.ms` is a redirect. Resolve the real URL first with `curl -I https://aka.ms/vs/17/release/vs_buildtools.exe` and use the destination URL directly.
+
+### Local Repository (Air-Gapped)
+
+Upload the versioned bootstrapper to a **Generic** local repository and reference it directly:
+
+```yaml
+vs_installer_url: "https://artifactory.yourcompany.com/artifactory/vs-buildtools-local/vs_buildtools_17.exe"
+```
+
+For a fully air-gapped setup, you can also stage the complete VS offline layout (bootstrapper + channel manifest + packages) in Artifactory and point the response file's `channelUri` at your internal URL. This causes the installer to pull all packages internally with no Microsoft CDN calls.
+
+---
+
+## Inspecting an Existing Install
+
+If you need to audit what was previously installed on a runner, the following commands are useful.
+
+### Query via vswhere (Recommended)
+
+```powershell
+# Full component list from all installed VS instances
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" `
+    -all -format json | ConvertFrom-Json |
+    ForEach-Object { $_.packages | Select-Object -ExpandProperty id }
+```
+
+### Export a Response File from an Existing Install
+
+```powershell
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" export `
+    --config "C:\Temp\existing_install.json" `
+    --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools"
+```
+
+The exported file is in the same format as this role's response file template — diff it directly to see what's missing.
+
+### State Files
+
+```
+C:\ProgramData\Microsoft\VisualStudio\Packages\_Instances\<GUID>\state.json
+```
+
+Contains the installer's full internal record of every installed component, version, and path.
+
+### Install Logs
+
+```powershell
+Get-ChildItem "$env:TEMP\dd_*.log" | Sort-Object LastWriteTime -Descending | Select-Object Name, LastWriteTime
+```
+
+### MSBuild Registry Keys
+
+```powershell
+Get-ChildItem "HKLM:\SOFTWARE\Microsoft\MSBuild\ToolsVersions"
+Get-ChildItem "HKLM:\SOFTWARE\WOW6432Node\Microsoft\MSBuild\ToolsVersions"
+```
+
+### Find All MSBuild Installs
+
+```powershell
+Get-ChildItem "C:\Program Files*", "C:\BuildTools" -Recurse -Filter "msbuild.exe" -ErrorAction SilentlyContinue |
+    Select-Object FullName, @{N='Version';E={$_.VersionInfo.FileVersion}}
+```
+
+### Check .NET SDK Availability
+
+```powershell
+dotnet --list-sdks
+dotnet --list-runtimes
+```
+
+If .NET 8 SDK is absent from this output, that confirms the MSB4186 root cause.
+
+---
+
+## Microsoft Documentation
+
+| Topic | Link |
+|---|---|
+| Command-line parameters for VS installer | https://learn.microsoft.com/en-us/visualstudio/install/use-command-line-parameters-to-install-visual-studio?view=visualstudio |
+| Automated installation with response file | https://learn.microsoft.com/en-us/visualstudio/install/automated-installation-with-response-file?view=visualstudio |
+| VS Build Tools workload and component IDs | https://learn.microsoft.com/en-us/visualstudio/install/workload-component-id-vs-build-tools?view=visualstudio |
+
+---
+
+## License
+
+MIT
