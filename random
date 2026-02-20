@@ -1,9 +1,6 @@
-# Check installed programs - run on both servers and compare
-Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* | 
-  Where-Object { $_.DisplayName -like "*Azure*" -or $_.DisplayName -like "*Azure Pack*" } | 
-  Select-Object DisplayName, DisplayVersion
+# Check recently accessed DLL files - may show where it loaded from
+Get-ChildItem "C:\" -Recurse -Filter "Microsoft.Windows.Azure.Management.Compute.dll" -ErrorAction SilentlyContinue
 
-# Also check 64-bit
-Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | 
-  Where-Object { $_.DisplayName -like "*Azure*" } | 
-  Select-Object DisplayName, DisplayVersion
+# Also check temp/install staging folders
+Get-ChildItem "C:\Windows\Temp" -Recurse -Filter "*Compute*" -ErrorAction SilentlyContinue
+Get-ChildItem "$env:TEMP" -Recurse -Filter "*Compute*" -ErrorAction SilentlyContinue
