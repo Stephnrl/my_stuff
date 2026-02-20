@@ -1,8 +1,5 @@
-# Check GAC on the 2019 server
-Get-ChildItem "C:\Windows\Microsoft.NET\assembly" -Recurse -Filter "*Compute*" -ErrorAction SilentlyContinue
+# Find both v1 and v2 of the action
+Get-ChildItem "C:\actions-runner\_work\_actions" -Recurse -Filter "*Compute*"
 
-# Check whole machine
-Get-ChildItem "C:\" -Recurse -Filter "Microsoft.Windows.Azure.Management.Compute.dll" -ErrorAction SilentlyContinue
-
-# Check what .NET versions are installed
-Get-ChildItem "C:\Windows\Microsoft.NET\Framework*" | Select-Object Name
+# List everything in v1 vs v2 folder structure
+Get-ChildItem "C:\actions-runner\_work\_actions\<your-action-org>\<action-name>" -Recurse | Select-Object FullName
