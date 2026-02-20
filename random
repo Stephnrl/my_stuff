@@ -1,23 +1,10 @@
-# Check Application log for last night - adjust date accordingly
-Get-WinEvent -LogName "Application" | 
-  Where-Object { $_.TimeCreated -gt (Get-Date).Date.AddDays(-1) } |
-  Select-Object TimeCreated, LevelDisplayName, ProviderName, Message |
-  Format-List
+$dllName = "Microsoft.Windows.Azure.Management.Compute, Version=12.0.0.0, Culture=neutral, PublicKeyToken=null"
 
-# Windows installer events
-Get-WinEvent -LogName "Application" | 
-  Where-Object { $_.ProviderName -like "*MsiInstaller*" -and $_.TimeCreated -gt (Get-Date).Date.AddDays(-1) } |
-  Select-Object TimeCreated, Message
-
-# Installers often drop verbose logs here
-Get-ChildItem "C:\Windows\Temp" -Filter "*.log" | 
-  Where-Object { $_.LastWriteTime -gt (Get-Date).Date.AddDays(-1) } |
-  Select-Object FullName, LastWriteTime
-
-Get-ChildItem "$env:TEMP" -Filter "*.log" | 
-  Where-Object { $_.LastWriteTime -gt (Get-Date).Date.AddDays(-1) } |
-  Select-Object FullName, LastWriteTime
-
-Get-ChildItem "C:\inetpub\logs" -Recurse -Filter "*.log" | 
-  Where-Object { $_.LastWriteTime -gt (Get-Date).Date.AddDays(-1) } |
-  Select-Object FullName, LastWriteTime
+try {
+    $assembly = [System.Reflection.Assembly]::Load($dllName)
+    Write-Host "SUCCESS - Loaded from: $($assembly.Location)" -ForegroundColor Green
+    Write-Host "Version: $($assembly.GetName().Version)"
+}
+catch {
+    Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
+}
