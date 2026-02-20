@@ -1,4 +1,7 @@
-"C:\","D:\" | ForEach-Object {
-    Get-ChildItem -Path $_ -Recurse -Filter "*Azure.Management.Compute*" -ErrorAction SilentlyContinue | 
-    Select-Object FullName, Length, LastWriteTime
-}
+# Check for VS Build Tools / Visual Studio installs
+Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, 
+                 HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | 
+  Where-Object { $_.DisplayName -like "*Visual Studio*" -or 
+                 $_.DisplayName -like "*Build Tools*" -or 
+                 $_.DisplayName -like "*Azure SDK*" } | 
+  Select-Object DisplayName, DisplayVersion
