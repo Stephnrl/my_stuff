@@ -5,3 +5,12 @@ Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*,
                  $_.DisplayName -like "*Build Tools*" -or 
                  $_.DisplayName -like "*Azure SDK*" } | 
   Select-Object DisplayName, DisplayVersion
+
+
+"C:\Program Files\Microsoft SDKs",
+"C:\Program Files (x86)\Microsoft SDKs",
+"C:\Program Files\Microsoft Visual Studio",
+"C:\Program Files (x86)\Microsoft Visual Studio" | ForEach-Object {
+    Get-ChildItem -Path $_ -Recurse -Filter "*Azure.Management.Compute*" -ErrorAction SilentlyContinue |
+    Select-Object FullName
+}
