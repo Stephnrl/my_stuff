@@ -1,21 +1,4 @@
-$dllName = "Microsoft.Windows.Azure.Management.Compute, Version=12.0.0.0, Culture=neutral, PublicKeyToken=null"
-
-try {
-    $assembly = [System.Reflection.Assembly]::Load($dllName)
-    Write-Host "SUCCESS - Assembly loaded from: $($assembly.Location)" -ForegroundColor Green
-    Write-Host "Version: $($assembly.GetName().Version)"
-}
-catch {
-    Write-Host "FAILED - Could not load assembly" -ForegroundColor Red
-    Write-Host "Error: $($_.Exception.Message)"
-    
-    # Also try finding it on disk as a secondary check
-    Write-Host "`nSearching disk..." -ForegroundColor Yellow
-    $found = Get-ChildItem "C:\" -Recurse -Filter "Microsoft.Windows.Azure.Management.Compute.dll" -ErrorAction SilentlyContinue
-    if ($found) {
-        Write-Host "Found on disk at: $($found.FullName)" -ForegroundColor Yellow
-        Write-Host "But could not load it - likely blocked or wrong version"
-    } else {
-        Write-Host "Not found anywhere on disk either" -ForegroundColor Red
-    }
+"C:\","D:\" | ForEach-Object {
+    Get-ChildItem -Path $_ -Recurse -Filter "*Azure.Management.Compute*" -ErrorAction SilentlyContinue | 
+    Select-Object FullName, Length, LastWriteTime
 }
