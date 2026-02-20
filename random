@@ -1,6 +1,10 @@
-# Check recently accessed DLL files - may show where it loaded from
-Get-ChildItem "C:\" -Recurse -Filter "Microsoft.Windows.Azure.Management.Compute.dll" -ErrorAction SilentlyContinue
+# Check if AppLocker is configured and what mode
+Get-AppLockerPolicy -Effective | Select-Object -ExpandProperty RuleCollections
 
-# Also check temp/install staging folders
-Get-ChildItem "C:\Windows\Temp" -Recurse -Filter "*Compute*" -ErrorAction SilentlyContinue
-Get-ChildItem "$env:TEMP" -Recurse -Filter "*Compute*" -ErrorAction SilentlyContinue
+# Check AppLocker service
+Get-Service -Name AppIDSvc | Select-Object Name, Status, StartType
+
+# Check AppLocker event log for blocked events - this is the key one
+Get-WinEvent -LogName "Microsoft-Windows-AppLocker/DLL" -ErrorAction SilentlyContinue | 
+  Where-Object { $_.Message -like "*Compute*" } | 
+  Select-Object TimeCreated, Message
