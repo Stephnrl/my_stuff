@@ -1,14 +1,27 @@
-# Shows all HTTPS bindings and their cert thumbprints
 Get-WebBinding -Protocol https | ForEach-Object {
     $binding = $_
     $certHash = $_.certificateHash
-    $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $certHash }
+    $storeName = $_.certificateStoreName
+
+    # Search the store IIS is actually pointing to
+    $cert = Get-ChildItem "Cert:\LocalMachine\$storeName" | 
+        Where-Object { $_.Thumbprint -eq $certHash }
+
+    # Fallback: search all common stores if still not found
+    if (-not $cert) {
+        $cert = Get-ChildItem Cert:\LocalMachine\My, Cert:\LocalMachine\WebHosting, Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | 
+            Where-Object { $_.Thumbprint -eq $certHash }
+    }
+
     [PSCustomObject]@{
         Site        = $binding.ItemXPath -replace ".*@name='|'.*", ""
         Binding     = $binding.bindingInformation
+        StoreName   = $storeName
         Thumbprint  = $certHash
-        Subject     = $cert.Subject
-        Expires     = $cert.NotAfter
-        DaysLeft    = ($cert.NotAfter - (Get-Date)).Days
+        Subject     = if ($cert) { $cert.Subject } else { "CERT NOT FOUND" }
+        Expires     = if ($cert) { $cert.NotAfter } else { "N/A" }
+        DaysLeft    = if ($cert) { ($cert.NotAfter - (Get-Date)).Days } else { "N/A" }
     }
 } | Format-Table -AutoSize
+
+Get-WebBinding -Protocol https | Select-Object bindingInformation, certificateHash, certificateStoreName
