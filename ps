@@ -1,0 +1,14 @@
+# Shows all HTTPS bindings and their cert thumbprints
+Get-WebBinding -Protocol https | ForEach-Object {
+    $binding = $_
+    $certHash = $_.certificateHash
+    $cert = Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Thumbprint -eq $certHash }
+    [PSCustomObject]@{
+        Site        = $binding.ItemXPath -replace ".*@name='|'.*", ""
+        Binding     = $binding.bindingInformation
+        Thumbprint  = $certHash
+        Subject     = $cert.Subject
+        Expires     = $cert.NotAfter
+        DaysLeft    = ($cert.NotAfter - (Get-Date)).Days
+    }
+} | Format-Table -AutoSize
