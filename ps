@@ -25,3 +25,12 @@ Get-WebBinding -Protocol https | ForEach-Object {
 } | Format-Table -AutoSize
 
 Get-WebBinding -Protocol https | Select-Object bindingInformation, certificateHash, certificateStoreName
+
+
+
+
+
+Get-ChildItem Cert:\LocalMachine\WebHosting | 
+  Select-Object Subject, Thumbprint, NotBefore, NotAfter, 
+    @{Name='DaysLeft';Expression={($_.NotAfter - (Get-Date)).Days}} | 
+  Format-Table -AutoSize
