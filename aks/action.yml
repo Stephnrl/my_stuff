@@ -1,0 +1,68 @@
+name: "AKS Safe Upgrade"
+description: "Safely upgrades an AKS cluster across Kubernetes minor versions with phased rollout and health validation."
+author: "Platform Engineering"
+
+inputs:
+  resource_group:
+    description: "Azure Resource Group containing the AKS cluster"
+    required: true
+  cluster_name:
+    description: "Name of the AKS cluster"
+    required: true
+  target_version:
+    description: "Target Kubernetes minor version (e.g., 1.33)"
+    required: true
+  max_surge:
+    description: "Max surge for node pool rolling upgrades"
+    required: false
+    default: "1"
+  validation_wait:
+    description: "Seconds to wait between steps for stabilization"
+    required: false
+    default: "120"
+  fail_on_workload_issues:
+    description: "Fail the upgrade if non-system workload pods are unhealthy"
+    required: false
+    default: "false"
+
+outputs:
+  status:
+    description: "Upgrade result: completed, skipped, or failed"
+    value: ${{ steps.upgrade.outputs.status }}
+  starting_version:
+    description: "Kubernetes version before the upgrade"
+    value: ${{ steps.upgrade.outputs.starting_version }}
+  final_version:
+    description: "Kubernetes version after the upgrade"
+    value: ${{ steps.upgrade.outputs.final_version }}
+  upgrade_path:
+    description: "Comma-separated list of minor versions traversed"
+    value: ${{ steps.upgrade.outputs.upgrade_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install kubectl
+      uses: azure/setup-kubectl@v3
+      shell: bash
+
+    - name: Get AKS credentials
+      shell: bash
+      run: |
+        az aks get-credentials \
+          -g "${{ inputs.resource_group }}" \
+          -n "${{ inputs.cluster_name }}" \
+          --overwrite-existing
+
+    - name: Run AKS upgrade
+      id: upgrade
+      shell: pwsh
+      env:
+        INPUT_RESOURCE_GROUP: ${{ inputs.resource_group }}
+        INPUT_CLUSTER_NAME: ${{ inputs.cluster_name }}
+        INPUT_TARGET_VERSION: ${{ inputs.target_version }}
+        INPUT_MAX_SURGE: ${{ inputs.max_surge }}
+        INPUT_VALIDATION_WAIT: ${{ inputs.validation_wait }}
+        INPUT_FAIL_ON_WORKLOAD_ISSUES: ${{ inputs.fail_on_workload_issues }}
+      run: |
+        & "${{ github.action_path }}/src/entrypoint.ps1"
