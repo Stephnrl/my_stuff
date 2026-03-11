@@ -1,0 +1,307 @@
+<#
+.SYNOPSIS
+    Parses a GitHub Projects v2 board under an Organization and returns
+    Epics, Features, and Stories as structured PowerShell objects.
+
+.DESCRIPTION
+    Uses the GitHub CLI (gh) GraphQL API to query a GitHub Projects v2 board.
+    Extracts items categorized by their "Issue Type" field (or a custom single-select
+    field you specify) and returns them grouped as Epics, Features, and Stories.
+
+    Prerequisites:
+      - GitHub CLI (gh) installed and authenticated: gh auth login
+      - Org-level project access (read scope on the project)
+
+.PARAMETER Org
+    The GitHub Organization login name (e.g. "my-org").
+
+.PARAMETER ProjectNumber
+    The project number (visible in the project URL: github.com/orgs/<org>/projects/<number>).
+
+.PARAMETER TypeFieldName
+    The name of the single-select field that holds the item type.
+    Common values: "Issue Type", "Type", "Item Type".
+    Default: "Issue Type"
+
+.PARAMETER PageSize
+    Number of items to fetch per GraphQL page. Max 100. Default: 100.
+
+.EXAMPLE
+    # Basic usage — returns a hashtable with Epics, Features, Stories keys
+    $results = .\Get-GitHubProjectItems.ps1 -Org "my-org" -ProjectNumber 5
+
+    # Access grouped results
+    $results.Epics    | Format-Table
+    $results.Features | Format-Table
+    $results.Stories  | Format-Table
+
+.EXAMPLE
+    # Custom type field name + export to JSON
+    $results = .\Get-GitHubProjectItems.ps1 -Org "my-org" -ProjectNumber 5 -TypeFieldName "Type"
+    $results | ConvertTo-Json -Depth 10 | Set-Content "project-items.json"
+
+.EXAMPLE
+    # Pipe stories to CSV
+    .\Get-GitHubProjectItems.ps1 -Org "my-org" -ProjectNumber 5 |
+        ForEach-Object { $_.Stories } |
+        Export-Csv -Path "stories.csv" -NoTypeInformation
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [string]$Org,
+
+    [Parameter(Mandatory)]
+    [int]$ProjectNumber,
+
+    [Parameter()]
+    [string]$TypeFieldName = "Issue Type",
+
+    [Parameter()]
+    [ValidateRange(1, 100)]
+    [int]$PageSize = 100
+)
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    throw "GitHub CLI (gh) is not installed or not in PATH. Install from https://cli.github.com"
+}
+
+# Quick auth check
+$authStatus = gh auth status 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "gh is not authenticated. Run 'gh auth login' first.`n$authStatus"
+}
+
+# ── GraphQL Query ────────────────────────────────────────────────────────────
+# This query fetches project items with all single-select and text fields,
+# plus the linked issue/PR metadata. It paginates via $cursor.
+
+$query = @'
+query($org: String!, $number: Int!, $first: Int!, $cursor: String) {
+  organization(login: $org) {
+    projectV2(number: $number) {
+      title
+      items(first: $first, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          type
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldTextValue {
+                text
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldNumberValue {
+                number
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldIterationValue {
+                title
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+              ... on ProjectV2ItemFieldDateValue {
+                date
+                field { ... on ProjectV2FieldCommon { name } }
+              }
+            }
+          }
+          content {
+            ... on Issue {
+              number
+              title
+              state
+              url
+              labels(first: 10) { nodes { name } }
+              assignees(first: 5) { nodes { login } }
+              milestone { title }
+            }
+            ... on PullRequest {
+              number
+              title
+              state
+              url
+              labels(first: 10) { nodes { name } }
+              assignees(first: 5) { nodes { login } }
+            }
+            ... on DraftIssue {
+              title
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'@
+
+# ── Pagination Loop ──────────────────────────────────────────────────────────
+Write-Host "Fetching project #$ProjectNumber from org '$Org'..." -ForegroundColor Cyan
+
+$allItems = [System.Collections.Generic.List[object]]::new()
+$cursor   = $null
+$page     = 0
+
+do {
+    $page++
+    Write-Verbose "Fetching page $page (cursor: $cursor)..."
+
+    # Build the variables JSON — gh api graphql expects -f for strings, -F for ints
+    $ghArgs = @(
+        "api", "graphql",
+        "-f", "query=$query",
+        "-f", "org=$Org",
+        "-F", "number=$ProjectNumber",
+        "-F", "first=$PageSize"
+    )
+
+    if ($cursor) {
+        $ghArgs += @("-f", "cursor=$cursor")
+    }
+
+    $raw = & gh @ghArgs 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "GraphQL query failed (page $page):`n$raw"
+    }
+
+    $json = $raw | ConvertFrom-Json
+
+    # Check for GraphQL-level errors
+    if ($json.errors) {
+        $errMsg = ($json.errors | ForEach-Object { $_.message }) -join "; "
+        throw "GraphQL errors: $errMsg"
+    }
+
+    $project  = $json.data.organization.projectV2
+
+    if ($page -eq 1) {
+        Write-Host "Project: $($project.title)" -ForegroundColor Green
+    }
+
+    $items    = $project.items
+    $pageInfo = $items.pageInfo
+
+    foreach ($node in $items.nodes) {
+        $allItems.Add($node)
+    }
+
+    Write-Host "  Page $page — fetched $($items.nodes.Count) items (total: $($allItems.Count))" -ForegroundColor DarkGray
+
+    $cursor = if ($pageInfo.hasNextPage) { $pageInfo.endCursor } else { $null }
+
+} while ($cursor)
+
+Write-Host "Total items fetched: $($allItems.Count)" -ForegroundColor Cyan
+
+# ── Parse & Normalize ────────────────────────────────────────────────────────
+function Get-FieldValue {
+    <#
+    .SYNOPSIS Helper to extract a named field value from a project item node. #>
+    param(
+        [object]$Item,
+        [string]$FieldName
+    )
+
+    foreach ($fv in $Item.fieldValues.nodes) {
+        $fn = $null
+
+        # The field name lives in different spots depending on the value type
+        if ($fv.field -and $fv.field.name) {
+            $fn = $fv.field.name
+        }
+
+        if ($fn -eq $FieldName) {
+            # Return whichever value property exists
+            if     ($null -ne $fv.name)   { return $fv.name   }  # SingleSelect
+            if     ($null -ne $fv.text)   { return $fv.text   }  # Text
+            if     ($null -ne $fv.number) { return $fv.number }  # Number
+            if     ($null -ne $fv.title)  { return $fv.title  }  # Iteration
+            if     ($null -ne $fv.date)   { return $fv.date   }  # Date
+        }
+    }
+    return $null
+}
+
+$parsed = foreach ($item in $allItems) {
+    $content  = $item.content
+    $itemType = Get-FieldValue -Item $item -FieldName $TypeFieldName
+
+    # Fallback: if no type field found, try to infer from labels
+    if (-not $itemType -and $content.labels) {
+        $labelNames = $content.labels.nodes | ForEach-Object { $_.name }
+        if ($labelNames -match "(?i)epic")    { $itemType = "Epic" }
+        elseif ($labelNames -match "(?i)feature") { $itemType = "Feature" }
+        elseif ($labelNames -match "(?i)story")   { $itemType = "Story" }
+    }
+
+    # Build all custom fields into a hashtable for easy access
+    $customFields = @{}
+    foreach ($fv in $item.fieldValues.nodes) {
+        $fn = $null
+        if ($fv.field -and $fv.field.name) { $fn = $fv.field.name }
+        if ($fn) {
+            $val = $fv.name ?? $fv.text ?? $fv.number ?? $fv.title ?? $fv.date
+            if ($null -ne $val) { $customFields[$fn] = $val }
+        }
+    }
+
+    [PSCustomObject]@{
+        ItemId       = $item.id
+        NodeType     = $item.type          # ISSUE | PULL_REQUEST | DRAFT_ISSUE
+        ItemType     = $itemType           # Epic | Feature | Story | $null
+        Number       = $content.number
+        Title        = $content.title
+        State        = $content.state
+        Url          = $content.url
+        Labels       = ($content.labels.nodes | ForEach-Object { $_.name }) -join ", "
+        Assignees    = ($content.assignees.nodes | ForEach-Object { $_.login }) -join ", "
+        Milestone    = $content.milestone.title
+        Status       = Get-FieldValue -Item $item -FieldName "Status"
+        Priority     = Get-FieldValue -Item $item -FieldName "Priority"
+        Iteration    = Get-FieldValue -Item $item -FieldName "Iteration"
+        CustomFields = $customFields
+    }
+}
+
+# ── Group by Type ────────────────────────────────────────────────────────────
+$epics    = @($parsed | Where-Object { $_.ItemType -match "(?i)epic" })
+$features = @($parsed | Where-Object { $_.ItemType -match "(?i)feature" })
+$stories  = @($parsed | Where-Object { $_.ItemType -match "(?i)story" })
+$other    = @($parsed | Where-Object {
+    $_.ItemType -notmatch "(?i)epic" -and
+    $_.ItemType -notmatch "(?i)feature" -and
+    $_.ItemType -notmatch "(?i)story"
+})
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "── Results ────────────────────────────────" -ForegroundColor Yellow
+Write-Host "  Epics:    $($epics.Count)"    -ForegroundColor Magenta
+Write-Host "  Features: $($features.Count)" -ForegroundColor Blue
+Write-Host "  Stories:  $($stories.Count)"  -ForegroundColor Green
+Write-Host "  Other:    $($other.Count)"    -ForegroundColor DarkGray
+Write-Host "───────────────────────────────────────────" -ForegroundColor Yellow
+
+# ── Return structured output ─────────────────────────────────────────────────
+# The caller receives this hashtable and can do whatever they want with it.
+[PSCustomObject]@{
+    ProjectTitle = $project.title
+    Epics        = $epics
+    Features     = $features
+    Stories      = $stories
+    Other        = $other
+    AllItems     = $parsed
+}
