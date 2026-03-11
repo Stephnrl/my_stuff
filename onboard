@@ -1,0 +1,274 @@
+name: "🚀 Team Landing Zone Onboarding"
+description: "Request a new team landing zone in the shared EKS cluster. Fill out this form to generate the Terraform configuration."
+title: "[LZ-Onboard] <team_name>"
+labels: ["landing-zone-onboarding", "auto-tfvars"]
+assignees: []
+
+body:
+  # ──────────────────────────────────────────────
+  #  Section 1: ServiceNow / Request Metadata
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## 📋 Request Metadata
+        Paste details from the ServiceNow ticket so we can trace this back.
+
+  - type: input
+    id: snow_ticket
+    attributes:
+      label: "ServiceNow Ticket ID"
+      description: "e.g. RITM0012345 or INC0067890"
+      placeholder: "RITM00XXXXX"
+    validations:
+      required: true
+
+  - type: input
+    id: requestor_email
+    attributes:
+      label: "Requestor Email"
+      description: "Who submitted the ServiceNow request?"
+      placeholder: "jane.doe@company.com"
+    validations:
+      required: true
+
+  # ──────────────────────────────────────────────
+  #  Section 2: Team Identity
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## 👥 Team Identity
+
+  - type: input
+    id: team_name
+    attributes:
+      label: "Team Name"
+      description: "Short, lowercase, alphanumeric + hyphens. This becomes the namespace prefix."
+      placeholder: "platform-eng"
+    validations:
+      required: true
+
+  - type: input
+    id: team_display_name
+    attributes:
+      label: "Team Display Name"
+      description: "Human-readable team name for tags and documentation."
+      placeholder: "Platform Engineering"
+    validations:
+      required: true
+
+  - type: input
+    id: cost_center
+    attributes:
+      label: "Cost Center / Billing Code"
+      placeholder: "CC-12345"
+    validations:
+      required: true
+
+  - type: input
+    id: team_lead_email
+    attributes:
+      label: "Team Lead Email"
+      description: "Technical owner for escalations."
+      placeholder: "lead@company.com"
+    validations:
+      required: true
+
+  # ──────────────────────────────────────────────
+  #  Section 3: Environment & Sizing
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## ⚙️ Environment & Sizing
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: "Target Environment"
+      options:
+        - dev
+        - staging
+        - production
+    validations:
+      required: true
+
+  - type: dropdown
+    id: aws_region
+    attributes:
+      label: "AWS Region"
+      options:
+        - us-east-1
+        - us-east-2
+        - us-west-2
+        - eu-west-1
+        - eu-central-1
+        - ap-southeast-1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: namespace_resource_quota
+    attributes:
+      label: "Namespace Resource Quota (T-shirt size)"
+      description: "Controls CPU/memory limits for the team's EKS namespace."
+      options:
+        - small (4 vCPU / 8Gi RAM)
+        - medium (8 vCPU / 16Gi RAM)
+        - large (16 vCPU / 32Gi RAM)
+        - xlarge (32 vCPU / 64Gi RAM)
+    validations:
+      required: true
+
+  - type: input
+    id: max_pods
+    attributes:
+      label: "Max Pods in Namespace"
+      description: "Upper bound on concurrent pods. Default: 20"
+      placeholder: "20"
+    validations:
+      required: false
+
+  # ──────────────────────────────────────────────
+  #  Section 4: Networking
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## 🌐 Networking
+
+  - type: checkboxes
+    id: ingress_type
+    attributes:
+      label: "Ingress Requirements"
+      options:
+        - label: "Internal ALB (private traffic only)"
+        - label: "External ALB (internet-facing)"
+        - label: "NLB (TCP/gRPC workloads)"
+
+  - type: input
+    id: custom_domain
+    attributes:
+      label: "Custom Domain (optional)"
+      description: "If this team needs a Route53 subdomain, e.g. api.team.internal.company.com"
+      placeholder: "api.myteam.internal.company.com"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: network_policies
+    attributes:
+      label: "Network Policy Defaults"
+      description: "Select which policies to apply."
+      options:
+        - label: "Deny all ingress by default (recommended)"
+          required: false
+        - label: "Deny all egress by default"
+          required: false
+        - label: "Allow DNS egress (kube-dns)"
+          required: false
+
+  # ──────────────────────────────────────────────
+  #  Section 5: IAM / Pod Identity
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## 🔐 IAM & Pod Identity
+
+  - type: checkboxes
+    id: aws_services
+    attributes:
+      label: "AWS Services Needed (Pod Identity Roles)"
+      description: "We'll create least-privilege Pod Identity associations for each."
+      options:
+        - label: "S3"
+        - label: "DynamoDB"
+        - label: "SQS"
+        - label: "SNS"
+        - label: "Secrets Manager"
+        - label: "RDS (via IAM auth)"
+        - label: "ElastiCache"
+        - label: "KMS"
+        - label: "SES"
+        - label: "Kinesis"
+
+  - type: textarea
+    id: custom_iam_policies
+    attributes:
+      label: "Custom IAM Policy ARNs (optional)"
+      description: "One ARN per line if additional policies are needed."
+      placeholder: |
+        arn:aws:iam::123456789012:policy/custom-policy-1
+        arn:aws:iam::123456789012:policy/custom-policy-2
+    validations:
+      required: false
+
+  # ──────────────────────────────────────────────
+  #  Section 6: Observability & Compliance
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## 📊 Observability & Compliance
+
+  - type: checkboxes
+    id: observability
+    attributes:
+      label: "Observability Stack"
+      options:
+        - label: "CloudWatch Container Insights"
+        - label: "Prometheus ServiceMonitor"
+        - label: "Fluent Bit log forwarding"
+        - label: "X-Ray / ADOT tracing"
+
+  - type: dropdown
+    id: data_classification
+    attributes:
+      label: "Data Classification"
+      description: "Determines encryption and audit requirements."
+      options:
+        - public
+        - internal
+        - confidential
+        - restricted
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: compliance_frameworks
+    attributes:
+      label: "Compliance Frameworks"
+      options:
+        - label: "SOC2"
+        - label: "HIPAA"
+        - label: "PCI-DSS"
+        - label: "FedRAMP"
+
+  # ──────────────────────────────────────────────
+  #  Section 7: Additional Configuration
+  # ──────────────────────────────────────────────
+  - type: markdown
+    attributes:
+      value: |
+        ## 📝 Additional Configuration
+
+  - type: textarea
+    id: extra_tags
+    attributes:
+      label: "Additional AWS Tags (optional)"
+      description: "Key=Value pairs, one per line."
+      placeholder: |
+        project=my-project
+        department=engineering
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: "Additional Notes"
+      description: "Anything else the platform team should know?"
+    validations:
+      required: false
