@@ -1,103 +1,276 @@
-name: "Generate Team Landing Zone tfvars"
+#!/usr/bin/env python3
+"""
+Parse a GitHub Issue Form submission and generate a Terraform .tfvars file.
 
-on:
-  issues:
-    types: [opened, edited]
+GitHub Issue Forms render as markdown with a predictable structure:
+  ### <Label>
+  
+  <value>
 
-permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+This script extracts each field by its heading and maps it to tfvars variables.
+"""
 
-jobs:
-  generate-tfvars:
-    # Only run for issues with the auto-tfvars label (set by the issue template)
-    if: contains(github.event.issue.labels.*.name, 'auto-tfvars')
-    runs-on: ubuntu-latest
+import json
+import os
+import re
+import sys
 
-    steps:
-      # ── 1. Checkout the repo ───────────────────────────────
-      - name: Checkout
-        uses: actions/checkout@v4
 
-      # ── 2. Set up Python ───────────────────────────────────
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+def parse_issue_body(body: str) -> dict[str, str]:
+    """Extract form fields from the issue markdown body.
 
-      # ── 3. Generate the tfvars file ────────────────────────
-      - name: Generate tfvars
-        id: gen
-        env:
-          ISSUE_BODY: ${{ github.event.issue.body }}
-        run: python scripts/generate_tfvars.py
+    Returns a dict of {heading_lower: raw_value}.
+    """
+    fields: dict[str, str] = {}
+    # Split on ### headings — GitHub Issue Forms renders each field this way
+    sections = re.split(r"^### ", body, flags=re.MULTILINE)
 
-      # ── 4. Create a PR with the generated file ─────────────
-      - name: Create Pull Request
-        id: pr
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: "lz-onboard/${{ steps.gen.outputs.team_name }}/${{ steps.gen.outputs.environment }}"
-          commit-message: |
-            feat(lz): onboard ${{ steps.gen.outputs.team_name }} (${{ steps.gen.outputs.environment }})
+    for section in sections:
+        if not section.strip():
+            continue
+        lines = section.strip().split("\n", 1)
+        heading = lines[0].strip()
+        value = lines[1].strip() if len(lines) > 1 else ""
+        # Normalize "No response" / "_No response_" → empty
+        if value.lower().replace("_", "") in ("no response", ""):
+            value = ""
+        fields[heading] = value
 
-            Auto-generated from issue #${{ github.event.issue.number }}
-          title: "🚀 Onboard: ${{ steps.gen.outputs.team_name }} → ${{ steps.gen.outputs.environment }}"
-          body: |
-            ## Auto-generated Landing Zone tfvars
+    return fields
 
-            | Field | Value |
-            |-------|-------|
-            | **Team** | `${{ steps.gen.outputs.team_name }}` |
-            | **Environment** | `${{ steps.gen.outputs.environment }}` |
-            | **Source Issue** | #${{ github.event.issue.number }} |
-            | **tfvars path** | `${{ steps.gen.outputs.tfvars_path }}` |
 
-            ### What to review
-            - [ ] Verify resource quotas match the team's expected workload
-            - [ ] Confirm Pod Identity services are correct (least-privilege)
-            - [ ] Check network policy defaults
-            - [ ] Validate compliance framework selection
-            - [ ] Ensure tags are accurate for cost attribution
+def parse_checkboxes(raw: str) -> list[str]:
+    """Extract checked items from markdown checkbox list."""
+    checked = []
+    for line in raw.splitlines():
+        match = re.match(r"^- \[([xX])\]\s+(.+)$", line.strip())
+        if match:
+            checked.append(match.group(2).strip())
+    return checked
 
-            ---
-            > Merging this PR will make the tfvars available for the next `terraform apply`.
-            > The pipeline will pick up `${{ steps.gen.outputs.tfvars_path }}` automatically.
-          labels: |
-            landing-zone
-            auto-generated
-          reviewers: |
-            platform-team
 
-      # ── 5. Comment back on the issue with the PR link ──────
-      - name: Comment on issue
-        if: steps.pr.outputs.pull-request-number
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            ✅ **tfvars generated successfully!**
+def parse_tshirt_size(raw: str) -> dict:
+    """Convert t-shirt size label to cpu/memory values."""
+    sizes = {
+        "small":  {"cpu": "4",  "memory": "8Gi"},
+        "medium": {"cpu": "8",  "memory": "16Gi"},
+        "large":  {"cpu": "16", "memory": "32Gi"},
+        "xlarge": {"cpu": "32", "memory": "64Gi"},
+    }
+    key = raw.split("(")[0].strip().lower() if raw else "small"
+    return sizes.get(key, sizes["small"])
 
-            📄 File: `${{ steps.gen.outputs.tfvars_path }}`
-            🔗 Review PR: #${{ steps.pr.outputs.pull-request-number }}
 
-            The platform team has been tagged for review. Once the PR is approved and merged, your landing zone will be provisioned on the next pipeline run.
+def parse_kv_lines(raw: str) -> dict[str, str]:
+    """Parse key=value lines into a dict."""
+    result = {}
+    for line in raw.strip().splitlines():
+        line = line.strip()
+        if "=" in line:
+            k, v = line.split("=", 1)
+            result[k.strip()] = v.strip()
+    return result
 
-      # ── 6. Handle failure ──────────────────────────────────
-      - name: Comment on failure
-        if: failure()
-        uses: peter-evans/create-or-update-comment@v4
-        with:
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            ❌ **tfvars generation failed.**
 
-            The workflow encountered an error. Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+def parse_arn_lines(raw: str) -> list[str]:
+    """Parse one-ARN-per-line into a list."""
+    return [
+        line.strip()
+        for line in raw.strip().splitlines()
+        if line.strip().startswith("arn:")
+    ]
 
-            Common issues:
-            - Team name contains invalid characters (use lowercase alphanumeric + hyphens)
-            - Required fields are missing
 
-            cc @platform-team
+def build_tfvars(fields: dict[str, str]) -> str:
+    """Build the .tfvars content from parsed fields."""
+
+    team_name = fields.get("Team Name", "unknown-team").strip().lower()
+    team_display = fields.get("Team Display Name", team_name)
+    cost_center = fields.get("Cost Center / Billing Code", "")
+    team_lead = fields.get("Team Lead Email", "")
+    requestor = fields.get("Requestor Email", "")
+    snow_ticket = fields.get("ServiceNow Ticket ID", "")
+    environment = fields.get("Target Environment", "dev").strip().lower()
+    region = fields.get("AWS Region", "us-east-1").strip()
+    max_pods = fields.get("Max Pods in Namespace", "").strip() or "20"
+    custom_domain = fields.get("Custom Domain (optional)", "").strip()
+    data_class = fields.get("Data Classification", "internal").strip().lower()
+    notes = fields.get("Additional Notes", "").strip()
+
+    # Sizing
+    quota_raw = fields.get("Namespace Resource Quota (T-shirt size)", "small")
+    quota = parse_tshirt_size(quota_raw)
+
+    # Checkboxes
+    ingress_raw = fields.get("Ingress Requirements", "")
+    ingress_items = parse_checkboxes(ingress_raw)
+
+    netpol_raw = fields.get("Network Policy Defaults", "")
+    netpol_items = parse_checkboxes(netpol_raw)
+
+    aws_svc_raw = fields.get("AWS Services Needed (Pod Identity Roles)", "")
+    aws_services = parse_checkboxes(aws_svc_raw)
+
+    obs_raw = fields.get("Observability Stack", "")
+    observability = parse_checkboxes(obs_raw)
+
+    comp_raw = fields.get("Compliance Frameworks", "")
+    compliance = parse_checkboxes(comp_raw)
+
+    custom_iam_raw = fields.get("Custom IAM Policy ARNs (optional)", "")
+    custom_iam = parse_arn_lines(custom_iam_raw)
+
+    extra_tags_raw = fields.get("Additional AWS Tags (optional)", "")
+    extra_tags = parse_kv_lines(extra_tags_raw)
+
+    # Derive ingress booleans
+    enable_internal_alb = any("Internal ALB" in i for i in ingress_items)
+    enable_external_alb = any("External ALB" in i for i in ingress_items)
+    enable_nlb = any("NLB" in i for i in ingress_items)
+
+    # Derive network policy booleans
+    deny_ingress = any("Deny all ingress" in n for n in netpol_items)
+    deny_egress = any("Deny all egress" in n for n in netpol_items)
+    allow_dns = any("Allow DNS" in n for n in netpol_items)
+
+    # Derive observability booleans
+    enable_cw_insights = any("Container Insights" in o for o in observability)
+    enable_prometheus = any("Prometheus" in o for o in observability)
+    enable_fluentbit = any("Fluent Bit" in o for o in observability)
+    enable_xray = any("X-Ray" in o or "ADOT" in o for o in observability)
+
+    # Map AWS service checkboxes → pod identity role list
+    svc_to_key = {
+        "S3": "s3",
+        "DynamoDB": "dynamodb",
+        "SQS": "sqs",
+        "SNS": "sns",
+        "Secrets Manager": "secretsmanager",
+        "RDS (via IAM auth)": "rds",
+        "ElastiCache": "elasticache",
+        "KMS": "kms",
+        "SES": "ses",
+        "Kinesis": "kinesis",
+    }
+    pod_identity_services = [svc_to_key[s] for s in aws_services if s in svc_to_key]
+
+    # Build merged tags
+    default_tags = {
+        "team": team_name,
+        "environment": environment,
+        "cost_center": cost_center,
+        "managed_by": "terraform",
+        "onboarding_ticket": snow_ticket,
+        "data_classification": data_class,
+    }
+    default_tags.update(extra_tags)
+
+    # Format helpers
+    def tf_list(items):
+        if not items:
+            return "[]"
+        inner = ", ".join(f'"{i}"' for i in items)
+        return f"[{inner}]"
+
+    def tf_map(d):
+        if not d:
+            return "{}"
+        lines = []
+        for k, v in d.items():
+            lines.append(f'    {k} = "{v}"')
+        return "{\n" + "\n".join(lines) + "\n  }"
+
+    def tf_bool(b):
+        return "true" if b else "false"
+
+    # ── Assemble the tfvars ──────────────────────────
+    tfvars = f"""\
+# ============================================================
+# Team Landing Zone — Auto-generated from GitHub Issue
+# ServiceNow Ticket : {snow_ticket}
+# Requestor         : {requestor}
+# Generated by      : .github/workflows/generate-tfvars.yml
+# ============================================================
+
+# ── Team Identity ────────────────────────────────────────────
+team_name         = "{team_name}"
+team_display_name = "{team_display}"
+team_lead_email   = "{team_lead}"
+cost_center       = "{cost_center}"
+
+# ── Environment ──────────────────────────────────────────────
+environment = "{environment}"
+aws_region  = "{region}"
+
+# ── EKS Namespace Quotas ─────────────────────────────────────
+namespace_cpu_limit    = "{quota['cpu']}"
+namespace_memory_limit = "{quota['memory']}"
+namespace_max_pods     = {max_pods}
+
+# ── Ingress ──────────────────────────────────────────────────
+enable_internal_alb = {tf_bool(enable_internal_alb)}
+enable_external_alb = {tf_bool(enable_external_alb)}
+enable_nlb          = {tf_bool(enable_nlb)}
+custom_domain       = "{custom_domain}"
+
+# ── Network Policies ─────────────────────────────────────────
+default_deny_ingress = {tf_bool(deny_ingress)}
+default_deny_egress  = {tf_bool(deny_egress)}
+allow_dns_egress     = {tf_bool(allow_dns)}
+
+# ── Pod Identity — AWS Service Access ────────────────────────
+pod_identity_services = {tf_list(pod_identity_services)}
+custom_iam_policy_arns = {tf_list(custom_iam)}
+
+# ── Observability ────────────────────────────────────────────
+enable_container_insights = {tf_bool(enable_cw_insights)}
+enable_prometheus         = {tf_bool(enable_prometheus)}
+enable_fluentbit          = {tf_bool(enable_fluentbit)}
+enable_xray_tracing       = {tf_bool(enable_xray)}
+
+# ── Compliance & Data Classification ────────────────────────
+data_classification   = "{data_class}"
+compliance_frameworks = {tf_list(compliance)}
+
+# ── Tags ─────────────────────────────────────────────────────
+tags = {tf_map(default_tags)}
+"""
+    return tfvars
+
+
+def main():
+    # Input: issue body from env var or stdin
+    body = os.environ.get("ISSUE_BODY", "")
+    if not body and not sys.stdin.isatty():
+        body = sys.stdin.read()
+    if not body:
+        print("ERROR: No issue body provided. Set ISSUE_BODY env var or pipe via stdin.", file=sys.stderr)
+        sys.exit(1)
+
+    fields = parse_issue_body(body)
+    team_name = fields.get("Team Name", "unknown-team").strip().lower()
+    environment = fields.get("Target Environment", "dev").strip().lower()
+
+    tfvars_content = build_tfvars(fields)
+
+    # Output path: teams/<team_name>/<environment>.tfvars
+    out_dir = os.path.join("teams", team_name)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{environment}.tfvars")
+
+    with open(out_path, "w") as f:
+        f.write(tfvars_content)
+
+    print(f"✅ Generated: {out_path}")
+
+    # Also emit outputs for the GH Actions workflow
+    gh_output = os.environ.get("GITHUB_OUTPUT", "")
+    if gh_output:
+        with open(gh_output, "a") as f:
+            f.write(f"tfvars_path={out_path}\n")
+            f.write(f"team_name={team_name}\n")
+            f.write(f"environment={environment}\n")
+
+
+if __name__ == "__main__":
+    main()
