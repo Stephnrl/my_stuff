@@ -1,274 +1,103 @@
-name: "🚀 Team Landing Zone Onboarding"
-description: "Request a new team landing zone in the shared EKS cluster. Fill out this form to generate the Terraform configuration."
-title: "[LZ-Onboard] <team_name>"
-labels: ["landing-zone-onboarding", "auto-tfvars"]
-assignees: []
+name: "Generate Team Landing Zone tfvars"
 
-body:
-  # ──────────────────────────────────────────────
-  #  Section 1: ServiceNow / Request Metadata
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## 📋 Request Metadata
-        Paste details from the ServiceNow ticket so we can trace this back.
+on:
+  issues:
+    types: [opened, edited]
 
-  - type: input
-    id: snow_ticket
-    attributes:
-      label: "ServiceNow Ticket ID"
-      description: "e.g. RITM0012345 or INC0067890"
-      placeholder: "RITM00XXXXX"
-    validations:
-      required: true
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
 
-  - type: input
-    id: requestor_email
-    attributes:
-      label: "Requestor Email"
-      description: "Who submitted the ServiceNow request?"
-      placeholder: "jane.doe@company.com"
-    validations:
-      required: true
+jobs:
+  generate-tfvars:
+    # Only run for issues with the auto-tfvars label (set by the issue template)
+    if: contains(github.event.issue.labels.*.name, 'auto-tfvars')
+    runs-on: ubuntu-latest
 
-  # ──────────────────────────────────────────────
-  #  Section 2: Team Identity
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## 👥 Team Identity
+    steps:
+      # ── 1. Checkout the repo ───────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
 
-  - type: input
-    id: team_name
-    attributes:
-      label: "Team Name"
-      description: "Short, lowercase, alphanumeric + hyphens. This becomes the namespace prefix."
-      placeholder: "platform-eng"
-    validations:
-      required: true
+      # ── 2. Set up Python ───────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-  - type: input
-    id: team_display_name
-    attributes:
-      label: "Team Display Name"
-      description: "Human-readable team name for tags and documentation."
-      placeholder: "Platform Engineering"
-    validations:
-      required: true
+      # ── 3. Generate the tfvars file ────────────────────────
+      - name: Generate tfvars
+        id: gen
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: python scripts/generate_tfvars.py
 
-  - type: input
-    id: cost_center
-    attributes:
-      label: "Cost Center / Billing Code"
-      placeholder: "CC-12345"
-    validations:
-      required: true
+      # ── 4. Create a PR with the generated file ─────────────
+      - name: Create Pull Request
+        id: pr
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: "lz-onboard/${{ steps.gen.outputs.team_name }}/${{ steps.gen.outputs.environment }}"
+          commit-message: |
+            feat(lz): onboard ${{ steps.gen.outputs.team_name }} (${{ steps.gen.outputs.environment }})
 
-  - type: input
-    id: team_lead_email
-    attributes:
-      label: "Team Lead Email"
-      description: "Technical owner for escalations."
-      placeholder: "lead@company.com"
-    validations:
-      required: true
+            Auto-generated from issue #${{ github.event.issue.number }}
+          title: "🚀 Onboard: ${{ steps.gen.outputs.team_name }} → ${{ steps.gen.outputs.environment }}"
+          body: |
+            ## Auto-generated Landing Zone tfvars
 
-  # ──────────────────────────────────────────────
-  #  Section 3: Environment & Sizing
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## ⚙️ Environment & Sizing
+            | Field | Value |
+            |-------|-------|
+            | **Team** | `${{ steps.gen.outputs.team_name }}` |
+            | **Environment** | `${{ steps.gen.outputs.environment }}` |
+            | **Source Issue** | #${{ github.event.issue.number }} |
+            | **tfvars path** | `${{ steps.gen.outputs.tfvars_path }}` |
 
-  - type: dropdown
-    id: environment
-    attributes:
-      label: "Target Environment"
-      options:
-        - dev
-        - staging
-        - production
-    validations:
-      required: true
+            ### What to review
+            - [ ] Verify resource quotas match the team's expected workload
+            - [ ] Confirm Pod Identity services are correct (least-privilege)
+            - [ ] Check network policy defaults
+            - [ ] Validate compliance framework selection
+            - [ ] Ensure tags are accurate for cost attribution
 
-  - type: dropdown
-    id: aws_region
-    attributes:
-      label: "AWS Region"
-      options:
-        - us-east-1
-        - us-east-2
-        - us-west-2
-        - eu-west-1
-        - eu-central-1
-        - ap-southeast-1
-    validations:
-      required: true
+            ---
+            > Merging this PR will make the tfvars available for the next `terraform apply`.
+            > The pipeline will pick up `${{ steps.gen.outputs.tfvars_path }}` automatically.
+          labels: |
+            landing-zone
+            auto-generated
+          reviewers: |
+            platform-team
 
-  - type: dropdown
-    id: namespace_resource_quota
-    attributes:
-      label: "Namespace Resource Quota (T-shirt size)"
-      description: "Controls CPU/memory limits for the team's EKS namespace."
-      options:
-        - small (4 vCPU / 8Gi RAM)
-        - medium (8 vCPU / 16Gi RAM)
-        - large (16 vCPU / 32Gi RAM)
-        - xlarge (32 vCPU / 64Gi RAM)
-    validations:
-      required: true
+      # ── 5. Comment back on the issue with the PR link ──────
+      - name: Comment on issue
+        if: steps.pr.outputs.pull-request-number
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ✅ **tfvars generated successfully!**
 
-  - type: input
-    id: max_pods
-    attributes:
-      label: "Max Pods in Namespace"
-      description: "Upper bound on concurrent pods. Default: 20"
-      placeholder: "20"
-    validations:
-      required: false
+            📄 File: `${{ steps.gen.outputs.tfvars_path }}`
+            🔗 Review PR: #${{ steps.pr.outputs.pull-request-number }}
 
-  # ──────────────────────────────────────────────
-  #  Section 4: Networking
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## 🌐 Networking
+            The platform team has been tagged for review. Once the PR is approved and merged, your landing zone will be provisioned on the next pipeline run.
 
-  - type: checkboxes
-    id: ingress_type
-    attributes:
-      label: "Ingress Requirements"
-      options:
-        - label: "Internal ALB (private traffic only)"
-        - label: "External ALB (internet-facing)"
-        - label: "NLB (TCP/gRPC workloads)"
+      # ── 6. Handle failure ──────────────────────────────────
+      - name: Comment on failure
+        if: failure()
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            ❌ **tfvars generation failed.**
 
-  - type: input
-    id: custom_domain
-    attributes:
-      label: "Custom Domain (optional)"
-      description: "If this team needs a Route53 subdomain, e.g. api.team.internal.company.com"
-      placeholder: "api.myteam.internal.company.com"
-    validations:
-      required: false
+            The workflow encountered an error. Please check the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
 
-  - type: checkboxes
-    id: network_policies
-    attributes:
-      label: "Network Policy Defaults"
-      description: "Select which policies to apply."
-      options:
-        - label: "Deny all ingress by default (recommended)"
-          required: false
-        - label: "Deny all egress by default"
-          required: false
-        - label: "Allow DNS egress (kube-dns)"
-          required: false
+            Common issues:
+            - Team name contains invalid characters (use lowercase alphanumeric + hyphens)
+            - Required fields are missing
 
-  # ──────────────────────────────────────────────
-  #  Section 5: IAM / Pod Identity
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## 🔐 IAM & Pod Identity
-
-  - type: checkboxes
-    id: aws_services
-    attributes:
-      label: "AWS Services Needed (Pod Identity Roles)"
-      description: "We'll create least-privilege Pod Identity associations for each."
-      options:
-        - label: "S3"
-        - label: "DynamoDB"
-        - label: "SQS"
-        - label: "SNS"
-        - label: "Secrets Manager"
-        - label: "RDS (via IAM auth)"
-        - label: "ElastiCache"
-        - label: "KMS"
-        - label: "SES"
-        - label: "Kinesis"
-
-  - type: textarea
-    id: custom_iam_policies
-    attributes:
-      label: "Custom IAM Policy ARNs (optional)"
-      description: "One ARN per line if additional policies are needed."
-      placeholder: |
-        arn:aws:iam::123456789012:policy/custom-policy-1
-        arn:aws:iam::123456789012:policy/custom-policy-2
-    validations:
-      required: false
-
-  # ──────────────────────────────────────────────
-  #  Section 6: Observability & Compliance
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## 📊 Observability & Compliance
-
-  - type: checkboxes
-    id: observability
-    attributes:
-      label: "Observability Stack"
-      options:
-        - label: "CloudWatch Container Insights"
-        - label: "Prometheus ServiceMonitor"
-        - label: "Fluent Bit log forwarding"
-        - label: "X-Ray / ADOT tracing"
-
-  - type: dropdown
-    id: data_classification
-    attributes:
-      label: "Data Classification"
-      description: "Determines encryption and audit requirements."
-      options:
-        - public
-        - internal
-        - confidential
-        - restricted
-    validations:
-      required: true
-
-  - type: checkboxes
-    id: compliance_frameworks
-    attributes:
-      label: "Compliance Frameworks"
-      options:
-        - label: "SOC2"
-        - label: "HIPAA"
-        - label: "PCI-DSS"
-        - label: "FedRAMP"
-
-  # ──────────────────────────────────────────────
-  #  Section 7: Additional Configuration
-  # ──────────────────────────────────────────────
-  - type: markdown
-    attributes:
-      value: |
-        ## 📝 Additional Configuration
-
-  - type: textarea
-    id: extra_tags
-    attributes:
-      label: "Additional AWS Tags (optional)"
-      description: "Key=Value pairs, one per line."
-      placeholder: |
-        project=my-project
-        department=engineering
-    validations:
-      required: false
-
-  - type: textarea
-    id: notes
-    attributes:
-      label: "Additional Notes"
-      description: "Anything else the platform team should know?"
-    validations:
-      required: false
+            cc @platform-team
