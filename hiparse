@@ -1,2 +1,13 @@
-# List last 10 tags (sorted by most recently updated)
-curl -s "https://hub.docker.com/v2/repositories/summerwind/actions-runner-dind/tags/?page_size=10&ordering=last_updated" | jq '.results[] | {tag: .name, updated: .last_updated}'
+Yes, you're very likely hitting a known intersection of two issues. Here's what's going on:
+The Node.js + pwsh pipe hang is a confirmed bug. There's an open Node.js issue (#52364) where spawning pwsh with stdio: ['pipe', 'pipe', 'pipe'] causes pwsh to hang and never exit. Strace shows it waiting on a futex — exactly what you're seeing. The issue doesn't occur when stdin is set to inherit instead of pipe. GitHub
+This is the mechanism: the Azure DevOps/GitHub Actions agent is a Node.js process. When enable-AzPSSession: true, it spawns pwsh with all three stdio streams piped. pwsh blocks during initialization waiting to read from the piped stdin, and the Node parent is waiting for stdout — classic pipe deadlock.
+Az.Accounts 5.3.0+ makes it worse. There's an open issue (#28495) where Az.Accounts 5.3.0 fails to load due to a missing assembly (Microsoft.Identity.Client.Extensions.Msal), and the module uses a new AzAssemblyLoadContext that wasn't present before. GitHub The heavier initialization in 5.3.x means more stdio traffic during module load, which increases the chance of hitting the pipe buffer deadlock.
+What to try on the pod right now:
+bash# Pin Az.Accounts to pre-5.3
+pwsh -NoProfile -Command "Install-Module Az.Accounts -RequiredVersion 5.2.2 -Force -AllowClobber -Scope CurrentUser"
+
+# Then test
+timeout 30 pwsh -NoProfile -Command "Import-Module Az.Accounts; Connect-AzAccount -Identity; Write-Output 'done'"
+Longer-term fixes for your runner image:
+Pin Az.Accounts in your Dockerfile to a version before 5.3.0 until the assembly load issue is resolved. Alternatively, if you need 5.3.x, you could try setting NO_COLOR=1 and TERM=dumb to reduce the stdio chatter during initialization, but the real fix is either pinning the module version or waiting for the Node.js piped-stdin bug to be addressed upstream.
+If pinning doesn't help, the nuclear option is to bypass the AzPSSession entirely — do your az login via CLI and only invoke pwsh for the scripts that actually need it, without relying on the task's built-in PS session initialization.
