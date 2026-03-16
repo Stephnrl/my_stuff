@@ -1,0 +1,36 @@
+This is a common Bottlerocket + EKS gotcha. The 127.0.0.53 resolver is systemd-resolved, which is what Bottlerocket uses. The important distinction here is that image pulls happen at the node/containerd level, not through CoreDNS — so this is a node-level DNS issue, not a Kubernetes DNS issue.
+Here's what's likely happening:
+systemd-resolved on Bottlerocket should pick up upstream DNS servers from DHCP, but there are a few reasons it might not be forwarding to your custom DNS servers correctly. Let me help narrow it down.Examined DNS configuration within Bottlerocket user data templateExamined DNS configuration within Bottlerocket user data templateNow let me check the actual Bottlerocket user data template from the module to see what it does with DNS:Diagnosed DNS resolution issue and pinpointed explicit configuration solutionDiagnosed DNS resolution issue and pinpointed explicit configuration solutionThis is a well-known issue with Bottlerocket and systemd-resolved. Here's what's happening and how to fix it.
+What's going on
+The 127.0.0.53 you see is not CoreDNS — it's systemd-resolved's stub listener running on the node itself. Image pulls are performed by containerd at the node level, so they use the node's DNS, not Kubernetes CoreDNS. The chain is:
+containerd (image pull) → /etc/resolv.conf → 127.0.0.53 (systemd-resolved) → ??? upstream
+Bottlerocket gathers the name servers from the DHCP lease Bottlerocket by default, but there are known issues where systemd-resolved doesn't properly forward to the DNS servers in your DHCP option set — particularly when using systemd-networkd/resolved, AWS sends domain names using DHCP option 15 in a non-standard way GitHub which can cause parsing issues.
+The fix: explicitly set DNS in Bottlerocket user data
+Rather than relying on DHCP option set propagation, explicitly configure DNS servers in your Bottlerocket bootstrap_extra_args. In your terraform-aws-eks module config:
+hcleks_managed_node_groups = {
+  bottlerocket_fips = {
+    ami_type = "BOTTLEROCKET_x86_64_FIPS"
+    platform = "bottlerocket"
+
+    bootstrap_extra_args = <<-EOT
+      [settings.dns]
+      name-servers = ["10.0.0.2", "your.custom.dns.ip"]
+      search-list = ["your-domain.internal", "us-east-1.compute.internal"]
+    EOT
+  }
+}
+Replace 10.0.0.2 with your VPC's .2 resolver (VPC CIDR base + 2), and add whatever custom DNS servers you have in your DHCP option set. The search-list should match the domain names from your DHCP option set.
+Debugging steps
+If you want to confirm the issue first, SSM into a Bottlerocket node via the control container and check what systemd-resolved is actually using:
+bash# Enter the admin container
+enter-admin-container
+
+# Check what systemd-resolved thinks its upstream DNS servers are
+resolvectl status
+
+# Or check the resolv.conf that containerd sees
+cat /run/systemd/resolve/resolv.conf
+If resolvectl status shows no upstream DNS servers, or shows the wrong ones, that confirms the DHCP option set isn't being picked up properly — and the explicit [settings.dns] in user data is the right fix.
+Why this happens specifically with Bottlerocket FIPS
+Bottlerocket FIPS variants use newer systemd-networkd based networking (as opposed to the older wicked based stack on some variants). Variants using systemd-networkd (*-k8s-1.28-* and newer) use /run/systemd/resolve/resolv.conf Bottlerocket rather than the traditional /etc/resolv.conf. The systemd-networkd DHCP client is stricter about RFC compliance, and AWS's DHCP option set implementation does not conform to RFC2132 — it sends multiple domain names packed into DHCP Option 15 instead of using DHCP Option 119 DevOps, which causes issues with systemd's DHCP client.
+The explicit [settings.dns] in user data bypasses the DHCP negotiation entirely for DNS settings, which is the most reliable approach.
