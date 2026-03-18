@@ -1,8 +1,1 @@
-# Search D:\ for vswhere
-Get-ChildItem -Path "D:\" -Recurse -Filter "vswhere.exe" -ErrorAction SilentlyContinue | Select FullName
-
-# Search D:\ for MSBuild.exe
-Get-ChildItem -Path "D:\" -Recurse -Filter "MSBuild.exe" -ErrorAction SilentlyContinue | Select FullName
-
-# Also check for any VS install folders
-Get-ChildItem -Path "D:\" -Directory -Filter "*Visual Studio*" -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select FullName
+& "D:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -products * -property installationVersion
