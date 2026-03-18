@@ -1,5 +1,1 @@
-# List all VS installations with version info
-& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -format json
-
-# Find MSBuild specifically and show the version
-& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.Component.MSBuild -property installationVersion
+Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\MSBuild\ToolsVersions\*" | Select PSChildName, MSBuildToolsPath
