@@ -1,36 +1,103 @@
-This is a common Bottlerocket + EKS gotcha. The 127.0.0.53 resolver is systemd-resolved, which is what Bottlerocket uses. The important distinction here is that image pulls happen at the node/containerd level, not through CoreDNS — so this is a node-level DNS issue, not a Kubernetes DNS issue.
-Here's what's likely happening:
-systemd-resolved on Bottlerocket should pick up upstream DNS servers from DHCP, but there are a few reasons it might not be forwarding to your custom DNS servers correctly. Let me help narrow it down.Examined DNS configuration within Bottlerocket user data templateExamined DNS configuration within Bottlerocket user data templateNow let me check the actual Bottlerocket user data template from the module to see what it does with DNS:Diagnosed DNS resolution issue and pinpointed explicit configuration solutionDiagnosed DNS resolution issue and pinpointed explicit configuration solutionThis is a well-known issue with Bottlerocket and systemd-resolved. Here's what's happening and how to fix it.
-What's going on
-The 127.0.0.53 you see is not CoreDNS — it's systemd-resolved's stub listener running on the node itself. Image pulls are performed by containerd at the node level, so they use the node's DNS, not Kubernetes CoreDNS. The chain is:
-containerd (image pull) → /etc/resolv.conf → 127.0.0.53 (systemd-resolved) → ??? upstream
-Bottlerocket gathers the name servers from the DHCP lease Bottlerocket by default, but there are known issues where systemd-resolved doesn't properly forward to the DNS servers in your DHCP option set — particularly when using systemd-networkd/resolved, AWS sends domain names using DHCP option 15 in a non-standard way GitHub which can cause parsing issues.
-The fix: explicitly set DNS in Bottlerocket user data
-Rather than relying on DHCP option set propagation, explicitly configure DNS servers in your Bottlerocket bootstrap_extra_args. In your terraform-aws-eks module config:
-hcleks_managed_node_groups = {
-  bottlerocket_fips = {
-    ami_type = "BOTTLEROCKET_x86_64_FIPS"
-    platform = "bottlerocket"
+# Change Request (CHG) — Install MSBuild 17 (VS 2022 Build Tools)
 
-    bootstrap_extra_args = <<-EOT
-      [settings.dns]
-      name-servers = ["10.0.0.2", "your.custom.dns.ip"]
-      search-list = ["your-domain.internal", "us-east-1.compute.internal"]
-    EOT
-  }
-}
-Replace 10.0.0.2 with your VPC's .2 resolver (VPC CIDR base + 2), and add whatever custom DNS servers you have in your DHCP option set. The search-list should match the domain names from your DHCP option set.
-Debugging steps
-If you want to confirm the issue first, SSM into a Bottlerocket node via the control container and check what systemd-resolved is actually using:
-bash# Enter the admin container
-enter-admin-container
+---
 
-# Check what systemd-resolved thinks its upstream DNS servers are
-resolvectl status
+## 1. Change Summary
 
-# Or check the resolv.conf that containerd sees
-cat /run/systemd/resolve/resolv.conf
-If resolvectl status shows no upstream DNS servers, or shows the wrong ones, that confirms the DHCP option set isn't being picked up properly — and the explicit [settings.dns] in user data is the right fix.
-Why this happens specifically with Bottlerocket FIPS
-Bottlerocket FIPS variants use newer systemd-networkd based networking (as opposed to the older wicked based stack on some variants). Variants using systemd-networkd (*-k8s-1.28-* and newer) use /run/systemd/resolve/resolv.conf Bottlerocket rather than the traditional /etc/resolv.conf. The systemd-networkd DHCP client is stricter about RFC compliance, and AWS's DHCP option set implementation does not conform to RFC2132 — it sends multiple domain names packed into DHCP Option 15 instead of using DHCP Option 119 DevOps, which causes issues with systemd's DHCP client.
-The explicit [settings.dns] in user data bypasses the DHCP negotiation entirely for DNS settings, which is the most reliable approach.
+**Short Description:**
+Install Visual Studio 2022 Build Tools (MSBuild v17) on production GitHub Actions self-hosted runner (Windows Server 2019)
+
+**Description:**
+Install the Visual Studio 2022 Build Tools package on the production Windows Server 2019 self-hosted GitHub Actions runner to make MSBuild v17.x available for .NET build pipelines.
+
+This is a net-new software installation alongside the existing Build Tools. The current (older) MSBuild version will remain installed and unchanged. No existing pipelines will be modified as part of this change. Teams that wish to use MSBuild 17 will explicitly opt in by updating their workflow YAML to target vs-version `[17.0,)`. All other pipelines will be updated to pin vs-version `[16.0,17.0)` to ensure they continue resolving to the current MSBuild version.
+
+IMPORTANT: The `microsoft/setup-msbuild@v2` GitHub Action uses `vswhere -latest` when no vs-version is specified. Installing VS 2022 Build Tools will cause unpinned pipelines to resolve to MSBuild 17 instead of the current version. To prevent unintended impact, all existing pipelines must be pinned to the current version BEFORE this installation.
+
+**Change Conflict Justification:**
+This installation is being performed outside the standard maintenance window due to the following factors:
+
+1. The installation is additive only — no existing software is removed, upgraded, or reconfigured.
+2. All existing pipelines will be pre-pinned to the current MSBuild version prior to installation, ensuring zero impact to running workloads.
+3. The VS Build Tools installer supports silent installation with no reboot required (exit code 0) or deferred reboot (exit code 3010) that does not disrupt active runner jobs.
+4. The runner can continue to accept and process jobs during and after installation with no service interruption.
+5. No network, firewall, DNS, or infrastructure changes are involved.
+
+**Does it impact the architecture of the app and/or app integration details?**
+No. This change does not alter the application architecture or integration points. It adds a new build tool version to the runner's toolchain. No application code, deployment targets, network topology, or service integrations are modified.
+
+---
+
+## 2. Planning Phase
+
+### 2.1 Communication Plan
+
+| Timing | Audience | Channel | Message |
+|--------|----------|---------|---------|
+| T-5 business days | All pipeline owners / dev teams | Email + Slack/Teams | Notification that MSBuild 17 will be installed. All teams must pin their workflows to vs-version `[16.0,17.0)` before the install date or their builds will auto-resolve to v17. |
+| T-1 business day | All pipeline owners / dev teams | Email + Slack/Teams | Final reminder to pin workflows. Confirm pinning is complete before proceeding. |
+| T+0 (post-install) | All pipeline owners / dev teams | Email + Slack/Teams | Confirmation that MSBuild 17 is available. Teams can opt in by setting vs-version `[17.0,)` or removing the pin. |
+| T+0 (if backout) | All pipeline owners / dev teams | Email + Slack/Teams | Notification that the install was rolled back and the previous state has been restored. |
+
+### 2.2 Justification
+
+Development teams require MSBuild 17 (shipped with Visual Studio 2022) to build projects targeting newer .NET SDKs and to take advantage of performance improvements and 64-bit build support introduced in MSBuild 17.x. The current runner only has an older version of the Build Tools installed, which does not support these capabilities. Without this upgrade, teams are blocked from adopting modern .NET workloads on this runner.
+
+- MSBuild 17 defaults to 64-bit builds, improving performance on large solutions.
+- Required for projects targeting .NET 6+ and Visual Studio 2022 toolsets.
+- Smaller binary log files and improved Terminal Logger output.
+- Side-by-side installation — does not remove or alter the existing build tools.
+
+### 2.3 Implementation Plan
+
+1. **PRE-WORK (T-5 to T-1 days):** Communicate to all teams. Verify all existing pipelines have been updated to pin `vs-version: '[16.0,17.0)'` in their `microsoft/setup-msbuild@v2` step. Confirm no unpinned workflows remain.
+2. RDP into the production Windows Server 2019 runner as a local administrator.
+3. Open an elevated PowerShell session and run the `Install-MSBuild17.ps1` script. The script downloads the VS 2022 Build Tools bootstrapper, performs a silent install with MSBuild, .NET Desktop, and Web workloads, and validates the install via vswhere.
+4. Verify MSBuild 17 is detected: run `vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" -products *` and confirm the path points to the 2022 install.
+5. Run a test pipeline (see Test Plan) to confirm MSBuild 17 resolves correctly.
+6. Run an existing pinned pipeline to confirm it still resolves to the old MSBuild version.
+7. Send post-install communication confirming MSBuild 17 is available.
+
+### 2.4 Risk and Impact Analysis
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| Unpinned pipelines auto-resolve to MSBuild 17, causing build failures for teams not ready to upgrade. | Medium | High | All pipelines must be pinned to `vs-version: '[16.0,17.0)'` before installation. Pre-work verification step confirms compliance. |
+| Installer requires a reboot (exit code 3010), temporarily taking the runner offline. | Low | Medium | Schedule install during low-activity period. If reboot needed, coordinate with teams and drain the runner first. |
+| Disk space insufficient for the ~2–4 GB install. | Low | Low | Verify available disk space (minimum 10 GB free) before running installer. |
+| vswhere does not detect the new install, causing setup-msbuild to fail. | Low | Low | Manually verify vswhere output post-install. If needed, specify vswhere-path in workflow YAML. |
+
+**Overall Risk: Low.** This is an additive installation with no changes to existing software, configuration, or infrastructure. Downtime is not expected.
+
+### 2.5 Backout Plan
+
+If the installation causes issues, the backout is a clean uninstall of the VS 2022 Build Tools:
+
+1. Open an elevated PowerShell session on the runner.
+2. Run the VS installer in uninstall mode: `vs_buildtools.exe modify --installPath "C:\BuildTools\VS2022" --remove Microsoft.VisualStudio.Workload.MSBuildTools --remove Microsoft.VisualStudio.Workload.ManagedDesktopBuildTools --remove Microsoft.VisualStudio.Workload.WebBuildTools --quiet --wait`
+3. Alternatively, for a full removal: navigate to Control Panel > Programs > Uninstall "Visual Studio Build Tools 2022", or run the bootstrapper with the `uninstall` flag.
+4. Verify vswhere no longer returns a VS 2022 path: `vswhere -products * -format json`
+5. Run a test pipeline to confirm setup-msbuild resolves to the original (old) version.
+6. Communicate backout completion to all teams. Teams can remove their vs-version pins if desired.
+
+*Estimated backout time: 10–15 minutes. No data loss or configuration drift is possible since this is a standalone tool installation.*
+
+### 2.6 Test Plan
+
+| # | Test Case | Expected Result | Pass/Fail |
+|---|-----------|-----------------|-----------|
+| 1 | Run `vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" -products *` on the runner. | Returns path under `C:\BuildTools\VS2022\` pointing to MSBuild.exe. | |
+| 2 | Run `MSBuild.exe -version` using the path from Test 1. | Reports version 17.x.x.x. | |
+| 3 | Trigger a test GitHub Actions workflow using `setup-msbuild@v2` with `vs-version: '[17.0,)'` and run `msbuild -version`. | Workflow succeeds, msbuild -version outputs 17.x. | |
+| 4 | Trigger an existing pipeline that is pinned to `vs-version: '[16.0,17.0)'`. | Workflow succeeds, msbuild -version outputs the original (older) version. | |
+| 5 | Verify disk space post-install (`Get-PSDrive C`). | Adequate free space remaining (>10 GB). | |
+
+### 2.7 Verification Plan
+
+Post-implementation verification to confirm the change is stable and successful:
+
+1. **Immediate (T+0):** All Test Plan cases pass. vswhere detects both the old and new Build Tools installations.
+2. **T+1 day:** Monitor GitHub Actions workflow runs across all teams. Confirm no unexpected build failures related to MSBuild version resolution.
+3. **T+3 days:** Follow up with early-adopter teams who have opted into MSBuild 17 to confirm builds are stable.
+4. **T+5 days:** Review runner health — disk space, GitHub runner service status, no queued job backlog.
+5. If any verification check fails, execute the Backout Plan and notify stakeholders.
