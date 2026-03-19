@@ -1,8 +1,4 @@
-Heads up — we're installing MSBuild v17 (Visual Studio 2022 Build Tools) on the self-hosted runner today/tomorrow.
-
-If your workflow uses microsoft/setup-msbuild@v2, it will automatically pick up the new version after the install. If you want to keep using the current MSBuild (VS 2017), you'll need to add the vs-version input to your workflow:
-
-- name: Add msbuild to PATH
-  uses: microsoft/setup-msbuild@v2
-  with:
-    vs-version: '[15.0,16.0)'
+& "D:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe" modify `
+    --installPath "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" `
+    --add Microsoft.VisualStudio.Workload.NetCoreBuildTools `
+    --quiet --norestart --wait
