@@ -1,3 +1,7 @@
-az network nic list --query "[?ipConfigurations[?privateIpAddress=='x.x.x.x']].{Name:name, RG:resourceGroup}" -o table
+az network lb list --query "[].{Name:name, RG:resourceGroup, FrontendIPs:frontendIpConfigurations[].privateIpAddress}" -o json
 
-az network nic list --query "[?ipConfigurations[?privateIpAddress=='x.x.0.x']].{Name:name, RG:resourceGroup}" -o table
+az network application-gateway list --query "[].{Name:name, RG:resourceGroup}" -o table
+
+az network firewall list --query "[].{Name:name, RG:resourceGroup, IPs:ipConfigurations[].privateIpAddress}" -o json
+
+az network vnet-gateway list --query "[].{Name:name, RG:resourceGroup, IPs:ipConfigurations[].privateIpAddress}" -o json
