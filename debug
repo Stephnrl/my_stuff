@@ -1,7 +1,4 @@
-az network lb list --query "[].{Name:name, RG:resourceGroup, FrontendIPs:frontendIpConfigurations[].privateIpAddress}" -o json
-
-az network application-gateway list --query "[].{Name:name, RG:resourceGroup}" -o table
-
-az network firewall list --query "[].{Name:name, RG:resourceGroup, IPs:ipConfigurations[].privateIpAddress}" -o json
-
-az network vnet-gateway list --query "[].{Name:name, RG:resourceGroup, IPs:ipConfigurations[].privateIpAddress}" -o json
+az network private-endpoint show \
+  --resource-group <keyvault-pe-rg> \
+  --name <keyvault-pe-name> \
+  --query "networkInterfaces[].id" -o tsv
