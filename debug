@@ -1,4 +1,11 @@
-& "D:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe" modify `
-    --installPath "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" `
-    --add Microsoft.VisualStudio.Workload.NetCoreBuildTools `
-    --quiet --norestart --wait
+# Download the bootstrapper
+Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "C:\temp\vs_buildtools.exe"
+
+# Modify the existing installation
+Start-Process -FilePath "C:\temp\vs_buildtools.exe" -ArgumentList @(
+    "modify",
+    "--installPath", "`"D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`"",
+    "--add", "Microsoft.VisualStudio.Workload.NetCoreBuildTools",
+    "--quiet",
+    "--norestart"
+) -Wait -NoNewWindow
