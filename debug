@@ -1,1 +1,14 @@
-(Get-Command dotnet -ErrorAction SilentlyContinue).Source
+Test-Path "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\SdkResolvers\Microsoft.DotNet.MSBuildSdkResolver\Microsoft.DotNet.MSBuildSdkResolver.dll"
+
+
+Start-Process -FilePath "C:\temp\vs_buildtools.exe" -ArgumentList @(
+    "modify",
+    "--installPath", "`"D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`"",
+    "--add", "Microsoft.Net.Component.4.8.SDK",
+    "--add", "Microsoft.NET.Component.4.8.TargetingPack",
+    "--add", "Component.Microsoft.VisualStudio.LiveShare.2022",
+    "--add", "Microsoft.NetCore.Component.Runtime.8.0",
+    "--add", "Microsoft.NetCore.Component.SDK",
+    "--quiet",
+    "--norestart"
+) -Wait -NoNewWindow
