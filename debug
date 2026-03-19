@@ -1,1 +1,1 @@
- 
+(Get-Command dotnet -ErrorAction SilentlyContinue).Source
