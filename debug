@@ -1,1 +1,10 @@
-Test-Path "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\SdkResolvers\Microsoft.DotNet.MSBuildSdkResolver\Microsoft.DotNet.MSBuildSdkResolver.dll"
+# User-level (most likely for a service account)
+cat "$env:APPDATA\NuGet\nuget.config"
+
+# Machine-wide
+cat "$env:ProgramFiles\NuGet\Config\nuget.config"
+# or
+cat "${env:ProgramFiles(x86)}\NuGet\Config\nuget.config"
+
+# Solution-level — look in or above the solution directory
+dir "D:\enterprise-cloud-runners\4\_work\abc-windows-app\abc-windows-app\" -Filter nuget.config -Recurse
