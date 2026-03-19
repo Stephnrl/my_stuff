@@ -1,4 +1,12 @@
-az network private-endpoint show \
-  --resource-group <keyvault-pe-rg> \
-  --name <keyvault-pe-name> \
-  --query "networkInterfaces[].id" -o tsv
+from azure.identity import DefaultAzureCredential
+
+credential = DefaultAzureCredential()
+token = credential.get_token("https://vault.usgovcloudapi.net/.default")
+print("Auth successful, token acquired")
+```
+
+This just gets a token for the Key Vault scope — doesn't touch Key Vault at all, but proves the managed identity or service principal auth is working. If that succeeds, then try the `list_properties_of_secrets()` call to confirm the PE path works end to end.
+
+You may need to install the libraries first:
+```
+%pip install azure-keyvault-secrets azure-identity
