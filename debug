@@ -1,10 +1,1 @@
-# User-level (most likely for a service account)
-cat "$env:APPDATA\NuGet\nuget.config"
-
-# Machine-wide
-cat "$env:ProgramFiles\NuGet\Config\nuget.config"
-# or
-cat "${env:ProgramFiles(x86)}\NuGet\Config\nuget.config"
-
-# Solution-level — look in or above the solution directory
-dir "D:\enterprise-cloud-runners\4\_work\abc-windows-app\abc-windows-app\" -Filter nuget.config -Recurse
+Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio\2022" -Filter "CredentialProvider*" -Recurse -Force -ErrorAction SilentlyContinue | Select-Object FullName, CreationTime
