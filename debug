@@ -1,12 +1,19 @@
-from azure.keyvault.secrets import SecretClient
-from azure.identity import DefaultAzureCredential
+import requests
 
-credential = DefaultAzureCredential()
-client = SecretClient(
-    vault_url="https://aisandbox-example-kv.vault.usgovcloudapi.net/",
-    credential=credential
-)
+# Get token from the managed identity endpoint
+token_url = "http://169.254.169.254/metadata/identity/oauth2/token"
+token_params = {
+    "api-version": "2018-02-01",
+    "resource": "https://vault.usgovcloudapi.net"
+}
+token_response = requests.get(token_url, params=token_params, headers={"Metadata": "true"})
+print("Token status:", token_response.status_code)
 
-# Just list secret names — doesn't retrieve any values
-for secret in client.list_properties_of_secrets():
-    print(secret.name)
+# If token works, test Key Vault connectivity
+if token_response.status_code == 200:
+    token = token_response.json()["access_token"]
+    
+    kv_url = "https://aisandbox-example-kv.vault.usgovcloudapi.net/secrets?api-version=7.4"
+    kv_response = requests.get(kv_url, headers={"Authorization": f"Bearer {token}"})
+    print("Key Vault status:", kv_response.status_code)
+    print("Response:", kv_response.text)
