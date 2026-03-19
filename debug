@@ -1,4 +1,1 @@
-Get-ChildItem "$env:TEMP\dd_setup_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | ForEach-Object { Get-Content $_.FullName -Wait -Tail 20 }
-
-
-Get-Process -Name "vs_buildtools","vs_installer","setup" -ErrorAction SilentlyContinue | Select-Object Name, Id, StartTime
+Test-Path "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\SdkResolvers\Microsoft.DotNet.MSBuildSdkResolver\Microsoft.DotNet.MSBuildSdkResolver.dll"
