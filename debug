@@ -1,12 +1,12 @@
+from azure.keyvault.secrets import SecretClient
 from azure.identity import DefaultAzureCredential
 
 credential = DefaultAzureCredential()
-token = credential.get_token("https://vault.usgovcloudapi.net/.default")
-print("Auth successful, token acquired")
-```
+client = SecretClient(
+    vault_url="https://aisandbox-example-kv.vault.usgovcloudapi.net/",
+    credential=credential
+)
 
-This just gets a token for the Key Vault scope — doesn't touch Key Vault at all, but proves the managed identity or service principal auth is working. If that succeeds, then try the `list_properties_of_secrets()` call to confirm the PE path works end to end.
-
-You may need to install the libraries first:
-```
-%pip install azure-keyvault-secrets azure-identity
+# Just list secret names — doesn't retrieve any values
+for secret in client.list_properties_of_secrets():
+    print(secret.name)
