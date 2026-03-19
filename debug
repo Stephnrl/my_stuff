@@ -1,11 +1,16 @@
-# Download the bootstrapper
-Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vs_buildtools.exe" -OutFile "C:\temp\vs_buildtools.exe"
+Get-ChildItem "$env:TEMP\dd_bootstrapper_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Tail 50
 
-# Modify the existing installation
-Start-Process -FilePath "C:\temp\vs_buildtools.exe" -ArgumentList @(
-    "modify",
-    "--installPath", "`"D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`"",
-    "--add", "Microsoft.VisualStudio.Workload.NetCoreBuildTools",
-    "--quiet",
-    "--norestart"
-) -Wait -NoNewWindow
+Get-ChildItem "$env:TEMP\dd_setup_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 | Get-Content -Tail 50
+
+
+# Check common locations
+Test-Path "D:\Program Files\dotnet\sdk"
+Test-Path "C:\Program Files\dotnet\sdk"
+dotnet --list-sdks
+
+
+Get-ChildItem "D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild" -Recurse -Depth 2
+
+# Download and install .NET SDK (e.g., .NET 8)
+Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile "C:\temp\dotnet-install.ps1"
+& "C:\temp\dotnet-install.ps1" -Channel 8.0 -InstallDir "D:\Program Files\dotnet"
