@@ -1,1 +1,8 @@
-Get-ChildItem -Path "C:\Program Files\Microsoft Visual Studio\2022" -Filter "CredentialProvider*" -Recurse -Force -ErrorAction SilentlyContinue | Select-Object FullName, CreationTime
+Start-Process -FilePath "C:\temp\vs_buildtools.exe" -ArgumentList @(
+    "modify",
+    "--installPath", "`"D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`"",
+    "--add", "Microsoft.VisualStudio.Workload.VCTools",
+    "--add", "Microsoft.VisualStudio.ComponentGroup.WindowsAppSDK.Cs",
+    "--quiet",
+    "--norestart"
+) -Wait -NoNewWindow
