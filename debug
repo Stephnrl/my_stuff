@@ -1,1 +1,17 @@
-  --query "{Name:name, ManagedRG:managedResourceGroupId, Identity:identity}" -o json
+import requests
+
+token_url = "http://169.254.169.254/metadata/identity/oauth2/token"
+token_params = {
+    "api-version": "2018-02-01",
+    "resource": "https://vault.usgovcloudapi.net",
+    "client_id": "<your-managed-identity-client-id>"
+}
+token_response = requests.get(token_url, params=token_params, headers={"Metadata": "true"})
+print("Token status:", token_response.status_code)
+
+if token_response.status_code == 200:
+    token = token_response.json()["access_token"]
+    kv_url = "https://aisandbox-example-kv.vault.usgovcloudapi.net/secrets?api-version=7.4"
+    kv_response = requests.get(kv_url, headers={"Authorization": f"Bearer {token}"})
+    print("Key Vault status:", kv_response.status_code)
+    print("Response:", kv_response.text)
