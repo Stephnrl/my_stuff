@@ -4,7 +4,7 @@ tenant_id = dbutils.secrets.get(scope="kv-auth", key="tenant-id")
 client_id = dbutils.secrets.get(scope="kv-auth", key="client-id")
 client_secret = dbutils.secrets.get(scope="kv-auth", key="client-secret")
 
-# Get token using app registration
+# Get token
 token_url = f"https://login.microsoftonline.us/{tenant_id}/oauth2/v2.0/token"
 token_data = {
     "grant_type": "client_credentials",
@@ -13,14 +13,22 @@ token_data = {
     "scope": "https://vault.usgovcloudapi.net/.default"
 }
 token_response = requests.post(token_url, data=token_data)
-print("Token status:", token_response.status_code)
 
-# Test Key Vault access
 if token_response.status_code == 200:
     token = token_response.json()["access_token"]
+    
+    # List ALL secrets in the vault
     kv_url = "https://aisandbox-example-kv.vault.usgovcloudapi.net/secrets?api-version=7.4"
     kv_response = requests.get(kv_url, headers={"Authorization": f"Bearer {token}"})
-    print("Key Vault status:", kv_response.status_code)
-    print("Response:", kv_response.text)
+    
+    if kv_response.status_code == 200:
+        secrets = kv_response.json().get("value", [])
+        print(f"Found {len(secrets)} secrets:\n")
+        for s in secrets:
+            name = s["id"].split("/")[-1]
+            enabled = s.get("attributes", {}).get("enabled", "unknown")
+            print(f"  - {name} (enabled: {enabled})")
+    else:
+        print("Key Vault error:", kv_response.text)
 else:
     print("Token error:", token_response.text)
