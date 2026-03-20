@@ -1,34 +1,156 @@
-import requests
+name: Test GitVersion Setup on Enterprise Runners
 
-tenant_id = dbutils.secrets.get(scope="kv-auth", key="tenant-id")
-client_id = dbutils.secrets.get(scope="kv-auth", key="client-id")
-client_secret = dbutils.secrets.get(scope="kv-auth", key="client-secret")
+on:
+  workflow_dispatch:
 
-# Get token
-token_url = f"https://login.microsoftonline.us/{tenant_id}/oauth2/v2.0/token"
-token_data = {
-    "grant_type": "client_credentials",
-    "client_id": client_id,
-    "client_secret": client_secret,
-    "scope": "https://vault.usgovcloudapi.net/.default"
-}
-token_response = requests.post(token_url, data=token_data)
+jobs:
+  # -------------------------------------------------------
+  # Job 1: Explicit version — skips NuGet query, still needs
+  # network for dotnet tool install (unless pre-cached)
+  # -------------------------------------------------------
+  test-explicit-version:
+    name: "Explicit versionSpec (6.0.5)"
+    runs-on: enterprise
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-if token_response.status_code == 200:
-    token = token_response.json()["access_token"]
-    
-    # List ALL secrets in the vault
-    kv_url = "https://aisandbox-example-kv.vault.usgovcloudapi.net/secrets?api-version=7.4"
-    kv_response = requests.get(kv_url, headers={"Authorization": f"Bearer {token}"})
-    
-    if kv_response.status_code == 200:
-        secrets = kv_response.json().get("value", [])
-        print(f"Found {len(secrets)} secrets:\n")
-        for s in secrets:
-            name = s["id"].split("/")[-1]
-            enabled = s.get("attributes", {}).get("enabled", "unknown")
-            print(f"  - {name} (enabled: {enabled})")
-    else:
-        print("Key Vault error:", kv_response.text)
-else:
-    print("Token error:", token_response.text)
+      # Diagnostic: confirm network reachability to NuGet
+      - name: Test NuGet connectivity
+        run: |
+          echo "--- Testing NuGet API reachability ---"
+          curl -sf --max-time 10 https://azuresearch-usnc.nuget.org/query?q=gitversion.tool&take=1 \
+            && echo "SUCCESS: NuGet search API reachable" \
+            || echo "FAILED: NuGet search API unreachable"
+          echo ""
+          curl -sf --max-time 10 https://api.nuget.org/v3/index.json \
+            && echo "SUCCESS: NuGet package API reachable" \
+            || echo "FAILED: NuGet package API unreachable"
+
+      # Diagnostic: check dotnet availability
+      - name: Check dotnet SDK
+        run: |
+          echo "--- dotnet info ---"
+          which dotnet && dotnet --info || echo "dotnet not found on PATH"
+          echo ""
+          echo "--- Runner tool cache ---"
+          echo "RUNNER_TOOL_CACHE: ${RUNNER_TOOL_CACHE:-not set}"
+          ls -la "${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}" 2>/dev/null || echo "Tool cache directory not found"
+
+      # Diagnostic: check if GitVersion.Tool is already cached
+      - name: Check tool cache for GitVersion
+        run: |
+          echo "--- Looking for cached GitVersion.Tool ---"
+          CACHE_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
+          find "$CACHE_DIR" -maxdepth 3 -name "GitVersion*" -type d 2>/dev/null || echo "No cached GitVersion found"
+          find "$CACHE_DIR" -maxdepth 3 -name "gitversion*" -type d 2>/dev/null || echo "No cached gitversion found"
+
+      - name: Install GitVersion (explicit 6.0.5)
+        uses: gittools/actions/gitversion/setup@v3.0.0
+        with:
+          versionSpec: "6.0.5"
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v3.0.0
+
+      - name: Display version outputs
+        run: |
+          echo "FullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}"
+          echo "Major: ${{ steps.gitversion.outputs.major }}"
+          echo "Minor: ${{ steps.gitversion.outputs.minor }}"
+          echo "Patch: ${{ steps.gitversion.outputs.patch }}"
+
+  # -------------------------------------------------------
+  # Job 2: Wildcard version — requires NuGet query to resolve
+  # the spec before it can check cache or install
+  # -------------------------------------------------------
+  test-wildcard-version:
+    name: "Wildcard versionSpec (6.*)"
+    runs-on: enterprise
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test NuGet connectivity
+        run: |
+          echo "--- Testing NuGet API reachability ---"
+          curl -sf --max-time 10 https://azuresearch-usnc.nuget.org/query?q=gitversion.tool&take=1 \
+            && echo "SUCCESS: NuGet search API reachable" \
+            || echo "FAILED: NuGet search API unreachable"
+          echo ""
+          curl -sf --max-time 10 https://api.nuget.org/v3/index.json \
+            && echo "SUCCESS: NuGet package API reachable" \
+            || echo "FAILED: NuGet package API unreachable"
+
+      - name: Check dotnet SDK
+        run: |
+          echo "--- dotnet info ---"
+          which dotnet && dotnet --info || echo "dotnet not found on PATH"
+
+      - name: Install GitVersion (wildcard 6.*)
+        uses: gittools/actions/gitversion/setup@v3.0.0
+        with:
+          versionSpec: "6.*"
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v3.0.0
+
+      - name: Display version outputs
+        run: |
+          echo "FullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}"
+          echo "Major: ${{ steps.gitversion.outputs.major }}"
+          echo "Minor: ${{ steps.gitversion.outputs.minor }}"
+          echo "Patch: ${{ steps.gitversion.outputs.patch }}"
+
+  # -------------------------------------------------------
+  # Job 3: Original working config (baseline comparison)
+  # -------------------------------------------------------
+  test-current-working:
+    name: "Current working config (5.8.1)"
+    runs-on: enterprise
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Test NuGet connectivity
+        run: |
+          echo "--- Testing NuGet API reachability ---"
+          curl -sf --max-time 10 https://azuresearch-usnc.nuget.org/query?q=gitversion.tool&take=1 \
+            && echo "SUCCESS: NuGet search API reachable" \
+            || echo "FAILED: NuGet search API unreachable"
+          echo ""
+          curl -sf --max-time 10 https://api.nuget.org/v3/index.json \
+            && echo "SUCCESS: NuGet package API reachable" \
+            || echo "FAILED: NuGet package API unreachable"
+
+      # Check if 5.8.1 is already cached (explains why it works)
+      - name: Check tool cache for GitVersion
+        run: |
+          echo "--- Looking for cached GitVersion.Tool ---"
+          CACHE_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
+          find "$CACHE_DIR" -maxdepth 3 -name "GitVersion*" -type d 2>/dev/null || echo "No cached GitVersion found"
+          find "$CACHE_DIR" -maxdepth 3 -name "gitversion*" -type d 2>/dev/null || echo "No cached gitversion found"
+
+      - name: Install GitVersion (5.8.1 — current working)
+        uses: gittools/actions/gitversion/setup@v3.0.0
+        with:
+          versionSpec: "5.8.1"
+
+      - name: Determine Version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v3.0.0
+
+      - name: Display version outputs
+        run: |
+          echo "FullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}"
+          echo "Major: ${{ steps.gitversion.outputs.major }}"
+          echo "Minor: ${{ steps.gitversion.outputs.minor }}"
+          echo "Patch: ${{ steps.gitversion.outputs.patch }}"
