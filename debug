@@ -1,560 +1,1133 @@
 #!/usr/bin/env python3
 """
-tf_diagram.py — Generate AWS networking architecture diagrams from Terraform code.
-
-Uses the `diagrams` library (https://diagrams.mingrammer.com/) to parse .tf files
-and produce a visual diagram of your networking infrastructure.
+tfstate-visualizer: Parse a Terraform state file and generate an interactive HTML infrastructure diagram.
 
 Usage:
-    python3 tf_diagram.py /path/to/terraform/repo
-    python3 tf_diagram.py /path/to/terraform/repo --output my_diagram --format svg
-    python3 tf_diagram.py /path/to/terraform/repo --show-all  # include non-network resources
+    python tfstate_visualizer.py <path-to-terraform.tfstate> [-o output.html]
+
+The generated HTML is fully standalone (zero external dependencies at runtime)
+and works perfectly on GitHub Pages or any static hosting.
 """
 
-import argparse
 import json
-import os
-import re
 import sys
-from collections import defaultdict
+import argparse
+import hashlib
 from pathlib import Path
+from collections import defaultdict
 
-# ─── Diagram Imports ────────────────────────────────────────────────────────────
-from diagrams import Cluster, Diagram, Edge
-from diagrams.aws.network import (
-    VPC, PublicSubnet, PrivateSubnet, NATGateway, InternetGateway,
-    RouteTable, Endpoint, VPCFlowLogs, VPCPeering, TransitGateway,
-    TransitGatewayAttachment, Privatelink, NLB, ALB, CLB,
-    VpnGateway, VpnConnection, SiteToSiteVpn, ClientVpn,
-    NetworkFirewall, Nacl, Route53, Route53HostedZone,
-    CloudFront, DirectConnect, ELB, GlobalAccelerator,
-)
-from diagrams.aws.security import (
-    WAF, SecurityHub, Guardduty, KMS, IAMRole, ACM, Shield,
-)
-from diagrams.aws.management import (
-    Cloudwatch, CloudwatchLogs, Cloudtrail, Config,
-)
-from diagrams.aws.storage import S3
-from diagrams.aws.general import General
-
-# ─── Terraform Resource → Diagram Node Mapping ─────────────────────────────────
-# Maps Terraform resource types to (DiagramClass, Category, FriendlyLabel)
-RESOURCE_MAP = {
-    # VPC Core
-    "aws_vpc":                          (VPC,                "vpc",       "VPC"),
-    "aws_default_vpc":                  (VPC,                "vpc",       "Default VPC"),
-
-    # Subnets
-    "aws_subnet":                       (None,               "subnet",    "Subnet"),       # resolved to Public/Private dynamically
-    "aws_default_subnet":               (None,               "subnet",    "Default Subnet"),
-
-    # Gateways
-    "aws_internet_gateway":             (InternetGateway,    "gateway",   "Internet GW"),
-    "aws_egress_only_internet_gateway": (InternetGateway,    "gateway",   "Egress-Only IGW"),
-    "aws_nat_gateway":                  (NATGateway,         "gateway",   "NAT GW"),
-    "aws_vpn_gateway":                  (VpnGateway,         "gateway",   "VPN GW"),
-    "aws_vpn_connection":               (VpnConnection,      "gateway",   "VPN Connection"),
-    "aws_customer_gateway":             (SiteToSiteVpn,      "gateway",   "Customer GW"),
-    "aws_ec2_client_vpn_endpoint":      (ClientVpn,          "gateway",   "Client VPN"),
-
-    # Transit Gateway
-    "aws_ec2_transit_gateway":                     (TransitGateway,           "tgw", "Transit GW"),
-    "aws_ec2_transit_gateway_vpc_attachment":       (TransitGatewayAttachment, "tgw", "TGW Attachment"),
-    "aws_ec2_transit_gateway_route_table":          (TransitGateway,           "tgw", "TGW Route Table"),
-    "aws_ec2_transit_gateway_peering_attachment":   (TransitGatewayAttachment, "tgw", "TGW Peering"),
-
-    # Route Tables
-    "aws_route_table":                  (RouteTable,         "routing",   "Route Table"),
-    "aws_default_route_table":          (RouteTable,         "routing",   "Default RT"),
-    "aws_route":                        (None,               "routing",   None),           # skip individual routes
-    "aws_route_table_association":      (None,               "routing",   None),           # skip associations
-
-    # VPC Endpoints (PrivateLink)
-    "aws_vpc_endpoint":                 (Endpoint,           "endpoint",  "VPC Endpoint"),
-    "aws_vpc_endpoint_service":         (Privatelink,        "endpoint",  "Endpoint Service"),
-    "aws_vpc_endpoint_route_table_association": (None,        "endpoint",  None),
-    "aws_vpc_endpoint_subnet_association":      (None,        "endpoint",  None),
-
-    # Peering
-    "aws_vpc_peering_connection":       (VPCPeering,         "peering",   "VPC Peering"),
-    "aws_vpc_peering_connection_accepter": (VPCPeering,      "peering",   "Peering Accepter"),
-
-    # Flow Logs
-    "aws_flow_log":                     (VPCFlowLogs,        "flowlogs",  "Flow Log"),
-
-    # Network ACLs
-    "aws_network_acl":                  (Nacl,               "security",  "NACL"),
-    "aws_default_network_acl":          (Nacl,               "security",  "Default NACL"),
-    "aws_network_acl_rule":             (None,               "security",  None),
-
-    # Security Groups (tracked but not individual rules)
-    "aws_security_group":               (Nacl,               "security",  "Security Group"),
-    "aws_default_security_group":       (Nacl,               "security",  "Default SG"),
-    "aws_security_group_rule":          (None,               "security",  None),
-    "aws_vpc_security_group_ingress_rule": (None,            "security",  None),
-    "aws_vpc_security_group_egress_rule":  (None,            "security",  None),
-
-    # Load Balancers
-    "aws_lb":                           (ALB,                "lb",        "Load Balancer"),
-    "aws_alb":                          (ALB,                "lb",        "ALB"),
-    "aws_lb_target_group":              (None,               "lb",        None),
-    "aws_lb_listener":                  (None,               "lb",        None),
-
-    # DNS
-    "aws_route53_zone":                 (Route53HostedZone,  "dns",       "Hosted Zone"),
-    "aws_route53_record":               (None,               "dns",       None),
-    "aws_route53_resolver_endpoint":    (Route53,            "dns",       "R53 Resolver"),
-    "aws_route53_resolver_rule":        (None,               "dns",       None),
-
-    # CloudFront / CDN
-    "aws_cloudfront_distribution":      (CloudFront,         "cdn",       "CloudFront"),
-
-    # Direct Connect
-    "aws_dx_connection":                (DirectConnect,      "dx",        "Direct Connect"),
-    "aws_dx_gateway":                   (DirectConnect,      "dx",        "DX Gateway"),
-
-    # Firewall
-    "aws_networkfirewall_firewall":     (NetworkFirewall,    "firewall",  "Network Firewall"),
-    "aws_networkfirewall_firewall_policy": (None,            "firewall",  None),
-    "aws_networkfirewall_rule_group":   (None,               "firewall",  None),
-
-    # Monitoring / Logging support
-    "aws_cloudwatch_log_group":         (CloudwatchLogs,     "monitoring", "CW Log Group"),
-    "aws_s3_bucket":                    (S3,                 "storage",    "S3 Bucket"),
-    "aws_iam_role":                     (IAMRole,            "iam",        "IAM Role"),
-    "aws_kms_key":                      (KMS,                "security",   "KMS Key"),
-    "aws_wafv2_web_acl":               (WAF,                "security",   "WAF ACL"),
+# ─── Resource type → visual category mapping ───────────────────────────────────
+CATEGORY_MAP = {
+    "aws_vpc":                      ("Network",   "#0ea5e9", "🌐"),
+    "aws_subnet":                   ("Network",   "#38bdf8", "🔲"),
+    "aws_internet_gateway":         ("Network",   "#06b6d4", "🌍"),
+    "aws_nat_gateway":              ("Network",   "#22d3ee", "🔀"),
+    "aws_route_table":              ("Network",   "#67e8f9", "🛤️"),
+    "aws_route":                    ("Network",   "#67e8f9", "↗️"),
+    "aws_eip":                      ("Network",   "#a5f3fc", "📌"),
+    "aws_security_group":           ("Security",  "#f59e0b", "🛡️"),
+    "aws_iam_role":                 ("Security",  "#fbbf24", "🔑"),
+    "aws_iam_policy":               ("Security",  "#fcd34d", "📜"),
+    "aws_lb":                       ("Compute",   "#8b5cf6", "⚖️"),
+    "aws_lb_target_group":          ("Compute",   "#a78bfa", "🎯"),
+    "aws_lb_listener":              ("Compute",   "#c4b5fd", "👂"),
+    "aws_ecs_cluster":              ("Compute",   "#ec4899", "🏗️"),
+    "aws_ecs_service":              ("Compute",   "#f472b6", "⚙️"),
+    "aws_ecs_task_definition":      ("Compute",   "#f9a8d4", "📋"),
+    "aws_instance":                 ("Compute",   "#8b5cf6", "🖥️"),
+    "aws_lambda_function":          ("Compute",   "#a78bfa", "λ"),
+    "aws_autoscaling_group":        ("Compute",   "#c4b5fd", "📈"),
+    "aws_db_instance":              ("Database",  "#10b981", "🗄️"),
+    "aws_db_subnet_group":          ("Database",  "#34d399", "📦"),
+    "aws_rds_cluster":              ("Database",  "#6ee7b7", "🗃️"),
+    "aws_dynamodb_table":           ("Database",  "#10b981", "⚡"),
+    "aws_elasticache_cluster":      ("Database",  "#34d399", "💾"),
+    "aws_s3_bucket":                ("Storage",   "#f97316", "🪣"),
+    "aws_s3_bucket_policy":         ("Storage",   "#fb923c", "📄"),
+    "aws_cloudfront_distribution":  ("CDN/DNS",   "#e11d48", "🌩️"),
+    "aws_route53_zone":             ("CDN/DNS",   "#fb7185", "🗺️"),
+    "aws_route53_record":           ("CDN/DNS",   "#fda4af", "📍"),
+    "aws_acm_certificate":          ("CDN/DNS",   "#fecdd3", "🔒"),
+    "aws_cloudwatch_log_group":     ("Monitoring","#6366f1", "📊"),
+    "aws_cloudwatch_metric_alarm":  ("Monitoring","#818cf8", "🚨"),
+    "aws_sns_topic":                ("Monitoring","#a5b4fc", "📢"),
 }
 
-# ─── Terraform Parser ───────────────────────────────────────────────────────────
+DEFAULT_CATEGORY = ("Other", "#94a3b8", "📎")
 
-def find_tf_files(root_dir: str) -> list[Path]:
-    """Recursively find all .tf files, skipping .terraform directories."""
-    tf_files = []
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        dirnames[:] = [d for d in dirnames if d != ".terraform"]
-        for f in filenames:
-            if f.endswith(".tf"):
-                tf_files.append(Path(dirpath) / f)
-    return sorted(tf_files)
+# ─── Category colors for the legend / grouping ────────────────────────────────
+CATEGORY_COLORS = {
+    "Network":    "#0ea5e9",
+    "Security":   "#f59e0b",
+    "Compute":    "#8b5cf6",
+    "Database":   "#10b981",
+    "Storage":    "#f97316",
+    "CDN/DNS":    "#e11d48",
+    "Monitoring": "#6366f1",
+    "Other":      "#94a3b8",
+}
 
 
-def parse_tf_resources(tf_files: list[Path]) -> list[dict]:
+def parse_tfstate(path: str) -> dict:
+    """Read and validate a Terraform state file."""
+    with open(path) as f:
+        state = json.load(f)
+    if "resources" not in state:
+        raise ValueError("Invalid tfstate: missing 'resources' key")
+    return state
+
+
+def extract_graph(state: dict) -> tuple[list[dict], list[dict]]:
     """
-    Parse resource blocks from .tf files using regex.
-    Returns list of dicts: {type, name, body, file, module_path}
+    Extract nodes and edges from the state file.
+    Returns (nodes, edges).
     """
-    # Matches: resource "aws_vpc" "main" { ... }
-    resource_re = re.compile(
-        r'resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE
-    )
-    # Matches: module "vpc" { source = "..." }
-    module_re = re.compile(
-        r'module\s+"([^"]+)"\s*\{', re.MULTILINE
-    )
+    nodes = []
+    edges = []
+    seen_edges = set()
 
-    resources = []
+    for res in state.get("resources", []):
+        if res.get("mode") == "data":
+            continue  # skip data sources
 
-    for tf_file in tf_files:
-        content = tf_file.read_text(errors="replace")
-        rel_path = tf_file.parent.name or "root"
+        res_type = res["type"]
+        res_name = res["name"]
+        full_name = f"{res_type}.{res_name}"
+        category, color, icon = CATEGORY_MAP.get(res_type, DEFAULT_CATEGORY)
 
-        # Extract resources
-        for match in resource_re.finditer(content):
-            res_type = match.group(1)
-            res_name = match.group(2)
+        # Pull useful attributes from the first instance
+        attrs = {}
+        deps = []
+        if res.get("instances"):
+            inst = res["instances"][0]
+            attrs = inst.get("attributes", {})
+            deps = inst.get("dependencies", [])
 
-            # Extract the body (find matching closing brace)
-            body_start = match.end()
-            body = _extract_block(content, body_start)
+        # Build display label
+        display_name = (attrs.get("tags", {}) or {}).get("Name", res_name)
+        detail_lines = _build_details(res_type, attrs)
 
-            resources.append({
-                "type": res_type,
-                "name": res_name,
-                "body": body,
-                "file": str(tf_file),
-                "module_path": rel_path,
-            })
+        nodes.append({
+            "id":       full_name,
+            "label":    display_name,
+            "type":     res_type,
+            "category": category,
+            "color":    color,
+            "icon":     icon,
+            "details":  detail_lines,
+            "attrs":    _safe_attrs(attrs),
+        })
 
-    return resources
+        for dep in deps:
+            edge_key = (dep, full_name)
+            if edge_key not in seen_edges:
+                seen_edges.add(edge_key)
+                edges.append({"from": dep, "to": full_name})
 
-
-def _extract_block(content: str, start: int) -> str:
-    """Extract a {} block from content starting after the opening brace."""
-    depth = 1
-    i = start
-    while i < len(content) and depth > 0:
-        if content[i] == "{":
-            depth += 1
-        elif content[i] == "}":
-            depth -= 1
-        i += 1
-    return content[start:i - 1]
+    return nodes, edges
 
 
-def classify_subnet(resource: dict) -> type:
-    """Determine if a subnet is public or private based on common heuristics."""
-    body = resource["body"].lower()
-    name = resource["name"].lower()
-
-    # Check for map_public_ip_on_launch = true
-    if re.search(r'map_public_ip_on_launch\s*=\s*true', body):
-        return PublicSubnet
-
-    # Check naming conventions
-    if any(kw in name for kw in ["public", "pub", "dmz", "external"]):
-        return PublicSubnet
-    if any(kw in name for kw in ["private", "priv", "internal", "app", "data", "db"]):
-        return PrivateSubnet
-
-    # Check tags
-    if re.search(r'(name|Name).*public', body):
-        return PublicSubnet
-    if re.search(r'(name|Name).*private', body):
-        return PrivateSubnet
-
-    return PrivateSubnet  # default to private
+def _build_details(res_type: str, attrs: dict) -> list[str]:
+    """Build human-readable detail lines for a resource."""
+    lines = []
+    interesting_keys = {
+        "cidr_block", "availability_zone", "engine", "engine_version",
+        "instance_class", "allocated_storage", "cpu", "memory",
+        "desired_count", "launch_type", "port", "protocol",
+        "domain_name", "dns_name", "bucket", "name", "public_ip",
+        "load_balancer_type", "retention_in_days", "multi_az",
+        "storage_encrypted", "target_type",
+    }
+    for key in interesting_keys:
+        if key in attrs and attrs[key] not in (None, "", [], {}):
+            val = attrs[key]
+            if isinstance(val, bool):
+                val = "Yes" if val else "No"
+            lines.append(f"{_humanize(key)}: {val}")
+    return sorted(lines)
 
 
-def extract_vpc_references(resource: dict) -> str | None:
-    """Try to find which VPC a resource belongs to via vpc_id references."""
-    body = resource["body"]
-    # Match vpc_id = aws_vpc.main.id or var.vpc_id or module.vpc.id patterns
-    m = re.search(r'vpc_id\s*=\s*(?:aws_vpc\.(\w+)\.id|(\S+))', body)
-    if m:
-        return m.group(1) or m.group(2)
-    return None
+def _humanize(key: str) -> str:
+    return key.replace("_", " ").title()
 
 
-def extract_endpoint_service(resource: dict) -> str:
-    """Extract the service name from a VPC endpoint."""
-    body = resource["body"]
-    m = re.search(r'service_name\s*=\s*"?([^"\s]+)"?', body)
-    if m:
-        svc = m.group(1)
-        # Extract just the service part: com.amazonaws.region.s3 -> s3
-        parts = svc.split(".")
-        return parts[-1] if parts else svc
-    return ""
+def _safe_attrs(attrs: dict) -> dict:
+    """Return a JSON-safe subset of attributes (no huge nested blobs)."""
+    safe = {}
+    for k, v in attrs.items():
+        if k in ("tags", "id"):
+            safe[k] = v
+        elif isinstance(v, (str, int, float, bool)):
+            safe[k] = v
+        elif isinstance(v, list) and len(v) < 5:
+            safe[k] = v
+    return safe
 
 
-# ─── Diagram Generator ──────────────────────────────────────────────────────────
-
-def build_label(resource: dict, mapping: tuple) -> str:
-    """Build a clean label for a diagram node."""
-    friendly = mapping[2] if mapping else resource["type"]
-    name = resource["name"].replace("_", " ").replace("-", " ").title()
-
-    # For endpoints, append the service name
-    if resource["type"] == "aws_vpc_endpoint":
-        svc = extract_endpoint_service(resource)
-        if svc:
-            return f"{friendly}\n({svc})"
-
-    return f"{friendly}\n{name}"
+def _uid(s: str) -> str:
+    return hashlib.md5(s.encode()).hexdigest()[:8]
 
 
-def generate_diagram(
-    resources: list[dict],
-    output_name: str = "aws_network_diagram",
-    output_format: str = "png",
-    show_all: bool = False,
-    direction: str = "TB",
-):
-    """Generate the architecture diagram from parsed resources."""
-
-    # Filter to mapped resources only
-    mapped = []
-    unmapped_types = set()
-    for r in resources:
-        if r["type"] in RESOURCE_MAP:
-            mapping = RESOURCE_MAP[r["type"]]
-            if mapping[0] is not None:  # skip noise resources (routes, rules, etc.)
-                mapped.append(r)
-        elif show_all and r["type"].startswith("aws_"):
-            mapped.append(r)
-        else:
-            unmapped_types.add(r["type"])
-
-    if not mapped:
-        print("⚠️  No diagrammable resources found. Check your Terraform path.")
-        print(f"   Found {len(resources)} total resources, types: {sorted(set(r['type'] for r in resources))}")
-        sys.exit(1)
-
-    # Group resources by category
-    vpcs = [r for r in mapped if r["type"] in ("aws_vpc", "aws_default_vpc")]
-    subnets = [r for r in mapped if r["type"] in ("aws_subnet", "aws_default_subnet")]
-    endpoints = [r for r in mapped if r["type"] in ("aws_vpc_endpoint",)]
-    gateways = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "gateway"]
-    tgw_resources = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "tgw"]
-    flowlogs = [r for r in mapped if r["type"] == "aws_flow_log"]
-    route_tables = [r for r in mapped if r["type"] in ("aws_route_table", "aws_default_route_table")]
-    security = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "security"]
-    dns = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "dns"]
-    lb = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "lb"]
-    monitoring = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "monitoring"]
-    storage = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "storage"]
-    peering = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "peering"]
-    firewall = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "firewall"]
-    cdn = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "cdn"]
-    dx = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "dx"]
-
-    # Separate public vs private subnets
-    public_subnets = [s for s in subnets if classify_subnet(s) == PublicSubnet]
-    private_subnets = [s for s in subnets if classify_subnet(s) == PrivateSubnet]
-
-    # ── Build Diagram ──
-    graph_attr = {
-        "fontsize": "14",
-        "bgcolor": "white",
-        "pad": "0.5",
-        "nodesep": "0.8",
-        "ranksep": "1.0",
+def build_html(nodes: list[dict], edges: list[dict], state: dict, tfstate_path: str) -> str:
+    """Generate the full standalone HTML page."""
+    meta = {
+        "terraform_version": state.get("terraform_version", "unknown"),
+        "serial":            state.get("serial", "?"),
+        "resource_count":    len(nodes),
+        "edge_count":        len(edges),
+        "file":              Path(tfstate_path).name,
     }
 
-    node_attr = {
-        "fontsize": "11",
+    # Group nodes by category for stats
+    cat_counts = defaultdict(int)
+    for n in nodes:
+        cat_counts[n["category"]] += 1
+
+    nodes_json = json.dumps(nodes, indent=2)
+    edges_json = json.dumps(edges, indent=2)
+    meta_json  = json.dumps(meta, indent=2)
+    cat_colors_json = json.dumps(CATEGORY_COLORS)
+    cat_counts_json = json.dumps(dict(cat_counts))
+
+    return HTML_TEMPLATE.replace("__NODES__", nodes_json) \
+                        .replace("__EDGES__", edges_json) \
+                        .replace("__META__",  meta_json) \
+                        .replace("__CAT_COLORS__", cat_colors_json) \
+                        .replace("__CAT_COUNTS__", cat_counts_json)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTML TEMPLATE — fully self-contained, zero external deps
+# ═══════════════════════════════════════════════════════════════════════════════
+HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Terraform Infrastructure Map</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root {
+    --bg:       #0b0f1a;
+    --surface:  #111827;
+    --surface2: #1e293b;
+    --border:   #1e293b;
+    --text:     #e2e8f0;
+    --text2:    #94a3b8;
+    --accent:   #38bdf8;
+    --glow:     rgba(56, 189, 248, 0.15);
+  }
+
+  html { font-size: 15px; }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Top bar ────────────────────────────────── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.7rem 1.4rem;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 50;
+  }
+  .topbar h1 {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #38bdf8, #818cf8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .topbar-pills {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    padding: 0.25rem 0.6rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .pill b { color: var(--text); font-weight: 600; }
+
+  /* ── Layout ─────────────────────────────────── */
+  .layout {
+    display: flex;
+    height: calc(100vh - 50px);
+  }
+
+  /* ── Sidebar ────────────────────────────────── */
+  .sidebar {
+    width: 280px;
+    min-width: 280px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .sidebar-section {
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-section h3 {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text2);
+    margin-bottom: 0.7rem;
+    font-weight: 700;
+  }
+
+  /* Search */
+  .search-box {
+    display: flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.4rem 0.6rem;
+    transition: border-color 0.2s;
+  }
+  .search-box:focus-within { border-color: var(--accent); }
+  .search-box svg { flex-shrink: 0; color: var(--text2); }
+  .search-box input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.8rem;
+    padding-left: 0.5rem;
+  }
+  .search-box input::placeholder { color: var(--text2); }
+
+  /* Legend */
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    user-select: none;
+  }
+  .legend-item:hover { opacity: 0.8; }
+  .legend-item.dimmed { opacity: 0.3; }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .legend-label {
+    font-size: 0.78rem;
+    font-weight: 500;
+    flex: 1;
+  }
+  .legend-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--text2);
+  }
+
+  /* Resource list */
+  .resource-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem 0;
+  }
+  .resource-list::-webkit-scrollbar { width: 4px; }
+  .resource-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  .res-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 1.2rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: 0.78rem;
+  }
+  .res-item:hover { background: var(--surface2); }
+  .res-item.active { background: var(--glow); }
+  .res-item .res-icon { font-size: 0.9rem; flex-shrink: 0; }
+  .res-item .res-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .res-item .res-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--text2);
+    white-space: nowrap;
+  }
+  .res-item.hidden { display: none; }
+
+  /* ── Canvas area ────────────────────────────── */
+  .canvas-area {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    cursor: grab;
+  }
+  .canvas-area:active { cursor: grabbing; }
+  .canvas-area svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* ── Detail panel (right) ───────────────────── */
+  .detail-panel {
+    width: 320px;
+    min-width: 320px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    position: relative;
+    z-index: 20;
+  }
+  .detail-panel.open { transform: translateX(0); }
+  .detail-panel::-webkit-scrollbar { width: 4px; }
+  .detail-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .detail-header {
+    padding: 1.2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    gap: 0.8rem;
+  }
+  .detail-icon { font-size: 1.6rem; }
+  .detail-header-text h2 {
+    font-size: 1rem;
+    font-weight: 700;
+  }
+  .detail-header-text .detail-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--accent);
+    margin-top: 0.15rem;
+  }
+  .detail-close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 1.1rem;
+    padding: 0.2rem;
+    line-height: 1;
+  }
+  .detail-close:hover { color: var(--text); }
+
+  .detail-section {
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-section h4 {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text2);
+    margin-bottom: 0.6rem;
+    font-weight: 700;
+  }
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 0.3rem 0;
+    font-size: 0.78rem;
+    gap: 0.5rem;
+  }
+  .detail-row .dk { color: var(--text2); flex-shrink: 0; }
+  .detail-row .dv {
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    text-align: right;
+    word-break: break-all;
+  }
+  .dep-link {
+    display: inline-block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
+    cursor: pointer;
+    padding: 0.15rem 0;
+    text-decoration: none;
+  }
+  .dep-link:hover { text-decoration: underline; }
+
+  /* ── Canvas controls ────────────────────────── */
+  .canvas-controls {
+    position: absolute;
+    bottom: 1.2rem;
+    right: 1.2rem;
+    display: flex;
+    gap: 0.4rem;
+    z-index: 10;
+  }
+  .ctrl-btn {
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text2);
+    cursor: pointer;
+    font-size: 1rem;
+    transition: all 0.15s;
+  }
+  .ctrl-btn:hover { background: var(--surface2); color: var(--text); }
+
+  /* ── Node & edge rendering ──────────────────── */
+  .edge-line {
+    stroke: #334155;
+    stroke-width: 1.2;
+    fill: none;
+    marker-end: url(#arrowhead);
+    transition: stroke 0.2s, stroke-width 0.2s;
+  }
+  .edge-line.highlight { stroke: var(--accent); stroke-width: 2; }
+  .edge-line.dimmed { stroke: #1e293b; stroke-width: 0.8; }
+
+  .node-group { cursor: pointer; }
+  .node-group.dimmed { opacity: 0.15; }
+  .node-body {
+    rx: 10; ry: 10;
+    transition: filter 0.2s, stroke 0.2s;
+  }
+  .node-group:hover .node-body { filter: brightness(1.25); }
+  .node-group.selected .node-body {
+    stroke: var(--accent);
+    stroke-width: 2;
+    filter: drop-shadow(0 0 12px var(--glow));
+  }
+  .node-icon { font-size: 18px; pointer-events: none; dominant-baseline: central; text-anchor: middle; }
+  .node-label {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    fill: var(--text);
+    pointer-events: none;
+    dominant-baseline: central;
+  }
+  .node-type {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8.5px;
+    fill: var(--text2);
+    pointer-events: none;
+    dominant-baseline: central;
+  }
+
+  /* ── Tooltip ────────────────────────────────── */
+  .tooltip {
+    position: fixed;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.72rem;
+    color: var(--text);
+    pointer-events: none;
+    opacity: 0;
+    z-index: 100;
+    max-width: 260px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    transition: opacity 0.15s;
+  }
+  .tooltip.show { opacity: 1; }
+  .tooltip .tt-title { font-weight: 700; margin-bottom: 0.2rem; }
+  .tooltip .tt-type {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent);
+    font-size: 0.65rem;
+  }
+
+  /* watermark */
+  .watermark {
+    position: absolute;
+    bottom: 1.2rem;
+    left: 1.2rem;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: #1e293b;
+    z-index: 5;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Top bar ──────────────────────────────── -->
+<div class="topbar">
+  <h1>⬡ terraform state visualizer</h1>
+  <div class="topbar-pills" id="pills"></div>
+</div>
+
+<!-- ── Main layout ──────────────────────────── -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-section">
+      <div class="search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input type="text" id="searchInput" placeholder="Search resources…"/>
+      </div>
+    </div>
+    <div class="sidebar-section" id="legendSection">
+      <h3>Categories</h3>
+      <div id="legend"></div>
+    </div>
+    <div class="sidebar-section" style="padding-bottom:0.3rem;">
+      <h3>Resources</h3>
+    </div>
+    <div class="resource-list" id="resourceList"></div>
+  </div>
+
+  <!-- Canvas -->
+  <div class="canvas-area" id="canvasArea">
+    <svg id="graphSvg" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrowhead" viewBox="0 0 10 7" refX="10" refY="3.5"
+                markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#334155"/>
+        </marker>
+        <marker id="arrowhead-hl" viewBox="0 0 10 7" refX="10" refY="3.5"
+                markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+          <polygon points="0 0, 10 3.5, 0 7" fill="#38bdf8"/>
+        </marker>
+      </defs>
+    </svg>
+    <div class="canvas-controls">
+      <button class="ctrl-btn" onclick="zoomIn()" title="Zoom in">+</button>
+      <button class="ctrl-btn" onclick="zoomOut()" title="Zoom out">−</button>
+      <button class="ctrl-btn" onclick="resetView()" title="Fit view">⊡</button>
+    </div>
+    <div class="watermark">generated by tfstate-visualizer</div>
+  </div>
+
+  <!-- Detail panel -->
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <span class="detail-icon" id="detailIcon"></span>
+      <div class="detail-header-text">
+        <h2 id="detailName"></h2>
+        <div class="detail-type" id="detailType"></div>
+      </div>
+      <button class="detail-close" onclick="closeDetail()">✕</button>
+    </div>
+    <div id="detailBody"></div>
+  </div>
+
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tooltip">
+  <div class="tt-title" id="ttTitle"></div>
+  <div class="tt-type" id="ttType"></div>
+</div>
+
+<script>
+// ═══ DATA (injected by Python) ═════════════════════════════════════════
+const NODES = __NODES__;
+const EDGES = __EDGES__;
+const META  = __META__;
+const CAT_COLORS  = __CAT_COLORS__;
+const CAT_COUNTS  = __CAT_COUNTS__;
+
+// ═══ STATE ═════════════════════════════════════════════════════════════
+let transform = { x: 0, y: 0, k: 1 };
+let selectedNodeId = null;
+let activeCategories = new Set(Object.keys(CAT_COLORS));
+let nodePositions = {};  // id -> {x, y}
+let dragging = null;
+let panning = false;
+let panStart = {};
+
+const NODE_W = 220, NODE_H = 52;
+
+// ═══ LAYOUT — force-directed (simplified) ══════════════════════════════
+function layoutGraph() {
+  // Assign initial positions grouped by category rows
+  const catOrder = Object.keys(CAT_COLORS);
+  const grouped = {};
+  NODES.forEach(n => {
+    if (!grouped[n.category]) grouped[n.category] = [];
+    grouped[n.category].push(n);
+  });
+
+  let y = 60;
+  catOrder.forEach(cat => {
+    const items = grouped[cat] || [];
+    items.forEach((n, i) => {
+      nodePositions[n.id] = {
+        x: 100 + (i % 4) * (NODE_W + 60) + (Math.random() * 20 - 10),
+        y: y + Math.floor(i / 4) * (NODE_H + 50),
+      };
+    });
+    if (items.length) y += Math.ceil(items.length / 4) * (NODE_H + 50) + 40;
+  });
+
+  // Simple force simulation (runs synchronously)
+  const iterations = 120;
+  for (let iter = 0; iter < iterations; iter++) {
+    const alpha = 1 - iter / iterations;
+    // Repulsion between all nodes
+    for (let i = 0; i < NODES.length; i++) {
+      for (let j = i + 1; j < NODES.length; j++) {
+        const a = nodePositions[NODES[i].id];
+        const b = nodePositions[NODES[j].id];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        let force = 8000 / (dist * dist) * alpha;
+        if (dist < NODE_W + 40) force *= 3;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        a.x -= fx; a.y -= fy;
+        b.x += fx; b.y += fy;
+      }
     }
+    // Attraction along edges
+    EDGES.forEach(e => {
+      const a = nodePositions[e.from];
+      const b = nodePositions[e.to];
+      if (!a || !b) return;
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      let force = (dist - 200) * 0.02 * alpha;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a.x += fx; a.y += fy;
+      b.x -= fx; b.y -= fy;
+    });
+  }
+}
 
-    with Diagram(
-        output_name.replace("_", " ").title(),
-        filename=output_name,
-        outformat=output_format,
-        direction=direction,
-        show=False,
-        graph_attr=graph_attr,
-        node_attr=node_attr,
-    ):
-        # Nodes we'll store for edges
-        nodes = {}
+// ═══ RENDER ════════════════════════════════════════════════════════════
+function render() {
+  const svg = document.getElementById('graphSvg');
+  // Remove old content (keep defs)
+  svg.querySelectorAll('.edge-line, .node-group').forEach(el => el.remove());
 
-        def make_node(resource, cls_override=None):
-            mapping = RESOURCE_MAP.get(resource["type"])
-            cls = cls_override or (mapping[0] if mapping else General)
-            label = build_label(resource, mapping)
-            key = f"{resource['type']}.{resource['name']}"
-            node = cls(label)
-            nodes[key] = node
-            return node
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  g.id = 'worldGroup';
+  g.setAttribute('transform', `translate(${transform.x},${transform.y}) scale(${transform.k})`);
 
-        # ── Internet / External ──
-        # CDN and DNS at the top
-        cdn_nodes = [make_node(r) for r in cdn]
-        dns_nodes = [make_node(r) for r in dns]
+  // Edges
+  EDGES.forEach(e => {
+    const a = nodePositions[e.from];
+    const b = nodePositions[e.to];
+    if (!a || !b) return;
 
-        # ── Gateways (outside VPC clusters) ──
-        igw_nodes = [make_node(r) for r in gateways if "internet_gateway" in r["type"]]
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.classList.add('edge-line');
+    line.dataset.from = e.from;
+    line.dataset.to = e.to;
+    line.setAttribute('x1', a.x + NODE_W / 2);
+    line.setAttribute('y1', a.y + NODE_H / 2);
+    line.setAttribute('x2', b.x + NODE_W / 2);
+    line.setAttribute('y2', b.y + NODE_H / 2);
+    g.appendChild(line);
+  });
 
-        # ── VPC clusters ──
-        if vpcs:
-            for vpc_res in vpcs:
-                vpc_label = f"VPC: {vpc_res['name'].replace('_', ' ').title()}"
-                with Cluster(vpc_label):
+  // Nodes
+  NODES.forEach(n => {
+    const pos = nodePositions[n.id];
+    if (!pos) return;
+    const ng = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    ng.classList.add('node-group');
+    ng.dataset.id = n.id;
+    ng.setAttribute('transform', `translate(${pos.x}, ${pos.y})`);
 
-                    vpc_node = make_node(vpc_res)
+    // Body rect
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.classList.add('node-body');
+    rect.setAttribute('width', NODE_W);
+    rect.setAttribute('height', NODE_H);
+    rect.setAttribute('fill', n.color + '18');
+    rect.setAttribute('stroke', n.color + '40');
+    rect.setAttribute('stroke-width', '1');
+    ng.appendChild(rect);
 
-                    # Public subnets cluster
-                    pub_nodes = []
-                    if public_subnets:
-                        with Cluster("Public Subnets", graph_attr={"bgcolor": "#e8f5e9", "style": "rounded"}):
-                            for s in public_subnets:
-                                pub_nodes.append(make_node(s, PublicSubnet))
+    // Color accent bar
+    const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    bar.setAttribute('width', '4');
+    bar.setAttribute('height', NODE_H);
+    bar.setAttribute('fill', n.color);
+    bar.setAttribute('rx', '2');
+    ng.appendChild(bar);
 
-                    # Private subnets cluster
-                    priv_nodes = []
-                    if private_subnets:
-                        with Cluster("Private Subnets", graph_attr={"bgcolor": "#e3f2fd", "style": "rounded"}):
-                            for s in private_subnets:
-                                priv_nodes.append(make_node(s, PrivateSubnet))
+    // Icon
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    icon.classList.add('node-icon');
+    icon.setAttribute('x', 22);
+    icon.setAttribute('y', NODE_H / 2);
+    icon.textContent = n.icon;
+    ng.appendChild(icon);
 
-                    # NAT Gateways
-                    nat_nodes = [make_node(r) for r in gateways if "nat_gateway" in r["type"]]
+    // Label
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.classList.add('node-label');
+    label.setAttribute('x', 40);
+    label.setAttribute('y', NODE_H / 2 - 6);
+    label.textContent = n.label.length > 22 ? n.label.slice(0, 20) + '…' : n.label;
+    ng.appendChild(label);
 
-                    # VPN Gateways
-                    vpn_nodes = [make_node(r) for r in gateways
-                                 if any(k in r["type"] for k in ["vpn_gateway", "vpn_connection", "customer_gateway", "client_vpn"])]
+    // Type
+    const typ = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    typ.classList.add('node-type');
+    typ.setAttribute('x', 40);
+    typ.setAttribute('y', NODE_H / 2 + 10);
+    typ.textContent = n.type;
+    ng.appendChild(typ);
 
-                    # Route Tables
-                    rt_nodes = [make_node(r) for r in route_tables]
+    // Events
+    ng.addEventListener('click', (ev) => { ev.stopPropagation(); selectNode(n.id); });
+    ng.addEventListener('mouseenter', (ev) => showTooltip(ev, n));
+    ng.addEventListener('mouseleave', hideTooltip);
+    ng.addEventListener('mousedown', (ev) => startDragNode(ev, n.id));
 
-                    # VPC Endpoints cluster
-                    ep_nodes = []
-                    if endpoints:
-                        with Cluster("VPC Endpoints", graph_attr={"bgcolor": "#fce4ec", "style": "rounded"}):
-                            for e in endpoints:
-                                ep_nodes.append(make_node(e))
+    g.appendChild(ng);
+  });
 
-                    # Network Firewall
-                    fw_nodes = [make_node(r) for r in firewall]
+  svg.appendChild(g);
+  applyFilters();
+}
 
-                    # Load Balancers
-                    lb_nodes = [make_node(r) for r in lb]
+function updateTransform() {
+  const g = document.getElementById('worldGroup');
+  if (g) g.setAttribute('transform', `translate(${transform.x},${transform.y}) scale(${transform.k})`);
+}
 
-                    # Security (NACLs, SGs)
-                    sec_nodes = [make_node(r) for r in security]
+// ═══ INTERACTION ═══════════════════════════════════════════════════════
+function selectNode(id) {
+  selectedNodeId = id;
+  document.querySelectorAll('.node-group').forEach(g => {
+    g.classList.toggle('selected', g.dataset.id === id);
+  });
+  document.querySelectorAll('.res-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.id === id);
+  });
+  highlightConnections(id);
+  openDetail(id);
+}
 
-                    # ── Edges within VPC ──
+function highlightConnections(id) {
+  const connected = new Set([id]);
+  EDGES.forEach(e => {
+    if (e.from === id) connected.add(e.to);
+    if (e.to === id) connected.add(e.from);
+  });
+  document.querySelectorAll('.node-group').forEach(g => {
+    g.classList.toggle('dimmed', !connected.has(g.dataset.id));
+  });
+  document.querySelectorAll('.edge-line').forEach(l => {
+    const from = l.dataset.from, to = l.dataset.to;
+    const isConn = (from === id || to === id);
+    l.classList.toggle('highlight', isConn);
+    l.classList.toggle('dimmed', !isConn);
+    if (isConn) l.setAttribute('marker-end', 'url(#arrowhead-hl)');
+    else l.setAttribute('marker-end', 'url(#arrowhead)');
+  });
+}
 
-                    # IGW -> public subnets
-                    for igw in igw_nodes:
-                        igw >> Edge(color="#4CAF50", style="bold") >> vpc_node
-                        for pub in pub_nodes:
-                            igw >> Edge(color="#4CAF50") >> pub
+function clearHighlights() {
+  selectedNodeId = null;
+  document.querySelectorAll('.node-group').forEach(g => {
+    g.classList.remove('selected', 'dimmed');
+  });
+  document.querySelectorAll('.edge-line').forEach(l => {
+    l.classList.remove('highlight', 'dimmed');
+    l.setAttribute('marker-end', 'url(#arrowhead)');
+  });
+  document.querySelectorAll('.res-item').forEach(el => el.classList.remove('active'));
+  closeDetail();
+}
 
-                    # NAT: public subnet -> NAT -> private subnet
-                    for nat in nat_nodes:
-                        for pub in pub_nodes[:1]:
-                            pub >> Edge(color="#FF9800", label="NAT") >> nat
-                        for priv in priv_nodes:
-                            nat >> Edge(color="#FF9800") >> priv
+// Tooltip
+function showTooltip(ev, node) {
+  const tt = document.getElementById('tooltip');
+  document.getElementById('ttTitle').textContent = node.label;
+  document.getElementById('ttType').textContent = node.type;
+  tt.classList.add('show');
+  tt.style.left = (ev.clientX + 12) + 'px';
+  tt.style.top  = (ev.clientY + 12) + 'px';
+}
+function hideTooltip() {
+  document.getElementById('tooltip').classList.remove('show');
+}
 
-                    # Route tables -> subnets
-                    for rt in rt_nodes:
-                        for pub in pub_nodes:
-                            rt >> Edge(color="#9E9E9E", style="dashed") >> pub
-                        for priv in priv_nodes:
-                            rt >> Edge(color="#9E9E9E", style="dashed") >> priv
+// Detail panel
+function openDetail(id) {
+  const node = NODES.find(n => n.id === id);
+  if (!node) return;
+  document.getElementById('detailIcon').textContent = node.icon;
+  document.getElementById('detailName').textContent = node.label;
+  document.getElementById('detailType').textContent = node.type;
 
-                    # Endpoints -> private subnets
-                    for ep in ep_nodes:
-                        for priv in priv_nodes[:1]:
-                            priv >> Edge(color="#E91E63", style="dotted") >> ep
+  let html = '';
 
-                    # Firewall in front
-                    for fw in fw_nodes:
-                        for igw in igw_nodes:
-                            igw >> Edge(color="#F44336", label="inspect") >> fw
+  // Details
+  if (node.details.length) {
+    html += '<div class="detail-section"><h4>Properties</h4>';
+    node.details.forEach(d => {
+      const [k, ...rest] = d.split(': ');
+      html += `<div class="detail-row"><span class="dk">${k}</span><span class="dv">${rest.join(': ')}</span></div>`;
+    });
+    html += '</div>';
+  }
 
-        else:
-            # No VPCs found — just lay out flat
-            for r in mapped:
-                make_node(r)
+  // Dependencies
+  const deps = EDGES.filter(e => e.to === id).map(e => e.from);
+  if (deps.length) {
+    html += '<div class="detail-section"><h4>Depends On</h4>';
+    deps.forEach(d => { html += `<a class="dep-link" onclick="selectNode('${d}')">${d}</a><br/>`; });
+    html += '</div>';
+  }
 
-        # ── Transit Gateway (outside VPC) ──
-        if tgw_resources:
-            with Cluster("Transit Gateway", graph_attr={"bgcolor": "#fff3e0", "style": "rounded"}):
-                for r in tgw_resources:
-                    make_node(r)
+  // Dependents
+  const dependents = EDGES.filter(e => e.from === id).map(e => e.to);
+  if (dependents.length) {
+    html += '<div class="detail-section"><h4>Used By</h4>';
+    dependents.forEach(d => { html += `<a class="dep-link" onclick="selectNode('${d}')">${d}</a><br/>`; });
+    html += '</div>';
+  }
 
-        # ── VPC Peering ──
-        peer_nodes = [make_node(r) for r in peering]
+  // Attributes
+  if (node.attrs && Object.keys(node.attrs).length) {
+    html += '<div class="detail-section"><h4>Attributes</h4>';
+    Object.entries(node.attrs).forEach(([k, v]) => {
+      let vs = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      if (vs.length > 60) vs = vs.slice(0, 57) + '…';
+      html += `<div class="detail-row"><span class="dk">${k}</span><span class="dv">${vs}</span></div>`;
+    });
+    html += '</div>';
+  }
 
-        # ── Direct Connect ──
-        if dx:
-            with Cluster("Direct Connect", graph_attr={"bgcolor": "#f3e5f5", "style": "rounded"}):
-                for r in dx:
-                    make_node(r)
+  document.getElementById('detailBody').innerHTML = html;
+  document.getElementById('detailPanel').classList.add('open');
+}
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('open');
+}
 
-        # ── Monitoring / Flow Logs ──
-        if flowlogs or monitoring or storage:
-            with Cluster("Logging & Monitoring", graph_attr={"bgcolor": "#FFFDE7", "style": "rounded"}):
-                fl_nodes = [make_node(r) for r in flowlogs]
-                mon_nodes = [make_node(r) for r in monitoring]
-                s3_nodes = [make_node(r) for r in storage]
+// Drag node
+function startDragNode(ev, id) {
+  if (ev.button !== 0) return;
+  ev.stopPropagation();
+  dragging = { id, startX: ev.clientX, startY: ev.clientY, origX: nodePositions[id].x, origY: nodePositions[id].y };
+}
+window.addEventListener('mousemove', ev => {
+  if (dragging) {
+    const dx = (ev.clientX - dragging.startX) / transform.k;
+    const dy = (ev.clientY - dragging.startY) / transform.k;
+    nodePositions[dragging.id].x = dragging.origX + dx;
+    nodePositions[dragging.id].y = dragging.origY + dy;
+    render();
+    if (selectedNodeId === dragging.id) selectNode(dragging.id);
+  }
+  if (panning) {
+    transform.x = panStart.tx + (ev.clientX - panStart.mx);
+    transform.y = panStart.ty + (ev.clientY - panStart.my);
+    updateTransform();
+  }
+});
+window.addEventListener('mouseup', () => { dragging = null; panning = false; });
 
-                # Flow logs -> CW/S3
-                for fl in fl_nodes:
-                    for cw in mon_nodes:
-                        fl >> Edge(color="#FFC107", style="dashed", label="logs") >> cw
-                    for s3 in s3_nodes:
-                        fl >> Edge(color="#FFC107", style="dashed", label="logs") >> s3
+// Pan
+const canvasArea = document.getElementById('canvasArea');
+canvasArea.addEventListener('mousedown', ev => {
+  if (ev.target.closest('.node-group') || ev.target.closest('.ctrl-btn')) return;
+  panning = true;
+  panStart = { mx: ev.clientX, my: ev.clientY, tx: transform.x, ty: transform.y };
+  clearHighlights();
+});
 
-    # ── Summary ──
-    output_file = f"{output_name}.{output_format}"
-    print(f"\n✅ Diagram generated: {output_file}")
-    print(f"   Resources diagrammed: {len(mapped)}")
-    if unmapped_types:
-        print(f"   Skipped resource types (not network-related): {len(unmapped_types)}")
-        if len(unmapped_types) <= 10:
-            for t in sorted(unmapped_types):
-                print(f"     - {t}")
+// Zoom
+canvasArea.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+  const rect = canvasArea.getBoundingClientRect();
+  const cx = ev.clientX - rect.left;
+  const cy = ev.clientY - rect.top;
+  transform.x = cx - (cx - transform.x) * delta;
+  transform.y = cy - (cy - transform.y) * delta;
+  transform.k *= delta;
+  transform.k = Math.max(0.15, Math.min(3, transform.k));
+  updateTransform();
+}, { passive: false });
 
-    return output_file
+function zoomIn()  { transform.k = Math.min(3, transform.k * 1.2); updateTransform(); }
+function zoomOut() { transform.k = Math.max(0.15, transform.k / 1.2); updateTransform(); }
+function resetView() {
+  // Fit all nodes
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  NODES.forEach(n => {
+    const p = nodePositions[n.id];
+    if (!p) return;
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x + NODE_W); maxY = Math.max(maxY, p.y + NODE_H);
+  });
+  const rect = canvasArea.getBoundingClientRect();
+  const gw = maxX - minX + 100, gh = maxY - minY + 100;
+  const k = Math.min(rect.width / gw, rect.height / gh, 1.5);
+  transform.k = k;
+  transform.x = (rect.width - gw * k) / 2 - minX * k + 50 * k;
+  transform.y = (rect.height - gh * k) / 2 - minY * k + 50 * k;
+  updateTransform();
+}
+
+// ═══ SIDEBAR ══════════════════════════════════════════════════════════
+function buildSidebar() {
+  // Pills
+  const pills = document.getElementById('pills');
+  pills.innerHTML = `
+    <span class="pill">TF <b>v${META.terraform_version}</b></span>
+    <span class="pill">Serial <b>#${META.serial}</b></span>
+    <span class="pill">Resources <b>${META.resource_count}</b></span>
+    <span class="pill">Edges <b>${META.edge_count}</b></span>
+  `;
+
+  // Legend
+  const legend = document.getElementById('legend');
+  Object.entries(CAT_COLORS).forEach(([cat, color]) => {
+    const count = CAT_COUNTS[cat] || 0;
+    if (!count) return;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.dataset.cat = cat;
+    item.innerHTML = `<span class="legend-dot" style="background:${color}"></span>
+      <span class="legend-label">${cat}</span>
+      <span class="legend-count">${count}</span>`;
+    item.addEventListener('click', () => toggleCategory(cat));
+    legend.appendChild(item);
+  });
+
+  // Resource list
+  const list = document.getElementById('resourceList');
+  NODES.forEach(n => {
+    const item = document.createElement('div');
+    item.className = 'res-item';
+    item.dataset.id = n.id;
+    item.dataset.cat = n.category;
+    item.innerHTML = `<span class="res-icon">${n.icon}</span>
+      <span class="res-label">${n.label}</span>
+      <span class="res-type">${n.type.replace('aws_','')}</span>`;
+    item.addEventListener('click', () => {
+      selectNode(n.id);
+      // Pan to node
+      const p = nodePositions[n.id];
+      const rect = canvasArea.getBoundingClientRect();
+      transform.x = rect.width / 2 - (p.x + NODE_W / 2) * transform.k;
+      transform.y = rect.height / 2 - (p.y + NODE_H / 2) * transform.k;
+      updateTransform();
+    });
+    list.appendChild(item);
+  });
+}
+
+// Search
+document.getElementById('searchInput').addEventListener('input', function() {
+  const q = this.value.toLowerCase();
+  document.querySelectorAll('.res-item').forEach(el => {
+    const id = el.dataset.id;
+    const node = NODES.find(n => n.id === id);
+    const match = !q || id.toLowerCase().includes(q) || node.label.toLowerCase().includes(q);
+    el.classList.toggle('hidden', !match);
+  });
+});
+
+// Category filter
+function toggleCategory(cat) {
+  if (activeCategories.has(cat)) activeCategories.delete(cat);
+  else activeCategories.add(cat);
+  applyFilters();
+}
+
+function applyFilters() {
+  document.querySelectorAll('.legend-item').forEach(el => {
+    el.classList.toggle('dimmed', !activeCategories.has(el.dataset.cat));
+  });
+  document.querySelectorAll('.node-group').forEach(g => {
+    const node = NODES.find(n => n.id === g.dataset.id);
+    if (node) g.style.display = activeCategories.has(node.category) ? '' : 'none';
+  });
+  document.querySelectorAll('.edge-line').forEach(l => {
+    const fromNode = NODES.find(n => n.id === l.dataset.from);
+    const toNode   = NODES.find(n => n.id === l.dataset.to);
+    const vis = fromNode && toNode && activeCategories.has(fromNode.category) && activeCategories.has(toNode.category);
+    l.style.display = vis ? '' : 'none';
+  });
+  document.querySelectorAll('.res-item').forEach(el => {
+    if (!activeCategories.has(el.dataset.cat)) el.classList.add('hidden');
+    else el.classList.remove('hidden');
+  });
+}
+
+// ═══ INIT ══════════════════════════════════════════════════════════════
+layoutGraph();
+buildSidebar();
+render();
+requestAnimationFrame(() => resetView());
+</script>
+</body>
+</html>"""
 
 
-# ─── CLI ────────────────────────────────────────────────────────────────────────
-
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLI
+# ═══════════════════════════════════════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate AWS networking diagram from Terraform code",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s ./infrastructure/networking
-  %(prog)s ./terraform --output my_network --format svg
-  %(prog)s ./modules --direction LR --show-all
-        """,
+        description="Generate an interactive HTML infrastructure diagram from a Terraform state file."
     )
-    parser.add_argument(
-        "terraform_dir",
-        help="Path to Terraform directory (scanned recursively)",
-    )
-    parser.add_argument(
-        "--output", "-o",
-        default="aws_network_diagram",
-        help="Output filename without extension (default: aws_network_diagram)",
-    )
-    parser.add_argument(
-        "--format", "-f",
-        default="png",
-        choices=["png", "svg", "pdf", "jpg"],
-        help="Output format (default: png)",
-    )
-    parser.add_argument(
-        "--direction", "-d",
-        default="TB",
-        choices=["TB", "BT", "LR", "RL"],
-        help="Diagram direction: TB (top-bottom), LR (left-right), etc.",
-    )
-    parser.add_argument(
-        "--show-all",
-        action="store_true",
-        help="Include unmapped AWS resources as generic nodes",
-    )
-    parser.add_argument(
-        "--list-resources",
-        action="store_true",
-        help="Just list discovered resources without generating a diagram",
-    )
-
+    parser.add_argument("tfstate", help="Path to the terraform.tfstate file")
+    parser.add_argument("-o", "--output", default="infra-map.html",
+                        help="Output HTML file (default: infra-map.html)")
     args = parser.parse_args()
 
-    # Validate path
-    tf_dir = Path(args.terraform_dir)
-    if not tf_dir.is_dir():
-        print(f"❌ Not a directory: {tf_dir}")
-        sys.exit(1)
+    print(f"📂 Reading state file: {args.tfstate}")
+    state = parse_tfstate(args.tfstate)
 
-    # Find and parse
-    tf_files = find_tf_files(str(tf_dir))
-    if not tf_files:
-        print(f"❌ No .tf files found in {tf_dir}")
-        sys.exit(1)
+    print(f"🔍 Extracting resources and dependencies…")
+    nodes, edges = extract_graph(state)
+    print(f"   Found {len(nodes)} resources and {len(edges)} dependency edges")
 
-    print(f"📂 Scanning {len(tf_files)} .tf files in {tf_dir}...")
-    resources = parse_tf_resources(tf_files)
-    print(f"🔍 Found {len(resources)} resource blocks")
+    print(f"🎨 Generating HTML diagram…")
+    html = build_html(nodes, edges, state, args.tfstate)
 
-    if args.list_resources:
-        type_counts = defaultdict(int)
-        for r in resources:
-            type_counts[r["type"]] += 1
-        print("\nResource types found:")
-        for t, count in sorted(type_counts.items()):
-            marker = "✓" if t in RESOURCE_MAP else " "
-            print(f"  {marker} {t}: {count}")
-        print(f"\n✓ = mapped to diagram node ({sum(1 for t in type_counts if t in RESOURCE_MAP)}/{len(type_counts)})")
-        sys.exit(0)
-
-    # Generate
-    generate_diagram(
-        resources,
-        output_name=args.output,
-        output_format=args.format,
-        show_all=args.show_all,
-        direction=args.direction,
-    )
+    out_path = Path(args.output)
+    out_path.write_text(html)
+    print(f"✅ Written to {out_path.resolve()}")
+    print(f"   Open in browser or push to GitHub Pages!")
 
 
 if __name__ == "__main__":
