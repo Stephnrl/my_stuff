@@ -1,156 +1,561 @@
-name: Test GitVersion Setup on Enterprise Runners
+#!/usr/bin/env python3
+"""
+tf_diagram.py — Generate AWS networking architecture diagrams from Terraform code.
 
-on:
-  workflow_dispatch:
+Uses the `diagrams` library (https://diagrams.mingrammer.com/) to parse .tf files
+and produce a visual diagram of your networking infrastructure.
 
-jobs:
-  # -------------------------------------------------------
-  # Job 1: Explicit version — skips NuGet query, still needs
-  # network for dotnet tool install (unless pre-cached)
-  # -------------------------------------------------------
-  test-explicit-version:
-    name: "Explicit versionSpec (6.0.5)"
-    runs-on: enterprise
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+Usage:
+    python3 tf_diagram.py /path/to/terraform/repo
+    python3 tf_diagram.py /path/to/terraform/repo --output my_diagram --format svg
+    python3 tf_diagram.py /path/to/terraform/repo --show-all  # include non-network resources
+"""
 
-      # Diagnostic: confirm network reachability to NuGet
-      - name: Test NuGet connectivity
-        run: |
-          echo "--- Testing NuGet API reachability ---"
-          curl -sf --max-time 10 https://azuresearch-usnc.nuget.org/query?q=gitversion.tool&take=1 \
-            && echo "SUCCESS: NuGet search API reachable" \
-            || echo "FAILED: NuGet search API unreachable"
-          echo ""
-          curl -sf --max-time 10 https://api.nuget.org/v3/index.json \
-            && echo "SUCCESS: NuGet package API reachable" \
-            || echo "FAILED: NuGet package API unreachable"
+import argparse
+import json
+import os
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
 
-      # Diagnostic: check dotnet availability
-      - name: Check dotnet SDK
-        run: |
-          echo "--- dotnet info ---"
-          which dotnet && dotnet --info || echo "dotnet not found on PATH"
-          echo ""
-          echo "--- Runner tool cache ---"
-          echo "RUNNER_TOOL_CACHE: ${RUNNER_TOOL_CACHE:-not set}"
-          ls -la "${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}" 2>/dev/null || echo "Tool cache directory not found"
+# ─── Diagram Imports ────────────────────────────────────────────────────────────
+from diagrams import Cluster, Diagram, Edge
+from diagrams.aws.network import (
+    VPC, PublicSubnet, PrivateSubnet, NATGateway, InternetGateway,
+    RouteTable, Endpoint, VPCFlowLogs, VPCPeering, TransitGateway,
+    TransitGatewayAttachment, Privatelink, NLB, ALB, CLB,
+    VpnGateway, VpnConnection, SiteToSiteVpn, ClientVpn,
+    NetworkFirewall, Nacl, Route53, Route53HostedZone,
+    CloudFront, DirectConnect, ELB, GlobalAccelerator,
+)
+from diagrams.aws.security import (
+    WAF, SecurityHub, Guardduty, KMS, IAMRole, ACM, Shield,
+)
+from diagrams.aws.management import (
+    Cloudwatch, CloudwatchLogs, Cloudtrail, Config,
+)
+from diagrams.aws.storage import S3
+from diagrams.aws.general import General
 
-      # Diagnostic: check if GitVersion.Tool is already cached
-      - name: Check tool cache for GitVersion
-        run: |
-          echo "--- Looking for cached GitVersion.Tool ---"
-          CACHE_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
-          find "$CACHE_DIR" -maxdepth 3 -name "GitVersion*" -type d 2>/dev/null || echo "No cached GitVersion found"
-          find "$CACHE_DIR" -maxdepth 3 -name "gitversion*" -type d 2>/dev/null || echo "No cached gitversion found"
+# ─── Terraform Resource → Diagram Node Mapping ─────────────────────────────────
+# Maps Terraform resource types to (DiagramClass, Category, FriendlyLabel)
+RESOURCE_MAP = {
+    # VPC Core
+    "aws_vpc":                          (VPC,                "vpc",       "VPC"),
+    "aws_default_vpc":                  (VPC,                "vpc",       "Default VPC"),
 
-      - name: Install GitVersion (explicit 6.0.5)
-        uses: gittools/actions/gitversion/setup@v3.0.0
-        with:
-          versionSpec: "6.0.5"
+    # Subnets
+    "aws_subnet":                       (None,               "subnet",    "Subnet"),       # resolved to Public/Private dynamically
+    "aws_default_subnet":               (None,               "subnet",    "Default Subnet"),
 
-      - name: Determine Version
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@v3.0.0
+    # Gateways
+    "aws_internet_gateway":             (InternetGateway,    "gateway",   "Internet GW"),
+    "aws_egress_only_internet_gateway": (InternetGateway,    "gateway",   "Egress-Only IGW"),
+    "aws_nat_gateway":                  (NATGateway,         "gateway",   "NAT GW"),
+    "aws_vpn_gateway":                  (VpnGateway,         "gateway",   "VPN GW"),
+    "aws_vpn_connection":               (VpnConnection,      "gateway",   "VPN Connection"),
+    "aws_customer_gateway":             (SiteToSiteVpn,      "gateway",   "Customer GW"),
+    "aws_ec2_client_vpn_endpoint":      (ClientVpn,          "gateway",   "Client VPN"),
 
-      - name: Display version outputs
-        run: |
-          echo "FullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}"
-          echo "Major: ${{ steps.gitversion.outputs.major }}"
-          echo "Minor: ${{ steps.gitversion.outputs.minor }}"
-          echo "Patch: ${{ steps.gitversion.outputs.patch }}"
+    # Transit Gateway
+    "aws_ec2_transit_gateway":                     (TransitGateway,           "tgw", "Transit GW"),
+    "aws_ec2_transit_gateway_vpc_attachment":       (TransitGatewayAttachment, "tgw", "TGW Attachment"),
+    "aws_ec2_transit_gateway_route_table":          (TransitGateway,           "tgw", "TGW Route Table"),
+    "aws_ec2_transit_gateway_peering_attachment":   (TransitGatewayAttachment, "tgw", "TGW Peering"),
 
-  # -------------------------------------------------------
-  # Job 2: Wildcard version — requires NuGet query to resolve
-  # the spec before it can check cache or install
-  # -------------------------------------------------------
-  test-wildcard-version:
-    name: "Wildcard versionSpec (6.*)"
-    runs-on: enterprise
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    # Route Tables
+    "aws_route_table":                  (RouteTable,         "routing",   "Route Table"),
+    "aws_default_route_table":          (RouteTable,         "routing",   "Default RT"),
+    "aws_route":                        (None,               "routing",   None),           # skip individual routes
+    "aws_route_table_association":      (None,               "routing",   None),           # skip associations
 
-      - name: Test NuGet connectivity
-        run: |
-          echo "--- Testing NuGet API reachability ---"
-          curl -sf --max-time 10 https://azuresearch-usnc.nuget.org/query?q=gitversion.tool&take=1 \
-            && echo "SUCCESS: NuGet search API reachable" \
-            || echo "FAILED: NuGet search API unreachable"
-          echo ""
-          curl -sf --max-time 10 https://api.nuget.org/v3/index.json \
-            && echo "SUCCESS: NuGet package API reachable" \
-            || echo "FAILED: NuGet package API unreachable"
+    # VPC Endpoints (PrivateLink)
+    "aws_vpc_endpoint":                 (Endpoint,           "endpoint",  "VPC Endpoint"),
+    "aws_vpc_endpoint_service":         (Privatelink,        "endpoint",  "Endpoint Service"),
+    "aws_vpc_endpoint_route_table_association": (None,        "endpoint",  None),
+    "aws_vpc_endpoint_subnet_association":      (None,        "endpoint",  None),
 
-      - name: Check dotnet SDK
-        run: |
-          echo "--- dotnet info ---"
-          which dotnet && dotnet --info || echo "dotnet not found on PATH"
+    # Peering
+    "aws_vpc_peering_connection":       (VPCPeering,         "peering",   "VPC Peering"),
+    "aws_vpc_peering_connection_accepter": (VPCPeering,      "peering",   "Peering Accepter"),
 
-      - name: Install GitVersion (wildcard 6.*)
-        uses: gittools/actions/gitversion/setup@v3.0.0
-        with:
-          versionSpec: "6.*"
+    # Flow Logs
+    "aws_flow_log":                     (VPCFlowLogs,        "flowlogs",  "Flow Log"),
 
-      - name: Determine Version
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@v3.0.0
+    # Network ACLs
+    "aws_network_acl":                  (Nacl,               "security",  "NACL"),
+    "aws_default_network_acl":          (Nacl,               "security",  "Default NACL"),
+    "aws_network_acl_rule":             (None,               "security",  None),
 
-      - name: Display version outputs
-        run: |
-          echo "FullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}"
-          echo "Major: ${{ steps.gitversion.outputs.major }}"
-          echo "Minor: ${{ steps.gitversion.outputs.minor }}"
-          echo "Patch: ${{ steps.gitversion.outputs.patch }}"
+    # Security Groups (tracked but not individual rules)
+    "aws_security_group":               (Nacl,               "security",  "Security Group"),
+    "aws_default_security_group":       (Nacl,               "security",  "Default SG"),
+    "aws_security_group_rule":          (None,               "security",  None),
+    "aws_vpc_security_group_ingress_rule": (None,            "security",  None),
+    "aws_vpc_security_group_egress_rule":  (None,            "security",  None),
 
-  # -------------------------------------------------------
-  # Job 3: Original working config (baseline comparison)
-  # -------------------------------------------------------
-  test-current-working:
-    name: "Current working config (5.8.1)"
-    runs-on: enterprise
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    # Load Balancers
+    "aws_lb":                           (ALB,                "lb",        "Load Balancer"),
+    "aws_alb":                          (ALB,                "lb",        "ALB"),
+    "aws_lb_target_group":              (None,               "lb",        None),
+    "aws_lb_listener":                  (None,               "lb",        None),
 
-      - name: Test NuGet connectivity
-        run: |
-          echo "--- Testing NuGet API reachability ---"
-          curl -sf --max-time 10 https://azuresearch-usnc.nuget.org/query?q=gitversion.tool&take=1 \
-            && echo "SUCCESS: NuGet search API reachable" \
-            || echo "FAILED: NuGet search API unreachable"
-          echo ""
-          curl -sf --max-time 10 https://api.nuget.org/v3/index.json \
-            && echo "SUCCESS: NuGet package API reachable" \
-            || echo "FAILED: NuGet package API unreachable"
+    # DNS
+    "aws_route53_zone":                 (Route53HostedZone,  "dns",       "Hosted Zone"),
+    "aws_route53_record":               (None,               "dns",       None),
+    "aws_route53_resolver_endpoint":    (Route53,            "dns",       "R53 Resolver"),
+    "aws_route53_resolver_rule":        (None,               "dns",       None),
 
-      # Check if 5.8.1 is already cached (explains why it works)
-      - name: Check tool cache for GitVersion
-        run: |
-          echo "--- Looking for cached GitVersion.Tool ---"
-          CACHE_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
-          find "$CACHE_DIR" -maxdepth 3 -name "GitVersion*" -type d 2>/dev/null || echo "No cached GitVersion found"
-          find "$CACHE_DIR" -maxdepth 3 -name "gitversion*" -type d 2>/dev/null || echo "No cached gitversion found"
+    # CloudFront / CDN
+    "aws_cloudfront_distribution":      (CloudFront,         "cdn",       "CloudFront"),
 
-      - name: Install GitVersion (5.8.1 — current working)
-        uses: gittools/actions/gitversion/setup@v3.0.0
-        with:
-          versionSpec: "5.8.1"
+    # Direct Connect
+    "aws_dx_connection":                (DirectConnect,      "dx",        "Direct Connect"),
+    "aws_dx_gateway":                   (DirectConnect,      "dx",        "DX Gateway"),
 
-      - name: Determine Version
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@v3.0.0
+    # Firewall
+    "aws_networkfirewall_firewall":     (NetworkFirewall,    "firewall",  "Network Firewall"),
+    "aws_networkfirewall_firewall_policy": (None,            "firewall",  None),
+    "aws_networkfirewall_rule_group":   (None,               "firewall",  None),
 
-      - name: Display version outputs
-        run: |
-          echo "FullSemVer: ${{ steps.gitversion.outputs.fullSemVer }}"
-          echo "Major: ${{ steps.gitversion.outputs.major }}"
-          echo "Minor: ${{ steps.gitversion.outputs.minor }}"
-          echo "Patch: ${{ steps.gitversion.outputs.patch }}"
+    # Monitoring / Logging support
+    "aws_cloudwatch_log_group":         (CloudwatchLogs,     "monitoring", "CW Log Group"),
+    "aws_s3_bucket":                    (S3,                 "storage",    "S3 Bucket"),
+    "aws_iam_role":                     (IAMRole,            "iam",        "IAM Role"),
+    "aws_kms_key":                      (KMS,                "security",   "KMS Key"),
+    "aws_wafv2_web_acl":               (WAF,                "security",   "WAF ACL"),
+}
+
+# ─── Terraform Parser ───────────────────────────────────────────────────────────
+
+def find_tf_files(root_dir: str) -> list[Path]:
+    """Recursively find all .tf files, skipping .terraform directories."""
+    tf_files = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        dirnames[:] = [d for d in dirnames if d != ".terraform"]
+        for f in filenames:
+            if f.endswith(".tf"):
+                tf_files.append(Path(dirpath) / f)
+    return sorted(tf_files)
+
+
+def parse_tf_resources(tf_files: list[Path]) -> list[dict]:
+    """
+    Parse resource blocks from .tf files using regex.
+    Returns list of dicts: {type, name, body, file, module_path}
+    """
+    # Matches: resource "aws_vpc" "main" { ... }
+    resource_re = re.compile(
+        r'resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.MULTILINE
+    )
+    # Matches: module "vpc" { source = "..." }
+    module_re = re.compile(
+        r'module\s+"([^"]+)"\s*\{', re.MULTILINE
+    )
+
+    resources = []
+
+    for tf_file in tf_files:
+        content = tf_file.read_text(errors="replace")
+        rel_path = tf_file.parent.name or "root"
+
+        # Extract resources
+        for match in resource_re.finditer(content):
+            res_type = match.group(1)
+            res_name = match.group(2)
+
+            # Extract the body (find matching closing brace)
+            body_start = match.end()
+            body = _extract_block(content, body_start)
+
+            resources.append({
+                "type": res_type,
+                "name": res_name,
+                "body": body,
+                "file": str(tf_file),
+                "module_path": rel_path,
+            })
+
+    return resources
+
+
+def _extract_block(content: str, start: int) -> str:
+    """Extract a {} block from content starting after the opening brace."""
+    depth = 1
+    i = start
+    while i < len(content) and depth > 0:
+        if content[i] == "{":
+            depth += 1
+        elif content[i] == "}":
+            depth -= 1
+        i += 1
+    return content[start:i - 1]
+
+
+def classify_subnet(resource: dict) -> type:
+    """Determine if a subnet is public or private based on common heuristics."""
+    body = resource["body"].lower()
+    name = resource["name"].lower()
+
+    # Check for map_public_ip_on_launch = true
+    if re.search(r'map_public_ip_on_launch\s*=\s*true', body):
+        return PublicSubnet
+
+    # Check naming conventions
+    if any(kw in name for kw in ["public", "pub", "dmz", "external"]):
+        return PublicSubnet
+    if any(kw in name for kw in ["private", "priv", "internal", "app", "data", "db"]):
+        return PrivateSubnet
+
+    # Check tags
+    if re.search(r'(name|Name).*public', body):
+        return PublicSubnet
+    if re.search(r'(name|Name).*private', body):
+        return PrivateSubnet
+
+    return PrivateSubnet  # default to private
+
+
+def extract_vpc_references(resource: dict) -> str | None:
+    """Try to find which VPC a resource belongs to via vpc_id references."""
+    body = resource["body"]
+    # Match vpc_id = aws_vpc.main.id or var.vpc_id or module.vpc.id patterns
+    m = re.search(r'vpc_id\s*=\s*(?:aws_vpc\.(\w+)\.id|(\S+))', body)
+    if m:
+        return m.group(1) or m.group(2)
+    return None
+
+
+def extract_endpoint_service(resource: dict) -> str:
+    """Extract the service name from a VPC endpoint."""
+    body = resource["body"]
+    m = re.search(r'service_name\s*=\s*"?([^"\s]+)"?', body)
+    if m:
+        svc = m.group(1)
+        # Extract just the service part: com.amazonaws.region.s3 -> s3
+        parts = svc.split(".")
+        return parts[-1] if parts else svc
+    return ""
+
+
+# ─── Diagram Generator ──────────────────────────────────────────────────────────
+
+def build_label(resource: dict, mapping: tuple) -> str:
+    """Build a clean label for a diagram node."""
+    friendly = mapping[2] if mapping else resource["type"]
+    name = resource["name"].replace("_", " ").replace("-", " ").title()
+
+    # For endpoints, append the service name
+    if resource["type"] == "aws_vpc_endpoint":
+        svc = extract_endpoint_service(resource)
+        if svc:
+            return f"{friendly}\n({svc})"
+
+    return f"{friendly}\n{name}"
+
+
+def generate_diagram(
+    resources: list[dict],
+    output_name: str = "aws_network_diagram",
+    output_format: str = "png",
+    show_all: bool = False,
+    direction: str = "TB",
+):
+    """Generate the architecture diagram from parsed resources."""
+
+    # Filter to mapped resources only
+    mapped = []
+    unmapped_types = set()
+    for r in resources:
+        if r["type"] in RESOURCE_MAP:
+            mapping = RESOURCE_MAP[r["type"]]
+            if mapping[0] is not None:  # skip noise resources (routes, rules, etc.)
+                mapped.append(r)
+        elif show_all and r["type"].startswith("aws_"):
+            mapped.append(r)
+        else:
+            unmapped_types.add(r["type"])
+
+    if not mapped:
+        print("⚠️  No diagrammable resources found. Check your Terraform path.")
+        print(f"   Found {len(resources)} total resources, types: {sorted(set(r['type'] for r in resources))}")
+        sys.exit(1)
+
+    # Group resources by category
+    vpcs = [r for r in mapped if r["type"] in ("aws_vpc", "aws_default_vpc")]
+    subnets = [r for r in mapped if r["type"] in ("aws_subnet", "aws_default_subnet")]
+    endpoints = [r for r in mapped if r["type"] in ("aws_vpc_endpoint",)]
+    gateways = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "gateway"]
+    tgw_resources = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "tgw"]
+    flowlogs = [r for r in mapped if r["type"] == "aws_flow_log"]
+    route_tables = [r for r in mapped if r["type"] in ("aws_route_table", "aws_default_route_table")]
+    security = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "security"]
+    dns = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "dns"]
+    lb = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "lb"]
+    monitoring = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "monitoring"]
+    storage = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "storage"]
+    peering = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "peering"]
+    firewall = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "firewall"]
+    cdn = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "cdn"]
+    dx = [r for r in mapped if RESOURCE_MAP.get(r["type"], (None, ""))[1] == "dx"]
+
+    # Separate public vs private subnets
+    public_subnets = [s for s in subnets if classify_subnet(s) == PublicSubnet]
+    private_subnets = [s for s in subnets if classify_subnet(s) == PrivateSubnet]
+
+    # ── Build Diagram ──
+    graph_attr = {
+        "fontsize": "14",
+        "bgcolor": "white",
+        "pad": "0.5",
+        "nodesep": "0.8",
+        "ranksep": "1.0",
+    }
+
+    node_attr = {
+        "fontsize": "11",
+    }
+
+    with Diagram(
+        output_name.replace("_", " ").title(),
+        filename=output_name,
+        outformat=output_format,
+        direction=direction,
+        show=False,
+        graph_attr=graph_attr,
+        node_attr=node_attr,
+    ):
+        # Nodes we'll store for edges
+        nodes = {}
+
+        def make_node(resource, cls_override=None):
+            mapping = RESOURCE_MAP.get(resource["type"])
+            cls = cls_override or (mapping[0] if mapping else General)
+            label = build_label(resource, mapping)
+            key = f"{resource['type']}.{resource['name']}"
+            node = cls(label)
+            nodes[key] = node
+            return node
+
+        # ── Internet / External ──
+        # CDN and DNS at the top
+        cdn_nodes = [make_node(r) for r in cdn]
+        dns_nodes = [make_node(r) for r in dns]
+
+        # ── Gateways (outside VPC clusters) ──
+        igw_nodes = [make_node(r) for r in gateways if "internet_gateway" in r["type"]]
+
+        # ── VPC clusters ──
+        if vpcs:
+            for vpc_res in vpcs:
+                vpc_label = f"VPC: {vpc_res['name'].replace('_', ' ').title()}"
+                with Cluster(vpc_label):
+
+                    vpc_node = make_node(vpc_res)
+
+                    # Public subnets cluster
+                    pub_nodes = []
+                    if public_subnets:
+                        with Cluster("Public Subnets", graph_attr={"bgcolor": "#e8f5e9", "style": "rounded"}):
+                            for s in public_subnets:
+                                pub_nodes.append(make_node(s, PublicSubnet))
+
+                    # Private subnets cluster
+                    priv_nodes = []
+                    if private_subnets:
+                        with Cluster("Private Subnets", graph_attr={"bgcolor": "#e3f2fd", "style": "rounded"}):
+                            for s in private_subnets:
+                                priv_nodes.append(make_node(s, PrivateSubnet))
+
+                    # NAT Gateways
+                    nat_nodes = [make_node(r) for r in gateways if "nat_gateway" in r["type"]]
+
+                    # VPN Gateways
+                    vpn_nodes = [make_node(r) for r in gateways
+                                 if any(k in r["type"] for k in ["vpn_gateway", "vpn_connection", "customer_gateway", "client_vpn"])]
+
+                    # Route Tables
+                    rt_nodes = [make_node(r) for r in route_tables]
+
+                    # VPC Endpoints cluster
+                    ep_nodes = []
+                    if endpoints:
+                        with Cluster("VPC Endpoints", graph_attr={"bgcolor": "#fce4ec", "style": "rounded"}):
+                            for e in endpoints:
+                                ep_nodes.append(make_node(e))
+
+                    # Network Firewall
+                    fw_nodes = [make_node(r) for r in firewall]
+
+                    # Load Balancers
+                    lb_nodes = [make_node(r) for r in lb]
+
+                    # Security (NACLs, SGs)
+                    sec_nodes = [make_node(r) for r in security]
+
+                    # ── Edges within VPC ──
+
+                    # IGW -> public subnets
+                    for igw in igw_nodes:
+                        igw >> Edge(color="#4CAF50", style="bold") >> vpc_node
+                        for pub in pub_nodes:
+                            igw >> Edge(color="#4CAF50") >> pub
+
+                    # NAT: public subnet -> NAT -> private subnet
+                    for nat in nat_nodes:
+                        for pub in pub_nodes[:1]:
+                            pub >> Edge(color="#FF9800", label="NAT") >> nat
+                        for priv in priv_nodes:
+                            nat >> Edge(color="#FF9800") >> priv
+
+                    # Route tables -> subnets
+                    for rt in rt_nodes:
+                        for pub in pub_nodes:
+                            rt >> Edge(color="#9E9E9E", style="dashed") >> pub
+                        for priv in priv_nodes:
+                            rt >> Edge(color="#9E9E9E", style="dashed") >> priv
+
+                    # Endpoints -> private subnets
+                    for ep in ep_nodes:
+                        for priv in priv_nodes[:1]:
+                            priv >> Edge(color="#E91E63", style="dotted") >> ep
+
+                    # Firewall in front
+                    for fw in fw_nodes:
+                        for igw in igw_nodes:
+                            igw >> Edge(color="#F44336", label="inspect") >> fw
+
+        else:
+            # No VPCs found — just lay out flat
+            for r in mapped:
+                make_node(r)
+
+        # ── Transit Gateway (outside VPC) ──
+        if tgw_resources:
+            with Cluster("Transit Gateway", graph_attr={"bgcolor": "#fff3e0", "style": "rounded"}):
+                for r in tgw_resources:
+                    make_node(r)
+
+        # ── VPC Peering ──
+        peer_nodes = [make_node(r) for r in peering]
+
+        # ── Direct Connect ──
+        if dx:
+            with Cluster("Direct Connect", graph_attr={"bgcolor": "#f3e5f5", "style": "rounded"}):
+                for r in dx:
+                    make_node(r)
+
+        # ── Monitoring / Flow Logs ──
+        if flowlogs or monitoring or storage:
+            with Cluster("Logging & Monitoring", graph_attr={"bgcolor": "#FFFDE7", "style": "rounded"}):
+                fl_nodes = [make_node(r) for r in flowlogs]
+                mon_nodes = [make_node(r) for r in monitoring]
+                s3_nodes = [make_node(r) for r in storage]
+
+                # Flow logs -> CW/S3
+                for fl in fl_nodes:
+                    for cw in mon_nodes:
+                        fl >> Edge(color="#FFC107", style="dashed", label="logs") >> cw
+                    for s3 in s3_nodes:
+                        fl >> Edge(color="#FFC107", style="dashed", label="logs") >> s3
+
+    # ── Summary ──
+    output_file = f"{output_name}.{output_format}"
+    print(f"\n✅ Diagram generated: {output_file}")
+    print(f"   Resources diagrammed: {len(mapped)}")
+    if unmapped_types:
+        print(f"   Skipped resource types (not network-related): {len(unmapped_types)}")
+        if len(unmapped_types) <= 10:
+            for t in sorted(unmapped_types):
+                print(f"     - {t}")
+
+    return output_file
+
+
+# ─── CLI ────────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate AWS networking diagram from Terraform code",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s ./infrastructure/networking
+  %(prog)s ./terraform --output my_network --format svg
+  %(prog)s ./modules --direction LR --show-all
+        """,
+    )
+    parser.add_argument(
+        "terraform_dir",
+        help="Path to Terraform directory (scanned recursively)",
+    )
+    parser.add_argument(
+        "--output", "-o",
+        default="aws_network_diagram",
+        help="Output filename without extension (default: aws_network_diagram)",
+    )
+    parser.add_argument(
+        "--format", "-f",
+        default="png",
+        choices=["png", "svg", "pdf", "jpg"],
+        help="Output format (default: png)",
+    )
+    parser.add_argument(
+        "--direction", "-d",
+        default="TB",
+        choices=["TB", "BT", "LR", "RL"],
+        help="Diagram direction: TB (top-bottom), LR (left-right), etc.",
+    )
+    parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Include unmapped AWS resources as generic nodes",
+    )
+    parser.add_argument(
+        "--list-resources",
+        action="store_true",
+        help="Just list discovered resources without generating a diagram",
+    )
+
+    args = parser.parse_args()
+
+    # Validate path
+    tf_dir = Path(args.terraform_dir)
+    if not tf_dir.is_dir():
+        print(f"❌ Not a directory: {tf_dir}")
+        sys.exit(1)
+
+    # Find and parse
+    tf_files = find_tf_files(str(tf_dir))
+    if not tf_files:
+        print(f"❌ No .tf files found in {tf_dir}")
+        sys.exit(1)
+
+    print(f"📂 Scanning {len(tf_files)} .tf files in {tf_dir}...")
+    resources = parse_tf_resources(tf_files)
+    print(f"🔍 Found {len(resources)} resource blocks")
+
+    if args.list_resources:
+        type_counts = defaultdict(int)
+        for r in resources:
+            type_counts[r["type"]] += 1
+        print("\nResource types found:")
+        for t, count in sorted(type_counts.items()):
+            marker = "✓" if t in RESOURCE_MAP else " "
+            print(f"  {marker} {t}: {count}")
+        print(f"\n✓ = mapped to diagram node ({sum(1 for t in type_counts if t in RESOURCE_MAP)}/{len(type_counts)})")
+        sys.exit(0)
+
+    # Generate
+    generate_diagram(
+        resources,
+        output_name=args.output,
+        output_format=args.format,
+        show_all=args.show_all,
+        direction=args.direction,
+    )
+
+
+if __name__ == "__main__":
+    main()
