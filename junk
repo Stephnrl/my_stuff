@@ -42,26 +42,20 @@ ContainerLog
 | order by TimeGenerated desc
 
 
-union ContainerLog, ContainerLogV2
+ContainerLog
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
-// Add all possible runner namespaces here
-| where Namespace in ("actions-runner-system", "arc-runners", "default") 
-// LogEntry is the column in V1, LogMessage is used in V2
-| where LogEntry has "0.69.4" or LogMessage has "0.69.4"
-    or LogEntry has "tpcp" or LogMessage has "tpcp"
-    or LogEntry has "aquasecurtiy" or LogMessage has "aquasecurtiy"
-| project TimeGenerated, Name, Namespace, LogEntry, LogMessage, Computer
+| where Namespace in ("actions-runner-system", "arc-runners", "default") // Add your namespaces
+| where LogEntry has "0.69.4" 
+    or LogEntry has "tpcp" 
+    or LogEntry has "aquasecurtiy"
+| project TimeGenerated, Name, Namespace, LogEntry, Computer
 | order by TimeGenerated desc
 
-
-union ContainerLog, ContainerLogV2
-| extend UnifiedNamespace = coalesce(Namespace, PodNamespace)
-| extend UnifiedLog = coalesce(LogEntry, LogMessage)
+ContainerLogV2
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
-// List your potential namespaces here
-| where UnifiedNamespace in ("actions-runner-system", "arc-runners", "default")
-| where UnifiedLog has "0.69.4" 
-    or UnifiedLog has "tpcp" 
-    or UnifiedLog has "aquasecurtiy"
-| project TimeGenerated, Name, UnifiedNamespace, UnifiedLog, Computer
+| where PodNamespace in ("actions-runner-system", "arc-runners", "default") // Add your namespaces
+| where LogMessage has "0.69.4" 
+    or LogMessage has "tpcp" 
+    or LogMessage has "aquasecurtiy"
+| project TimeGenerated, PodName, PodNamespace, LogMessage, Computer
 | order by TimeGenerated desc
