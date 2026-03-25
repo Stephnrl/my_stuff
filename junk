@@ -42,14 +42,14 @@ ContainerLog
 | order by TimeGenerated desc
 
 
+// Search all Container Logs for the malicious version
 ContainerLog
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
-| where Namespace in ("actions-runner-system", "arc-runners", "default") // Add your namespaces
 | where LogEntry has "0.69.4" 
     or LogEntry has "tpcp" 
     or LogEntry has "aquasecurtiy"
-| project TimeGenerated, Name, Namespace, LogEntry, Computer
-| order by TimeGenerated desc
+| project TimeGenerated, LogEntry, ContainerID, Computer
+
 
 ContainerLogV2
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
