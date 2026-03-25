@@ -20,3 +20,7 @@ for ORG in $ORGS; do
     fi
   done
 done
+
+
+# Replace 'your-enterprise-slug' with your actual enterprise name
+gh api /enterprises/your-enterprise-slug/orgs --paginate -q '.[].login'
