@@ -1,0 +1,22 @@
+# 1. Get a list of all Organizations you belong to
+ORGS=$(gh api user/orgs --paginate -q '.[].login')
+
+# 2. Loop through each Org and search for the malicious version
+for ORG in $ORGS; do
+  echo "--- Auditing Organization: $ORG ---"
+  
+  # List runs in the specific 12-hour window (March 19 17:00 to March 20 07:00)
+  # This narrows the search to the actual incident window to save time
+  RUN_IDS=$(gh run list --org "$ORG" --created "2026-03-19T17:00:00Z..2026-03-20T07:00:00Z" --limit 300 --json databaseId -q '.[].databaseId')
+
+  for ID in $RUN_IDS; do
+    # Check the log for the specific malicious version or the exfiltration domain
+    MATCH=$(gh run view "$ID" --org "$ORG" --log | grep -E "0.69.4|scan.aquasecurtiy.org|45.148.10.212")
+    
+    if [ ! -z "$MATCH" ]; then
+      echo "[!] POTENTIAL COMPROMISE FOUND in Run ID: $ID"
+      echo "    Match Details: $MATCH"
+      echo "    View Run: https://github.com/$ORG/actions/runs/$ID"
+    fi
+  done
+done
