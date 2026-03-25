@@ -52,3 +52,16 @@ union ContainerLog, ContainerLogV2
     or LogEntry has "aquasecurtiy" or LogMessage has "aquasecurtiy"
 | project TimeGenerated, Name, Namespace, LogEntry, LogMessage, Computer
 | order by TimeGenerated desc
+
+
+union ContainerLog, ContainerLogV2
+| extend UnifiedNamespace = coalesce(Namespace, PodNamespace)
+| extend UnifiedLog = coalesce(LogEntry, LogMessage)
+| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
+// List your potential namespaces here
+| where UnifiedNamespace in ("actions-runner-system", "arc-runners", "default")
+| where UnifiedLog has "0.69.4" 
+    or UnifiedLog has "tpcp" 
+    or UnifiedLog has "aquasecurtiy"
+| project TimeGenerated, Name, UnifiedNamespace, UnifiedLog, Computer
+| order by TimeGenerated desc
