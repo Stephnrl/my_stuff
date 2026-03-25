@@ -40,3 +40,13 @@ ContainerLog
     or LogEntry has "45.148.10.212"
 | project TimeGenerated, Name, LogEntry, Computer, ContainerID
 | order by TimeGenerated desc
+
+
+
+let MaliciousLogs = ContainerLog
+| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
+| where LogEntry has "0.69.4" or LogEntry has "tpcp.tar.gz";
+KubePodInventory
+| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
+| join kind=inner MaliciousLogs on $left.Name == $right.Name
+| project TimeGenerated, Name, LogEntry, PodLabel
