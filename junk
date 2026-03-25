@@ -42,19 +42,13 @@ ContainerLog
 | order by TimeGenerated desc
 
 
-
-let MaliciousLogs = ContainerLog
+union ContainerLog, ContainerLogV2
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
-| where LogEntry has "0.69.4" or LogEntry has "tpcp.tar.gz";
-KubePodInventory
-| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
-| join kind=inner MaliciousLogs on $left.Name == $right.Name
-| project TimeGenerated, Name, LogEntry, PodLabel
-
-
-
-AzureDiagnostics
-| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
-| where Category == "AzureFirewallDnsProxy" or Category == "CoreDNS"
-| where msg_s has "aquasecurtiy" 
-| project TimeGenerated, msg_s, SourceIP = clientip_s
+// Add all possible runner namespaces here
+| where Namespace in ("actions-runner-system", "arc-runners", "default") 
+// LogEntry is the column in V1, LogMessage is used in V2
+| where LogEntry has "0.69.4" or LogMessage has "0.69.4"
+    or LogEntry has "tpcp" or LogMessage has "tpcp"
+    or LogEntry has "aquasecurtiy" or LogMessage has "aquasecurtiy"
+| project TimeGenerated, Name, Namespace, LogEntry, LogMessage, Computer
+| order by TimeGenerated desc
