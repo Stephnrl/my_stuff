@@ -50,3 +50,11 @@ KubePodInventory
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
 | join kind=inner MaliciousLogs on $left.Name == $right.Name
 | project TimeGenerated, Name, LogEntry, PodLabel
+
+
+
+AzureDiagnostics
+| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
+| where Category == "AzureFirewallDnsProxy" or Category == "CoreDNS"
+| where msg_s has "aquasecurtiy" 
+| project TimeGenerated, msg_s, SourceIP = clientip_s
