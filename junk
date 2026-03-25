@@ -30,3 +30,13 @@ ContainerLogV2
 | where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
 | where LogMessage has "0.69.4" or LogMessage has "tpcp.tar.gz"
 | project TimeGenerated, PodName, LogMessage, Computer
+
+
+ContainerLog
+| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
+| where LogEntry has "0.69.4" 
+    or LogEntry has "tpcp.tar.gz" 
+    or LogEntry has "scan.aquasecurtiy.org" 
+    or LogEntry has "45.148.10.212"
+| project TimeGenerated, Name, LogEntry, Computer, ContainerID
+| order by TimeGenerated desc
