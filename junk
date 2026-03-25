@@ -24,3 +24,9 @@ done
 
 # Replace 'your-enterprise-slug' with your actual enterprise name
 gh api /enterprises/your-enterprise-slug/orgs --paginate -q '.[].login'
+
+
+ContainerLogV2
+| where TimeGenerated between (datetime(2026-03-19T17:40:00Z) .. datetime(2026-03-20T07:00:00Z))
+| where LogMessage has "0.69.4" or LogMessage has "tpcp.tar.gz"
+| project TimeGenerated, PodName, LogMessage, Computer
