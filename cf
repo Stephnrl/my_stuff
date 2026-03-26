@@ -1,0 +1,357 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Bootstrap stack — GitHub Actions OIDC provider, nonprod/prod IAM roles,
+  Terraform state S3 bucket, and DynamoDB state-lock table.
+  GovCloud-compatible (uses AWS::Partition for all ARNs).
+
+# ──────────────────────────────────────────────
+# Parameters
+# ──────────────────────────────────────────────
+Parameters:
+  GitHubOrg:
+    Type: String
+    Description: GitHub organization or user name.
+
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository name (without org prefix).
+
+  NonProdEnvironment:
+    Type: String
+    Default: nonprod
+    Description: GitHub Actions environment name for non-production deployments.
+
+  ProdEnvironment:
+    Type: String
+    Default: prod
+    Description: GitHub Actions environment name for production deployments.
+
+  TfStateBucketName:
+    Type: String
+    Description: >
+      Globally unique name for the Terraform state S3 bucket.
+      Example: myorg-terraform-state
+
+  TfLockTableName:
+    Type: String
+    Default: terraform-state-lock
+    Description: DynamoDB table name used for Terraform state locking.
+
+  PermissionsBoundaryArn:
+    Type: String
+    Default: ""
+    Description: >
+      (Optional) ARN of an IAM permissions boundary to attach to both roles.
+      Leave blank to skip.
+
+Conditions:
+  HasPermissionsBoundary: !Not [!Equals [!Ref PermissionsBoundaryArn, ""]]
+
+Resources:
+
+  # ──────────────────────────────────────────
+  # 1. GitHub OIDC Identity Provider
+  # ──────────────────────────────────────────
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        # GitHub's OIDC thumbprint — AWS validates the TLS cert chain
+        # regardless, so this value satisfies the API requirement.
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  # ──────────────────────────────────────────
+  # 2. IAM Role — NonProd
+  # ──────────────────────────────────────────
+  NonProdDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub github-actions-${NonProdEnvironment}
+      MaxSessionDuration: 3600
+      PermissionsBoundary:
+        !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${NonProdEnvironment}
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess   # ← scope down as needed
+      Tags:
+        - Key: Environment
+          Value: !Ref NonProdEnvironment
+
+  # ──────────────────────────────────────────
+  # 3. IAM Role — Prod
+  # ──────────────────────────────────────────
+  ProdDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub github-actions-${ProdEnvironment}
+      MaxSessionDuration: 3600
+      PermissionsBoundary:
+        !If [HasPermissionsBoundary, !Ref PermissionsBoundaryArn, !Ref "AWS::NoValue"]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:environment:${ProdEnvironment}
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess   # ← scope down as needed
+      Tags:
+        - Key: Environment
+          Value: !Ref ProdEnvironment
+
+  # ──────────────────────────────────────────
+  # 4a. KMS CMK for Terraform State Encryption
+  # ──────────────────────────────────────────
+  TfStateKmsKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for Terraform state bucket encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowRootAccountFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+
+  TfStateKmsKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/terraform-state
+      TargetKeyId: !Ref TfStateKmsKey
+
+  # ──────────────────────────────────────────
+  # 4b. S3 Access Logging Bucket
+  # ──────────────────────────────────────────
+  TfStateAccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${TfStateBucketName}-access-logs"
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: GOVERNANCE
+            Days: 365
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt TfStateKmsKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldLogs
+            Status: Enabled
+            ExpirationInDays: 365
+
+  TfStateAccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TfStateAccessLogsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3ServerAccessLogsPolicy
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub "${TfStateAccessLogsBucket.Arn}/*"
+            Condition:
+              ArnLike:
+                aws:SourceArn: !GetAtt TfStateBucket.Arn
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt TfStateAccessLogsBucket.Arn
+              - !Sub "${TfStateAccessLogsBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ──────────────────────────────────────────
+  # 4c. Terraform State — S3 Bucket
+  # ──────────────────────────────────────────
+  TfStateBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: TfStateAccessLogsBucketPolicy
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref TfStateBucketName
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !GetAtt TfStateKmsKey.Arn
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LoggingConfiguration:
+        DestinationBucketName: !Ref TfStateAccessLogsBucket
+        LogFilePrefix: state-bucket-logs/
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireNoncurrentVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+
+  TfStateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TfStateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Deny any non-TLS access
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt TfStateBucket.Arn
+              - !Sub "${TfStateBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          # Enforce TLS 1.2 minimum
+          - Sid: DenyOldTLSVersions
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt TfStateBucket.Arn
+              - !Sub "${TfStateBucket.Arn}/*"
+            Condition:
+              NumericLessThan:
+                s3:TlsVersion: "1.2"
+          # Deny uploads that don't use the CMK
+          - Sid: DenyNonKMSEncryptedUploads
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub "${TfStateBucket.Arn}/*"
+            Condition:
+              StringNotEquals:
+                s3:x-amz-server-side-encryption: aws:kms
+          # Deny uploads that specify the wrong KMS key
+          - Sid: DenyWrongKMSKey
+            Effect: Deny
+            Principal: "*"
+            Action: s3:PutObject
+            Resource: !Sub "${TfStateBucket.Arn}/*"
+            Condition:
+              StringNotEqualsIfExists:
+                s3:x-amz-server-side-encryption-aws-kms-key-id: !GetAtt TfStateKmsKey.Arn
+
+  # ──────────────────────────────────────────
+  # 5. Terraform State — DynamoDB Lock Table
+  # ──────────────────────────────────────────
+  TfLockTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Ref TfLockTableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LockID
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Purpose
+          Value: terraform-state-lock
+
+# ──────────────────────────────────────────────
+# Outputs
+# ──────────────────────────────────────────────
+Outputs:
+  OIDCProviderArn:
+    Description: ARN of the GitHub OIDC identity provider.
+    Value: !GetAtt GitHubOIDCProvider.Arn
+
+  NonProdRoleArn:
+    Description: IAM role ARN for nonprod GitHub Actions workflows.
+    Value: !GetAtt NonProdDeployRole.Arn
+
+  ProdRoleArn:
+    Description: IAM role ARN for prod GitHub Actions workflows.
+    Value: !GetAtt ProdDeployRole.Arn
+
+  TfStateBucketName:
+    Description: S3 bucket name for Terraform remote state.
+    Value: !Ref TfStateBucket
+
+  TfStateBucketArn:
+    Description: S3 bucket ARN for Terraform remote state.
+    Value: !GetAtt TfStateBucket.Arn
+
+  TfLockTableName:
+    Description: DynamoDB table name for Terraform state locking.
+    Value: !Ref TfLockTable
+
+  TfStateKmsKeyArn:
+    Description: KMS CMK ARN used for Terraform state encryption.
+    Value: !GetAtt TfStateKmsKey.Arn
+
+  TfStateAccessLogsBucketName:
+    Description: S3 bucket name for state bucket access logs.
+    Value: !Ref TfStateAccessLogsBucket
