@@ -1,31 +1,4 @@
-[
-  { "ParameterKey": "GitHubOrg",              "ParameterValue": "your-org" },
-  { "ParameterKey": "GitHubRepo",             "ParameterValue": "your-repo" },
-  { "ParameterKey": "NonProdEnvironment",      "ParameterValue": "nonprod" },
-  { "ParameterKey": "ProdEnvironment",         "ParameterValue": "prod" },
-  { "ParameterKey": "TfStateBucketName",       "ParameterValue": "your-account-id-tf-state" },
-  { "ParameterKey": "TfLockTableName",         "ParameterValue": "terraform-state-lock" },
-  { "ParameterKey": "PermissionsBoundaryArn",  "ParameterValue": "" },
-  { "ParameterKey": "TagEnvironment",          "ParameterValue": "shared-services" },
-  { "ParameterKey": "TagProjectName",          "ParameterValue": "security-tooling" },
-  { "ParameterKey": "TagApplicationName",      "ParameterValue": "bootstrap" },
-  { "ParameterKey": "TagChargeNumber",         "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagAccountId",            "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagOrgId",                "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagBusinessUnit",         "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagBusinessArea",         "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagResponsibleTeam",      "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagFinancialCategory",    "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagConfidentiality",      "ParameterValue": "restricted" },
-  { "ParameterKey": "TagExportControlled",     "ParameterValue": "false" },
-  { "ParameterKey": "TagCuiClassification",    "ParameterValue": "N/A" },
-  { "ParameterKey": "TagCompliance",           "ParameterValue": "cmmc-l2" },
-  { "ParameterKey": "TagExpectedEolDate",      "ParameterValue": "TBD" },
-  { "ParameterKey": "TagBusinessTier",         "ParameterValue": "TBD" },
-  { "ParameterKey": "TagSecurityTier",         "ParameterValue": "TBD" },
-  { "ParameterKey": "TagLandingzoneName",      "ParameterValue": "TBD" },
-  { "ParameterKey": "TagBusinessOwner",        "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagTechOwner",            "ParameterValue": "REPLACE_ME" },
-  { "ParameterKey": "TagSourceGithubProject",  "ParameterValue": "your-org/your-repo" },
-  { "ParameterKey": "TagTerraformManaged",     "ParameterValue": "true" }
-]
+Get-ChildItem -Path D:\ -Recurse -File -ErrorAction SilentlyContinue | 
+Sort-Object Length -Descending | 
+Select-Object -First 20 Name, @{Name="Size (GB)";Expression={[Math]::Round($_.Length / 1GB, 2)}}, LastWriteTime, FullName | 
+Format-Table -AutoSize
