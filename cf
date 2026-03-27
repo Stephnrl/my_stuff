@@ -1,4 +1,201 @@
-Get-ChildItem -Path D:\ -Recurse -File -ErrorAction SilentlyContinue | 
-Sort-Object Length -Descending | 
-Select-Object -First 20 Name, @{Name="Size (GB)";Expression={[Math]::Round($_.Length / 1GB, 2)}}, LastWriteTime, FullName | 
-Format-Table -AutoSize
+name: DNS Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      storage_account:
+        description: "Commercial storage account FQDN (e.g. myaccount.blob.core.windows.net)"
+        required: true
+        type: string
+      new_dns_server:
+        description: "IP of the NEW DNS server (top of VNet list)"
+        required: true
+        type: string
+      old_dns_server:
+        description: "IP of the OLD/previous primary DNS server"
+        required: true
+        type: string
+      extra_targets:
+        description: "Comma-separated additional FQDNs to test (optional)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  dns-diagnostics:
+    runs-on: [self-hosted, Linux, X64, enterprise]
+    timeout-minutes: 10
+
+    steps:
+      - name: Install diagnostic tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dnsutils traceroute > /dev/null 2>&1
+          echo "Tools installed: dig, nslookup, traceroute"
+
+      - name: Show current node DNS config
+        run: |
+          echo "===== /etc/resolv.conf ====="
+          cat /etc/resolv.conf
+          echo ""
+          echo "===== systemd-resolve status (if available) ====="
+          systemd-resolve --status 2>/dev/null || resolvectl status 2>/dev/null || echo "systemd-resolved not active"
+
+      - name: Build target list
+        id: targets
+        run: |
+          # Always test the primary target
+          TARGETS="${{ inputs.storage_account }}"
+
+          # Append any extra targets
+          if [ -n "${{ inputs.extra_targets }}" ]; then
+            TARGETS="$TARGETS,${{ inputs.extra_targets }}"
+          fi
+
+          # Add some baseline Azure endpoints for comparison
+          TARGETS="$TARGETS,login.microsoftonline.com,management.azure.com,github.com"
+
+          echo "targets=$TARGETS" >> "$GITHUB_OUTPUT"
+          echo "Testing: $TARGETS"
+
+      - name: Test DNS resolution - default (what CoreDNS forwards to)
+        run: |
+          echo "============================================="
+          echo "  DEFAULT RESOLVER (node's configured DNS)"
+          echo "============================================="
+          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
+          FAIL=0
+          for fqdn in "${FQDNS[@]}"; do
+            fqdn=$(echo "$fqdn" | xargs)  # trim whitespace
+            echo ""
+            echo "--- $fqdn ---"
+            if dig +short +timeout=5 +tries=2 "$fqdn" 2>&1 | head -5; then
+              echo "RESULT: OK"
+            else
+              echo "RESULT: FAILED"
+              FAIL=1
+            fi
+          done
+          echo ""
+          echo "===== Default resolver summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
+
+      - name: Test DNS resolution - NEW DNS server
+        run: |
+          echo "============================================="
+          echo "  NEW DNS SERVER: ${{ inputs.new_dns_server }}"
+          echo "============================================="
+          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
+          FAIL=0
+          for fqdn in "${FQDNS[@]}"; do
+            fqdn=$(echo "$fqdn" | xargs)
+            echo ""
+            echo "--- $fqdn ---"
+            if dig +short +timeout=5 +tries=2 "$fqdn" @${{ inputs.new_dns_server }} 2>&1 | head -5; then
+              echo "RESULT: OK"
+            else
+              echo "RESULT: FAILED"
+              FAIL=1
+            fi
+          done
+          echo ""
+          echo "===== New DNS server summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
+
+      - name: Test DNS resolution - OLD DNS server
+        run: |
+          echo "============================================="
+          echo "  OLD DNS SERVER: ${{ inputs.old_dns_server }}"
+          echo "============================================="
+          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
+          FAIL=0
+          for fqdn in "${FQDNS[@]}"; do
+            fqdn=$(echo "$fqdn" | xargs)
+            echo ""
+            echo "--- $fqdn ---"
+            if dig +short +timeout=5 +tries=2 "$fqdn" @${{ inputs.old_dns_server }} 2>&1 | head -5; then
+              echo "RESULT: OK"
+            else
+              echo "RESULT: FAILED"
+              FAIL=1
+            fi
+          done
+          echo ""
+          echo "===== Old DNS server summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
+
+      - name: Test DNS resolution - Azure wireserver (bypass custom DNS)
+        run: |
+          echo "============================================="
+          echo "  AZURE WIRESERVER: 168.63.129.16"
+          echo "============================================="
+          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
+          FAIL=0
+          for fqdn in "${FQDNS[@]}"; do
+            fqdn=$(echo "$fqdn" | xargs)
+            echo ""
+            echo "--- $fqdn ---"
+            if dig +short +timeout=5 +tries=2 "$fqdn" @168.63.129.16 2>&1 | head -5; then
+              echo "RESULT: OK"
+            else
+              echo "RESULT: FAILED"
+              FAIL=1
+            fi
+          done
+          echo ""
+          echo "===== Azure wireserver summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
+
+      - name: Response time comparison
+        run: |
+          echo "============================================="
+          echo "  RESPONSE TIME COMPARISON"
+          echo "============================================="
+          FQDN="${{ inputs.storage_account }}"
+          echo "Target: $FQDN"
+          echo ""
+
+          echo "--- Default resolver ---"
+          dig "$FQDN" +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          echo ""
+
+          echo "--- New DNS (${{ inputs.new_dns_server }}) ---"
+          dig "$FQDN" @${{ inputs.new_dns_server }} +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          echo ""
+
+          echo "--- Old DNS (${{ inputs.old_dns_server }}) ---"
+          dig "$FQDN" @${{ inputs.old_dns_server }} +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          echo ""
+
+          echo "--- Azure wireserver (168.63.129.16) ---"
+          dig "$FQDN" @168.63.129.16 +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+
+      - name: Network connectivity to DNS servers
+        run: |
+          echo "============================================="
+          echo "  PORT 53 CONNECTIVITY CHECK"
+          echo "============================================="
+          for SERVER in "${{ inputs.new_dns_server }}" "${{ inputs.old_dns_server }}" "168.63.129.16"; do
+            echo ""
+            echo "--- $SERVER ---"
+            echo -n "  TCP/53: "
+            timeout 3 bash -c "echo > /dev/tcp/$SERVER/53" 2>/dev/null && echo "OPEN" || echo "CLOSED/FILTERED"
+            echo -n "  UDP/53: "
+            timeout 3 bash -c "echo | nc -u -w2 $SERVER 53" 2>/dev/null && echo "REACHABLE" || echo "UNREACHABLE/FILTERED"
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          echo ""
+          echo "============================================="
+          echo "  DIAGNOSTIC SUMMARY"
+          echo "============================================="
+          echo ""
+          echo "If the NEW DNS server fails on commercial endpoints but the"
+          echo "OLD server and Azure wireserver succeed, the fix is one of:"
+          echo ""
+          echo "  1. Add a forwarder on the new DNS server for commercial zones"
+          echo "  2. Move the new DNS server below the old one in the VNet DNS list"
+          echo "  3. Ensure the new DNS server has recursion/forwarding to a"
+          echo "     public resolver (e.g. 168.63.129.16) for zones it doesn't own"
+          echo ""
+          echo "After any VNet DNS change, restart the VMSS instances or run:"
+          echo "  az vmss update-instances --instance-ids '*' ..."
+          echo "to ensure nodes pick up the new resolv.conf"
