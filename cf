@@ -1,138 +1,185 @@
-name: DNS Diagnostics
+name: Firewall Diagnostics
 
 on:
   workflow_dispatch:
     inputs:
-      new_dns_server:
-        description: "IP of the NEW DNS server (top of VNet list)"
-        required: true
+      extra_targets:
+        description: "Additional host:port pairs to test, comma-separated (optional)"
+        required: false
         type: string
-      old_dns_server:
-        description: "IP of the OLD/previous primary DNS server"
-        required: true
-        type: string
+        default: ""
 
 env:
-  # Commercial Azure endpoints to test - add/remove as needed
-  TARGETS: >-
-    github.com
-    packages.microsoft.com
-    login.microsoftonline.com
-    management.azure.com
-    mcr.microsoft.com
-    ghcr.io
-    pipelines.actions.githubusercontent.com
-  NEW_DNS: ${{ github.event.inputs.new_dns_server }}
-  OLD_DNS: ${{ github.event.inputs.old_dns_server }}
+  # Commercial endpoints critical for GitHub runners and Azure workloads
+  # Format: host:port
+  HTTPS_TARGETS: >-
+    github.com:443
+    api.github.com:443
+    ghcr.io:443
+    pipelines.actions.githubusercontent.com:443
+    results-receiver.actions.githubusercontent.com:443
+    mcr.microsoft.com:443
+    packages.microsoft.com:443
+    login.microsoftonline.com:443
+    management.azure.com:443
+    dc.services.visualstudio.com:443
+    objects.githubusercontent.com:443
+    production.cloudflare.docker.com:443
 
 jobs:
-  dns-diagnostics:
+  firewall-diagnostics:
     runs-on: [self-hosted, Linux, X64, enterprise]
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Install diagnostic tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq dnsutils > /dev/null 2>&1
-          echo "dig installed: $(dig -v 2>&1 | head -1)"
+          sudo apt-get install -y -qq curl traceroute nmap openssl netcat-openbsd > /dev/null 2>&1
+          echo "Tools ready"
 
-      - name: Show current node DNS config
+      - name: Node network info
         run: |
-          echo "===== /etc/resolv.conf ====="
-          cat /etc/resolv.conf
+          echo "===== Hostname / IP ====="
+          hostname -I 2>/dev/null || ip addr show | grep "inet " | awk '{print $2}'
           echo ""
-          echo "===== systemd-resolve status (if available) ====="
-          resolvectl status 2>/dev/null || systemd-resolve --status 2>/dev/null || echo "systemd-resolved not active"
+          echo "===== Default route ====="
+          ip route show default
+          echo ""
+          echo "===== Effective outbound IP ====="
+          curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "Could not determine (outbound HTTPS may be blocked)"
 
-      - name: Resolve against DEFAULT (what CoreDNS forwards to)
+      - name: TCP connectivity check (port 443)
         run: |
           echo "============================================="
-          echo "  DEFAULT RESOLVER (node configured DNS)"
+          echo "  TCP PORT 443 CONNECTIVITY"
           echo "============================================="
-          for fqdn in $TARGETS; do
-            printf "%-50s " "$fqdn"
-            result=$(dig +short +timeout=5 +tries=2 "$fqdn" 2>&1 | head -1)
-            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
-              echo "OK  ($result)"
+          echo ""
+          TARGETS="$HTTPS_TARGETS"
+          if [ -n "${{ github.event.inputs.extra_targets }}" ]; then
+            TARGETS="$TARGETS ${{ github.event.inputs.extra_targets }}"
+          fi
+
+          PASS=0
+          FAIL=0
+          FAILED_HOSTS=""
+
+          for entry in $TARGETS; do
+            host="${entry%%:*}"
+            port="${entry##*:}"
+            printf "%-55s " "$host:$port"
+
+            if nc -z -w 5 "$host" "$port" 2>/dev/null; then
+              echo "OPEN"
+              PASS=$((PASS + 1))
             else
-              echo "FAIL  ($result)"
+              echo "BLOCKED/TIMEOUT"
+              FAIL=$((FAIL + 1))
+              FAILED_HOSTS="$FAILED_HOSTS $host:$port"
             fi
           done
 
-      - name: Resolve against NEW DNS server
+          echo ""
+          echo "Passed: $PASS  Failed: $FAIL"
+          if [ $FAIL -gt 0 ]; then
+            echo "BLOCKED HOSTS:$FAILED_HOSTS"
+          fi
+
+      - name: TLS handshake test
         run: |
           echo "============================================="
-          echo "  NEW DNS SERVER: $NEW_DNS"
+          echo "  TLS HANDSHAKE TEST"
           echo "============================================="
-          for fqdn in $TARGETS; do
-            printf "%-50s " "$fqdn"
-            result=$(dig +short +timeout=5 +tries=2 "$fqdn" "@${NEW_DNS}" 2>&1 | head -1)
-            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
-              echo "OK  ($result)"
+          echo ""
+          echo "Tests full TLS negotiation - catches SSL inspection"
+          echo "proxies, cert pinning issues, and MITM devices."
+          echo ""
+
+          for entry in $HTTPS_TARGETS; do
+            host="${entry%%:*}"
+            port="${entry##*:}"
+            printf "%-55s " "$host"
+
+            result=$(echo | openssl s_client -connect "$host:$port" -servername "$host" -verify_return_error 2>&1)
+            exit_code=$?
+
+            if echo "$result" | grep -q "Verify return code: 0"; then
+              issuer=$(echo "$result" | grep "issuer=" | head -1 | sed 's/.*O = //' | cut -d',' -f1)
+              echo "OK  (issuer: $issuer)"
+            elif echo "$result" | grep -q "Verify return code:"; then
+              code=$(echo "$result" | grep "Verify return code:" | head -1)
+              echo "TLS_ERROR  ($code)"
             else
-              echo "FAIL  ($result)"
+              echo "CONNECT_FAILED"
             fi
           done
 
-      - name: Resolve against OLD DNS server
+          echo ""
+          echo "NOTE: If issuer shows your org name or a firewall vendor"
+          echo "instead of Microsoft/DigiCert/etc, traffic is being"
+          echo "SSL-inspected which may cause failures."
+
+      - name: HTTPS response code test
         run: |
           echo "============================================="
-          echo "  OLD DNS SERVER: $OLD_DNS"
+          echo "  HTTPS RESPONSE CODES"
           echo "============================================="
-          for fqdn in $TARGETS; do
-            printf "%-50s " "$fqdn"
-            result=$(dig +short +timeout=5 +tries=2 "$fqdn" "@${OLD_DNS}" 2>&1 | head -1)
-            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
-              echo "OK  ($result)"
+          echo ""
+
+          for entry in $HTTPS_TARGETS; do
+            host="${entry%%:*}"
+            printf "%-55s " "https://$host"
+
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --connect-timeout 5 "https://$host" 2>/dev/null)
+            time=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 --connect-timeout 5 "https://$host" 2>/dev/null)
+
+            if [ "$code" = "000" ]; then
+              echo "FAILED  (no response - likely blocked)"
             else
-              echo "FAIL  ($result)"
+              echo "HTTP $code  (${time}s)"
             fi
           done
 
-      - name: Resolve against Azure wireserver (baseline)
+      - name: Traceroute to key endpoints
         run: |
           echo "============================================="
-          echo "  AZURE WIRESERVER: 168.63.129.16"
+          echo "  TRACEROUTE (first 10 hops)"
           echo "============================================="
-          for fqdn in $TARGETS; do
-            printf "%-50s " "$fqdn"
-            result=$(dig +short +timeout=5 +tries=2 "$fqdn" @168.63.129.16 2>&1 | head -1)
-            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
-              echo "OK  ($result)"
-            else
-              echo "FAIL  ($result)"
-            fi
-          done
+          echo ""
+          echo "Look for where packets stop or hit a firewall."
+          echo ""
 
-      - name: Response time comparison
-        run: |
-          echo "============================================="
-          echo "  RESPONSE TIME COMPARISON (github.com)"
-          echo "============================================="
-          echo ""
-          echo "--- Default resolver ---"
-          dig github.com +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
-          echo ""
-          echo "--- New DNS ($NEW_DNS) ---"
-          dig github.com "@${NEW_DNS}" +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
-          echo ""
-          echo "--- Old DNS ($OLD_DNS) ---"
-          dig github.com "@${OLD_DNS}" +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
-          echo ""
-          echo "--- Azure wireserver (168.63.129.16) ---"
-          dig github.com @168.63.129.16 +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
-
-      - name: Port 53 connectivity check
-        run: |
-          echo "============================================="
-          echo "  PORT 53 CONNECTIVITY"
-          echo "============================================="
-          for SERVER in "$NEW_DNS" "$OLD_DNS" "168.63.129.16"; do
-            printf "%-20s TCP/53: " "$SERVER"
-            timeout 3 bash -c "echo > /dev/tcp/$SERVER/53" 2>/dev/null && echo -n "OPEN" || echo -n "CLOSED"
+          for host in github.com login.microsoftonline.com mcr.microsoft.com; do
+            echo "--- $host ---"
+            traceroute -m 10 -w 2 "$host" 2>&1 || echo "traceroute failed"
             echo ""
           done
+
+      - name: Test large download (runner package fetch)
+        run: |
+          echo "============================================="
+          echo "  DOWNLOAD TEST"
+          echo "============================================="
+          echo ""
+          echo "Simulates fetching runner packages / container images."
+          echo ""
+
+          URL="https://mcr.microsoft.com/v2/"
+          printf "%-55s " "$URL"
+          result=$(curl -s -o /dev/null -w "HTTP %{http_code} | %{time_total}s | %{size_download} bytes" --max-time 15 "$URL" 2>&1)
+          echo "$result"
+
+          echo ""
+          URL="https://ghcr.io/v2/"
+          printf "%-55s " "$URL"
+          result=$(curl -s -o /dev/null -w "HTTP %{http_code} | %{time_total}s | %{size_download} bytes" --max-time 15 "$URL" 2>&1)
+          echo "$result"
+
+          echo ""
+          URL="https://api.github.com/zen"
+          printf "%-55s " "$URL"
+          result=$(curl -s -o /dev/null -w "HTTP %{http_code} | %{time_total}s | %{size_download} bytes" --max-time 15 "$URL" 2>&1)
+          echo "$result"
 
       - name: Summary
         if: always()
@@ -142,15 +189,23 @@ jobs:
           echo "  HOW TO READ RESULTS"
           echo "============================================="
           echo ""
-          echo "Compare the four resolver columns above."
+          echo "  TCP=OPEN, TLS=OK, HTTP=2xx/3xx/401"
+          echo "    -> Connectivity is fine, issue is elsewhere."
           echo ""
-          echo "  NEW=FAIL, OLD=OK, wireserver=OK"
-          echo "    -> New DNS server cannot resolve commercial endpoints."
-          echo "    -> Fix: add forwarder on new server, or reorder VNet DNS list."
+          echo "  TCP=BLOCKED"
+          echo "    -> Firewall/NSG is dropping traffic to that host."
+          echo "    -> Check NSG outbound rules and Azure Firewall/NVA rules."
+          echo "    -> If using Azure Firewall, add FQDN application rules."
           echo ""
-          echo "  ALL=FAIL"
-          echo "    -> Network/firewall issue, not DNS config."
+          echo "  TCP=OPEN, TLS=ERROR"
+          echo "    -> SSL inspection is intercepting traffic."
+          echo "    -> Check if a firewall appliance is doing TLS termination."
+          echo "    -> The issuer in the TLS test will reveal the interceptor."
           echo ""
-          echo "  DEFAULT=FAIL, direct @server=OK"
-          echo "    -> Node resolv.conf is stale. Reimage or restart VMSS instances:"
-          echo "       az vmss update-instances -g <rg> -n <vmss> --instance-ids '*'"
+          echo "  TCP=OPEN, TLS=OK, HTTP=000"
+          echo "    -> L7 firewall or proxy is resetting the connection"
+          echo "    -> after TLS, likely an application-layer rule."
+          echo ""
+          echo "  Traceroute stops at hop N"
+          echo "    -> Packet is being dropped at that hop."
+          echo "    -> Cross-reference the IP with your NVA/firewall/UDR config."
