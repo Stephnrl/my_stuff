@@ -3,10 +3,6 @@ name: DNS Diagnostics
 on:
   workflow_dispatch:
     inputs:
-      storage_account:
-        description: "Commercial storage account FQDN (e.g. myaccount.blob.core.windows.net)"
-        required: true
-        type: string
       new_dns_server:
         description: "IP of the NEW DNS server (top of VNet list)"
         required: true
@@ -15,11 +11,19 @@ on:
         description: "IP of the OLD/previous primary DNS server"
         required: true
         type: string
-      extra_targets:
-        description: "Comma-separated additional FQDNs to test (optional)"
-        required: false
-        type: string
-        default: ""
+
+env:
+  # Commercial Azure endpoints to test - add/remove as needed
+  TARGETS: >-
+    github.com
+    packages.microsoft.com
+    login.microsoftonline.com
+    management.azure.com
+    mcr.microsoft.com
+    ghcr.io
+    pipelines.actions.githubusercontent.com
+  NEW_DNS: ${{ github.event.inputs.new_dns_server }}
+  OLD_DNS: ${{ github.event.inputs.old_dns_server }}
 
 jobs:
   dns-diagnostics:
@@ -30,8 +34,8 @@ jobs:
       - name: Install diagnostic tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq dnsutils traceroute > /dev/null 2>&1
-          echo "Tools installed: dig, nslookup, traceroute"
+          sudo apt-get install -y -qq dnsutils > /dev/null 2>&1
+          echo "dig installed: $(dig -v 2>&1 | head -1)"
 
       - name: Show current node DNS config
         run: |
@@ -39,145 +43,95 @@ jobs:
           cat /etc/resolv.conf
           echo ""
           echo "===== systemd-resolve status (if available) ====="
-          systemd-resolve --status 2>/dev/null || resolvectl status 2>/dev/null || echo "systemd-resolved not active"
+          resolvectl status 2>/dev/null || systemd-resolve --status 2>/dev/null || echo "systemd-resolved not active"
 
-      - name: Build target list
-        id: targets
-        run: |
-          # Always test the primary target
-          TARGETS="${{ inputs.storage_account }}"
-
-          # Append any extra targets
-          if [ -n "${{ inputs.extra_targets }}" ]; then
-            TARGETS="$TARGETS,${{ inputs.extra_targets }}"
-          fi
-
-          # Add some baseline Azure endpoints for comparison
-          TARGETS="$TARGETS,login.microsoftonline.com,management.azure.com,github.com"
-
-          echo "targets=$TARGETS" >> "$GITHUB_OUTPUT"
-          echo "Testing: $TARGETS"
-
-      - name: Test DNS resolution - default (what CoreDNS forwards to)
+      - name: Resolve against DEFAULT (what CoreDNS forwards to)
         run: |
           echo "============================================="
-          echo "  DEFAULT RESOLVER (node's configured DNS)"
+          echo "  DEFAULT RESOLVER (node configured DNS)"
           echo "============================================="
-          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
-          FAIL=0
-          for fqdn in "${FQDNS[@]}"; do
-            fqdn=$(echo "$fqdn" | xargs)  # trim whitespace
-            echo ""
-            echo "--- $fqdn ---"
-            if dig +short +timeout=5 +tries=2 "$fqdn" 2>&1 | head -5; then
-              echo "RESULT: OK"
+          for fqdn in $TARGETS; do
+            printf "%-50s " "$fqdn"
+            result=$(dig +short +timeout=5 +tries=2 "$fqdn" 2>&1 | head -1)
+            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
+              echo "OK  ($result)"
             else
-              echo "RESULT: FAILED"
-              FAIL=1
+              echo "FAIL  ($result)"
             fi
           done
-          echo ""
-          echo "===== Default resolver summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
 
-      - name: Test DNS resolution - NEW DNS server
+      - name: Resolve against NEW DNS server
         run: |
           echo "============================================="
-          echo "  NEW DNS SERVER: ${{ inputs.new_dns_server }}"
+          echo "  NEW DNS SERVER: $NEW_DNS"
           echo "============================================="
-          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
-          FAIL=0
-          for fqdn in "${FQDNS[@]}"; do
-            fqdn=$(echo "$fqdn" | xargs)
-            echo ""
-            echo "--- $fqdn ---"
-            if dig +short +timeout=5 +tries=2 "$fqdn" @${{ inputs.new_dns_server }} 2>&1 | head -5; then
-              echo "RESULT: OK"
+          for fqdn in $TARGETS; do
+            printf "%-50s " "$fqdn"
+            result=$(dig +short +timeout=5 +tries=2 "$fqdn" "@${NEW_DNS}" 2>&1 | head -1)
+            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
+              echo "OK  ($result)"
             else
-              echo "RESULT: FAILED"
-              FAIL=1
+              echo "FAIL  ($result)"
             fi
           done
-          echo ""
-          echo "===== New DNS server summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
 
-      - name: Test DNS resolution - OLD DNS server
+      - name: Resolve against OLD DNS server
         run: |
           echo "============================================="
-          echo "  OLD DNS SERVER: ${{ inputs.old_dns_server }}"
+          echo "  OLD DNS SERVER: $OLD_DNS"
           echo "============================================="
-          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
-          FAIL=0
-          for fqdn in "${FQDNS[@]}"; do
-            fqdn=$(echo "$fqdn" | xargs)
-            echo ""
-            echo "--- $fqdn ---"
-            if dig +short +timeout=5 +tries=2 "$fqdn" @${{ inputs.old_dns_server }} 2>&1 | head -5; then
-              echo "RESULT: OK"
+          for fqdn in $TARGETS; do
+            printf "%-50s " "$fqdn"
+            result=$(dig +short +timeout=5 +tries=2 "$fqdn" "@${OLD_DNS}" 2>&1 | head -1)
+            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
+              echo "OK  ($result)"
             else
-              echo "RESULT: FAILED"
-              FAIL=1
+              echo "FAIL  ($result)"
             fi
           done
-          echo ""
-          echo "===== Old DNS server summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
 
-      - name: Test DNS resolution - Azure wireserver (bypass custom DNS)
+      - name: Resolve against Azure wireserver (baseline)
         run: |
           echo "============================================="
           echo "  AZURE WIRESERVER: 168.63.129.16"
           echo "============================================="
-          IFS=',' read -ra FQDNS <<< "${{ steps.targets.outputs.targets }}"
-          FAIL=0
-          for fqdn in "${FQDNS[@]}"; do
-            fqdn=$(echo "$fqdn" | xargs)
-            echo ""
-            echo "--- $fqdn ---"
-            if dig +short +timeout=5 +tries=2 "$fqdn" @168.63.129.16 2>&1 | head -5; then
-              echo "RESULT: OK"
+          for fqdn in $TARGETS; do
+            printf "%-50s " "$fqdn"
+            result=$(dig +short +timeout=5 +tries=2 "$fqdn" @168.63.129.16 2>&1 | head -1)
+            if [ -n "$result" ] && ! echo "$result" | grep -qi "timed out\|SERVFAIL\|couldn't"; then
+              echo "OK  ($result)"
             else
-              echo "RESULT: FAILED"
-              FAIL=1
+              echo "FAIL  ($result)"
             fi
           done
-          echo ""
-          echo "===== Azure wireserver summary: $([ $FAIL -eq 0 ] && echo 'ALL PASSED' || echo 'SOME FAILED') ====="
 
       - name: Response time comparison
         run: |
           echo "============================================="
-          echo "  RESPONSE TIME COMPARISON"
+          echo "  RESPONSE TIME COMPARISON (github.com)"
           echo "============================================="
-          FQDN="${{ inputs.storage_account }}"
-          echo "Target: $FQDN"
           echo ""
-
           echo "--- Default resolver ---"
-          dig "$FQDN" +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          dig github.com +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
           echo ""
-
-          echo "--- New DNS (${{ inputs.new_dns_server }}) ---"
-          dig "$FQDN" @${{ inputs.new_dns_server }} +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          echo "--- New DNS ($NEW_DNS) ---"
+          dig github.com "@${NEW_DNS}" +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
           echo ""
-
-          echo "--- Old DNS (${{ inputs.old_dns_server }}) ---"
-          dig "$FQDN" @${{ inputs.old_dns_server }} +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          echo "--- Old DNS ($OLD_DNS) ---"
+          dig github.com "@${OLD_DNS}" +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
           echo ""
-
           echo "--- Azure wireserver (168.63.129.16) ---"
-          dig "$FQDN" @168.63.129.16 +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
+          dig github.com @168.63.129.16 +stats +timeout=5 2>&1 | grep -E "Query time|status|SERVER"
 
-      - name: Network connectivity to DNS servers
+      - name: Port 53 connectivity check
         run: |
           echo "============================================="
-          echo "  PORT 53 CONNECTIVITY CHECK"
+          echo "  PORT 53 CONNECTIVITY"
           echo "============================================="
-          for SERVER in "${{ inputs.new_dns_server }}" "${{ inputs.old_dns_server }}" "168.63.129.16"; do
+          for SERVER in "$NEW_DNS" "$OLD_DNS" "168.63.129.16"; do
+            printf "%-20s TCP/53: " "$SERVER"
+            timeout 3 bash -c "echo > /dev/tcp/$SERVER/53" 2>/dev/null && echo -n "OPEN" || echo -n "CLOSED"
             echo ""
-            echo "--- $SERVER ---"
-            echo -n "  TCP/53: "
-            timeout 3 bash -c "echo > /dev/tcp/$SERVER/53" 2>/dev/null && echo "OPEN" || echo "CLOSED/FILTERED"
-            echo -n "  UDP/53: "
-            timeout 3 bash -c "echo | nc -u -w2 $SERVER 53" 2>/dev/null && echo "REACHABLE" || echo "UNREACHABLE/FILTERED"
           done
 
       - name: Summary
@@ -185,17 +139,18 @@ jobs:
         run: |
           echo ""
           echo "============================================="
-          echo "  DIAGNOSTIC SUMMARY"
+          echo "  HOW TO READ RESULTS"
           echo "============================================="
           echo ""
-          echo "If the NEW DNS server fails on commercial endpoints but the"
-          echo "OLD server and Azure wireserver succeed, the fix is one of:"
+          echo "Compare the four resolver columns above."
           echo ""
-          echo "  1. Add a forwarder on the new DNS server for commercial zones"
-          echo "  2. Move the new DNS server below the old one in the VNet DNS list"
-          echo "  3. Ensure the new DNS server has recursion/forwarding to a"
-          echo "     public resolver (e.g. 168.63.129.16) for zones it doesn't own"
+          echo "  NEW=FAIL, OLD=OK, wireserver=OK"
+          echo "    -> New DNS server cannot resolve commercial endpoints."
+          echo "    -> Fix: add forwarder on new server, or reorder VNet DNS list."
           echo ""
-          echo "After any VNet DNS change, restart the VMSS instances or run:"
-          echo "  az vmss update-instances --instance-ids '*' ..."
-          echo "to ensure nodes pick up the new resolv.conf"
+          echo "  ALL=FAIL"
+          echo "    -> Network/firewall issue, not DNS config."
+          echo ""
+          echo "  DEFAULT=FAIL, direct @server=OK"
+          echo "    -> Node resolv.conf is stale. Reimage or restart VMSS instances:"
+          echo "       az vmss update-instances -g <rg> -n <vmss> --instance-ids '*'"
