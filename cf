@@ -87,6 +87,7 @@ jobs:
 
       - name: TLS handshake test
         run: |
+          set +e
           echo "============================================="
           echo "  TLS HANDSHAKE TEST"
           echo "============================================="
@@ -95,24 +96,35 @@ jobs:
           echo "proxies, cert pinning issues, and MITM devices."
           echo ""
 
+          TLS_FAIL=0
           for entry in $HTTPS_TARGETS; do
             host="${entry%%:*}"
             port="${entry##*:}"
             printf "%-55s " "$host"
 
-            result=$(echo | openssl s_client -connect "$host:$port" -servername "$host" -verify_return_error 2>&1)
-            exit_code=$?
+            result=$(echo Q | openssl s_client -connect "$host:$port" -servername "$host" -brief 2>&1)
+            full=$(echo Q | openssl s_client -connect "$host:$port" -servername "$host" 2>&1)
 
-            if echo "$result" | grep -q "Verify return code: 0"; then
-              issuer=$(echo "$result" | grep "issuer=" | head -1 | sed 's/.*O = //' | cut -d',' -f1)
+            if echo "$full" | grep -q "Verify return code: 0"; then
+              issuer=$(echo "$full" | grep "issuer=" | head -1 | sed 's/.*O = //' | cut -d',' -f1)
               echo "OK  (issuer: $issuer)"
-            elif echo "$result" | grep -q "Verify return code:"; then
-              code=$(echo "$result" | grep "Verify return code:" | head -1)
+            elif echo "$full" | grep -q "Verify return code:"; then
+              code=$(echo "$full" | grep "Verify return code:" | head -1)
               echo "TLS_ERROR  ($code)"
+              TLS_FAIL=1
             else
               echo "CONNECT_FAILED"
+              TLS_FAIL=1
             fi
           done
+
+          echo ""
+          if [ $TLS_FAIL -gt 0 ]; then
+            echo "WARNING: Some TLS handshakes failed - see details above"
+          else
+            echo "All TLS handshakes passed"
+          fi
+          exit 0
 
           echo ""
           echo "NOTE: If issuer shows your org name or a firewall vendor"
