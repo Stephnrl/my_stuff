@@ -1,9 +1,3 @@
-How to Answer — By Component
-GHES Web UI
-GHES is configured with TLS using a certificate issued by a trusted CA. All browser sessions use HTTPS. The SAML SSO exchange with Entra ID establishes mutual trust: GHES trusts the signed SAML assertion from Entra ID, and the user's browser verifies the GHES TLS certificate. This protects against MITM and session hijacking. Show the assessor your GHES TLS configuration and certificate details.
-Git Operations
-Git over HTTPS communicates with the same TLS endpoint. Git over SSH uses host key verification. Both establish session authenticity — the client verifies it is talking to the real GHES instance. Ensure your TLS certificate is current and issued by a CA that clients trust.
-Hub-Spoke Network Path
-All traffic to GHES routes through the Hub VNet firewall before reaching the spoke where GHES resides. This is a strength — it shows controlled network boundaries. However, you need to confirm with the networking team whether the firewall performs TLS inspection (break-and-inspect) or passthrough. If TLS inspection is in place, the trust chain is broken and re-established at the firewall — document this. If passthrough, the TLS session is end-to-end. Either is acceptable, but you need to know which it is and document it.
-Self-Hosted Runners (ARC on AKS)
-All runner-to-GHES communication is over HTTPS within the Azure Gov backbone. Runners reside on the spoke VNet, so traffic routes through the controlled network path. Each ephemeral runner establishes a fresh TLS session for its single job. No sessions persist or are reused across jobs.
+Known Gaps to Acknowledge
+
+If your team has no visibility into Hub firewall configuration, get a written statement from the networking team. Assessors will want to see that you understand the full traffic path, even if another team manages part of it. A one-paragraph memo confirming TLS behavior and firewall policy is sufficient.
