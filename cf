@@ -126,13 +126,9 @@ jobs:
           fi
           exit 0
 
-          echo ""
-          echo "NOTE: If issuer shows your org name or a firewall vendor"
-          echo "instead of Microsoft/DigiCert/etc, traffic is being"
-          echo "SSL-inspected which may cause failures."
-
       - name: HTTPS response code test
         run: |
+          set +e
           echo "============================================="
           echo "  HTTPS RESPONSE CODES"
           echo "============================================="
@@ -142,18 +138,28 @@ jobs:
             host="${entry%%:*}"
             printf "%-55s " "https://$host"
 
-            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 --connect-timeout 5 "https://$host" 2>/dev/null)
-            time=$(curl -s -o /dev/null -w "%{time_total}" --max-time 10 --connect-timeout 5 "https://$host" 2>/dev/null)
+            output=$(curl -s -o /dev/null -w "%{http_code}|%{time_total}|%{exitcode}" --max-time 10 --connect-timeout 5 "https://$host" 2>&1)
+            curl_exit=$?
+            code=$(echo "$output" | tail -1 | cut -d'|' -f1)
+            time=$(echo "$output" | tail -1 | cut -d'|' -f2)
 
-            if [ "$code" = "000" ]; then
-              echo "FAILED  (no response - likely blocked)"
-            else
+            if [ $curl_exit -eq 0 ] || [ "$code" != "000" ]; then
               echo "HTTP $code  (${time}s)"
+            elif [ $curl_exit -eq 35 ]; then
+              echo "SSL_ERROR  (curl exit 35 - TLS handshake failed)"
+            elif [ $curl_exit -eq 28 ]; then
+              echo "TIMEOUT  (curl exit 28)"
+            elif [ $curl_exit -eq 7 ]; then
+              echo "CONN_REFUSED  (curl exit 7)"
+            else
+              echo "FAILED  (curl exit $curl_exit)"
             fi
           done
+          exit 0
 
       - name: Traceroute to key endpoints
         run: |
+          set +e
           echo "============================================="
           echo "  TRACEROUTE (first 10 hops)"
           echo "============================================="
@@ -166,9 +172,11 @@ jobs:
             traceroute -m 10 -w 2 "$host" 2>&1 || echo "traceroute failed"
             echo ""
           done
+          exit 0
 
       - name: Test large download (runner package fetch)
         run: |
+          set +e
           echo "============================================="
           echo "  DOWNLOAD TEST"
           echo "============================================="
@@ -192,6 +200,7 @@ jobs:
           printf "%-55s " "$URL"
           result=$(curl -s -o /dev/null -w "HTTP %{http_code} | %{time_total}s | %{size_download} bytes" --max-time 15 "$URL" 2>&1)
           echo "$result"
+          exit 0
 
       - name: Summary
         if: always()
