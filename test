@@ -1,0 +1,5 @@
+Known Gaps to Acknowledge
+
+Enterprise-level runner registration requires a PAT (GitHub platform limitation — Apps only work at Org level). Mitigate with compensating controls and document in POA&M.
+Classic PATs (if still in use) have no org-owner approval gate. Push to disable them enterprise-wide and enforce fine-grained PATs.
+If running GHES < 3.17, token-level audit log tracking (token_id in API calls) may not yet be available.
