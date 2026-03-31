@@ -1,0 +1,10 @@
+securityresources
+| where type =~ "microsoft.security/assessments/subassessments"
+| extend assessmentKey = extract(@"(?i)providers/Microsoft.Security/assessments/([^/]*)", 1, id)
+| where assessmentKey == "c0b7cfc6-3172-465a-b378-53c7ff2cc0d5"
+| extend cve = tostring(properties.id)
+| extend description = tostring(properties.displayName)
+| extend severity = tostring(properties.additionalData.vulnerabilityDetails.severity)
+| extend image = tostring(properties.resourceDetails.id)
+| where description has_any ("axios", "plain-crypto-js")
+| project image, cve, severity, description
