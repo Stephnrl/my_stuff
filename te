@@ -8,3 +8,11 @@ securityresources
 | extend image = tostring(properties.resourceDetails.id)
 | where description has_any ("axios", "plain-crypto-js")
 | project image, cve, severity, description
+
+
+securityresources
+| where type =~ "microsoft.security/assessments/subassessments"
+| extend description = tostring(properties.displayName)
+| extend image = tostring(properties.resourceDetails.id)
+| where description has_any ("plain-crypto-js", "axios")
+| project image, description
