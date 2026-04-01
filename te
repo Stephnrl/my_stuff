@@ -1,18 +1,23 @@
-securityresources
-| where type =~ "microsoft.security/assessments/subassessments"
-| extend assessmentKey = extract(@"(?i)providers/Microsoft.Security/assessments/([^/]*)", 1, id)
-| where assessmentKey == "c0b7cfc6-3172-465a-b378-53c7ff2cc0d5"
-| extend cve = tostring(properties.id)
-| extend description = tostring(properties.displayName)
-| extend severity = tostring(properties.additionalData.vulnerabilityDetails.severity)
-| extend image = tostring(properties.resourceDetails.id)
-| where description has_any ("axios", "plain-crypto-js")
-| project image, cve, severity, description
+Hi [Name],
 
+Thanks for raising this. I've looked into both issues and want to share our findings.
 
-securityresources
-| where type =~ "microsoft.security/assessments/subassessments"
-| extend description = tostring(properties.displayName)
-| extend image = tostring(properties.resourceDetails.id)
-| where description has_any ("plain-crypto-js", "axios")
-| project image, description
+**1. "fetch failed" error with GitTools Actions**
+
+This error is not caused by a missing git version spec on the runner. What's happening is that the GitTools action attempts an outbound API call to resolve the tool version at runtime — specifically, when the version is specified as a wildcard (e.g., `*` or a semver range). That call is being blocked by our firewall, which is expected behavior for our self-hosted runners.
+
+The fix is on the workflow side: rather than using a wildcard or range for the tool version, you need to pin it to an explicit version (e.g., `5.12.0` instead of `5.*` or `*`). This bypasses the runtime lookup entirely and the action will use the version you specify without making any external API calls. No runner-side changes are needed here.
+
+**2. Node 20 deprecation warning**
+
+The Node.js runtime used by GitHub Actions is bundled within the runner software itself — it's separate from any Node.js installation on the host OS. The deprecation notice you referenced (Node 20 end-of-life for Actions runners) means that individual Actions need to be updated by their maintainers to target the Node 24 runtime.
+
+This is not something we can resolve on the runner infrastructure side. The action authors need to publish a version that declares `runs.using: node24` in their `action.yml`. You'll want to check for an updated version of the GitTools action that supports the Node 24 runtime, or open an issue on their repo if one isn't available yet.
+
+**Summary / Next Steps (on your side):**
+- Pin your GitTools version to an explicit version string instead of using wildcards.
+- Update the GitTools action to a version that targets the Node 24 runtime (once available from the maintainers).
+
+Neither issue requires changes to our self-hosted runner configuration. Happy to discuss further if anything is unclear.
+
+Thanks
