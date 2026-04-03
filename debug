@@ -1,0 +1,139 @@
+name: Debug - Test OIDC Login and Terraform Init
+
+on:
+  workflow_dispatch:  # manual trigger only
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  debug-oidc-terraform:
+    runs-on: enterprise-nonprod
+    environment: test
+
+    env:
+      ARM_CLIENT_ID: ${{ vars.ARM_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.ARM_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: true
+
+      # ----- UPDATE THESE TO MATCH YOUR STATE BACKEND -----
+      TF_BACKEND_RESOURCE_GROUP: "rg-tfstate"
+      TF_BACKEND_STORAGE_ACCOUNT: "sttfstate"
+      TF_BACKEND_CONTAINER: "tfstate"
+      TF_BACKEND_KEY: "debug/terraform.tfstate"
+
+    steps:
+      # -------------------------------------------------------
+      # 1. OIDC Login
+      # -------------------------------------------------------
+      - name: "Step 1 - Azure Login (OIDC)"
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.ARM_CLIENT_ID }}
+          tenant-id: ${{ env.ARM_TENANT_ID }}
+          subscription-id: ${{ env.ARM_SUBSCRIPTION_ID }}
+
+      # -------------------------------------------------------
+      # 2. Verify identity and subscription context
+      # -------------------------------------------------------
+      - name: "Step 2 - Verify az account"
+        run: |
+          echo "========== Account Info =========="
+          az account show --output table
+
+          echo ""
+          echo "========== Signed-in Identity =========="
+          az ad sp show --id "$ARM_CLIENT_ID" --query "{AppId:appId, DisplayName:displayName}" --output table 2>/dev/null || \
+            echo "⚠️  Could not query sp details (may lack Directory.Read permissions - this is OK for infra-only SPNs)"
+
+      # -------------------------------------------------------
+      # 3. Test storage account connectivity
+      # -------------------------------------------------------
+      - name: "Step 3 - Test storage account access"
+        run: |
+          echo "========== Storage Account Exists? =========="
+          az storage account show \
+            --name "$TF_BACKEND_STORAGE_ACCOUNT" \
+            --resource-group "$TF_BACKEND_RESOURCE_GROUP" \
+            --query "{Name:name, Location:primaryLocation, Kind:kind, SkuName:sku.name}" \
+            --output table
+
+          echo ""
+          echo "========== Container Exists? =========="
+          az storage container show \
+            --name "$TF_BACKEND_CONTAINER" \
+            --account-name "$TF_BACKEND_STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --query "{Name:name, PublicAccess:properties.publicAccess}" \
+            --output table
+
+          echo ""
+          echo "========== List Blobs (state files) =========="
+          az storage blob list \
+            --container-name "$TF_BACKEND_CONTAINER" \
+            --account-name "$TF_BACKEND_STORAGE_ACCOUNT" \
+            --auth-mode login \
+            --query "[].{Name:name, Size:properties.contentLength, Modified:properties.lastModified}" \
+            --output table || echo "⚠️  Could not list blobs - check RBAC (needs Storage Blob Data Contributor/Reader)"
+
+      # -------------------------------------------------------
+      # 4. Check SPN RBAC on storage account
+      # -------------------------------------------------------
+      - name: "Step 4 - Check RBAC role assignments"
+        run: |
+          echo "========== SPN Role Assignments on Storage Account =========="
+          STORAGE_ID=$(az storage account show \
+            --name "$TF_BACKEND_STORAGE_ACCOUNT" \
+            --resource-group "$TF_BACKEND_RESOURCE_GROUP" \
+            --query id --output tsv)
+
+          az role assignment list \
+            --assignee "$ARM_CLIENT_ID" \
+            --scope "$STORAGE_ID" \
+            --query "[].{Role:roleDefinitionName, Scope:scope}" \
+            --output table || echo "⚠️  Could not list role assignments"
+
+      # -------------------------------------------------------
+      # 5. Terraform init
+      # -------------------------------------------------------
+      - name: "Step 5 - Create minimal Terraform config"
+        run: |
+          mkdir -p /tmp/tf-debug && cd /tmp/tf-debug
+
+          cat > main.tf <<'EOF'
+          terraform {
+            backend "azurerm" {}
+          }
+
+          provider "azurerm" {
+            features {}
+            use_oidc = true
+          }
+
+          output "debug" {
+            value = "OIDC + backend init succeeded"
+          }
+          EOF
+
+      - name: "Step 5 - Terraform Init"
+        working-directory: /tmp/tf-debug
+        run: |
+          echo "========== Terraform Version =========="
+          terraform version
+
+          echo ""
+          echo "========== Terraform Init =========="
+          terraform init \
+            -backend-config="resource_group_name=$TF_BACKEND_RESOURCE_GROUP" \
+            -backend-config="storage_account_name=$TF_BACKEND_STORAGE_ACCOUNT" \
+            -backend-config="container_name=$TF_BACKEND_CONTAINER" \
+            -backend-config="key=$TF_BACKEND_KEY" \
+            -backend-config="use_oidc=true" \
+            -backend-config="client_id=$ARM_CLIENT_ID" \
+            -backend-config="tenant_id=$ARM_TENANT_ID" \
+            -backend-config="subscription_id=$ARM_SUBSCRIPTION_ID"
+
+          echo ""
+          echo "✅ Terraform init succeeded - OIDC auth and storage account access are working"
