@@ -1,0 +1,716 @@
+Unnamed: 0,POAM ID,Controls,Weakness Name,Weakness Description,Weakness Detector Source,Weakness Source Identifier,Asset Identifier,Point of Contact,Resources Required,Remediation Plan,Original Detection Date,Scheduled Completion Date,Status Date,Vendor Dependency,Last Vendor Check-in Date,Vendor Dependent Product Name,Original Risk Rating,Adjusted Risk Rating,Risk Adjustment,False Positive,Operational Requirement,Deviation Rationale,Supporting Documents,Comments,Binding Operational Directive 22-01 tracking,Binding Operational Directive 22-01 Due Date,CVE
+,WIZ-GHES-001,"SI-3, RA-5",Ruby Embedded Binary - rake,Wiz detected a potentially malicious embedded binary within the Ruby rake utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00001,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-002,"SI-3, RA-5",Ruby Embedded Binary - gem,Wiz detected a potentially malicious embedded binary within the Ruby gem package manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00002,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-003,"SI-3, RA-5",Ruby Embedded Binary - irb,Wiz detected a potentially malicious embedded binary within the Ruby IRB (Interactive Ruby) utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00003,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-004,"SI-3, RA-5",Ruby Embedded Binary - rdoc,Wiz detected a potentially malicious embedded binary within the Ruby RDoc documentation generator bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00004,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-005,"SI-3, RA-5",Ruby Embedded Binary - erb,Wiz detected a potentially malicious embedded binary within the Ruby ERB templating engine bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00005,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-006,"SI-3, RA-5",Ruby Embedded Binary - ri,Wiz detected a potentially malicious embedded binary within the Ruby ri documentation viewer bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00006,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-007,"SI-3, RA-5",Ruby Embedded Binary - bundler,Wiz detected a potentially malicious embedded binary within the Ruby Bundler dependency manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00007,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-008,"SI-3, RA-5",Ruby Embedded Binary - ruby,Wiz detected a potentially malicious embedded binary within the Ruby interpreter bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00008,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-009,"SI-3, RA-5",Ruby Shared Object - libruby,Wiz detected a potentially malicious shared object (libruby.so) bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00009,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-010,"SI-3, RA-5",Ruby Embedded Binary - miniruby,Wiz detected a potentially malicious embedded binary within the miniruby utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00010,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-011,"SI-3, RA-5",Ruby Embedded Binary - testrb,Wiz detected a potentially malicious embedded binary within the Ruby testrb utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-01).,Wiz Cloud Security Platform,wiz-malware-00011,ghes-prod-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-012,"SI-3, RA-5",Ruby Embedded Binary - rake,Wiz detected a potentially malicious embedded binary within the Ruby rake utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00012,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-013,"SI-3, RA-5",Ruby Embedded Binary - gem,Wiz detected a potentially malicious embedded binary within the Ruby gem package manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00013,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-014,"SI-3, RA-5",Ruby Embedded Binary - irb,Wiz detected a potentially malicious embedded binary within the Ruby IRB (Interactive Ruby) utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00014,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-015,"SI-3, RA-5",Ruby Embedded Binary - rdoc,Wiz detected a potentially malicious embedded binary within the Ruby RDoc documentation generator bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00015,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-016,"SI-3, RA-5",Ruby Embedded Binary - erb,Wiz detected a potentially malicious embedded binary within the Ruby ERB templating engine bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00016,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-017,"SI-3, RA-5",Ruby Embedded Binary - ri,Wiz detected a potentially malicious embedded binary within the Ruby ri documentation viewer bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00017,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-018,"SI-3, RA-5",Ruby Embedded Binary - bundler,Wiz detected a potentially malicious embedded binary within the Ruby Bundler dependency manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00018,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-019,"SI-3, RA-5",Ruby Embedded Binary - ruby,Wiz detected a potentially malicious embedded binary within the Ruby interpreter bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00019,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-020,"SI-3, RA-5",Ruby Shared Object - libruby,Wiz detected a potentially malicious shared object (libruby.so) bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00020,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-021,"SI-3, RA-5",Ruby Embedded Binary - miniruby,Wiz detected a potentially malicious embedded binary within the miniruby utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00021,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-022,"SI-3, RA-5",Ruby Embedded Binary - testrb,Wiz detected a potentially malicious embedded binary within the Ruby testrb utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-02).,Wiz Cloud Security Platform,wiz-malware-00022,ghes-prod-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-023,"SI-3, RA-5",Ruby Embedded Binary - rake,Wiz detected a potentially malicious embedded binary within the Ruby rake utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00023,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-024,"SI-3, RA-5",Ruby Embedded Binary - gem,Wiz detected a potentially malicious embedded binary within the Ruby gem package manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00024,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-025,"SI-3, RA-5",Ruby Embedded Binary - irb,Wiz detected a potentially malicious embedded binary within the Ruby IRB (Interactive Ruby) utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00025,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-026,"SI-3, RA-5",Ruby Embedded Binary - rdoc,Wiz detected a potentially malicious embedded binary within the Ruby RDoc documentation generator bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00026,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-027,"SI-3, RA-5",Ruby Embedded Binary - erb,Wiz detected a potentially malicious embedded binary within the Ruby ERB templating engine bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00027,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-028,"SI-3, RA-5",Ruby Embedded Binary - ri,Wiz detected a potentially malicious embedded binary within the Ruby ri documentation viewer bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00028,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-029,"SI-3, RA-5",Ruby Embedded Binary - bundler,Wiz detected a potentially malicious embedded binary within the Ruby Bundler dependency manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00029,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-030,"SI-3, RA-5",Ruby Embedded Binary - ruby,Wiz detected a potentially malicious embedded binary within the Ruby interpreter bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00030,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-031,"SI-3, RA-5",Ruby Shared Object - libruby,Wiz detected a potentially malicious shared object (libruby.so) bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00031,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-032,"SI-3, RA-5",Ruby Embedded Binary - miniruby,Wiz detected a potentially malicious embedded binary within the miniruby utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00032,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-033,"SI-3, RA-5",Ruby Embedded Binary - testrb,Wiz detected a potentially malicious embedded binary within the Ruby testrb utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-prod-03).,Wiz Cloud Security Platform,wiz-malware-00033,ghes-prod-03 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-034,"SI-3, RA-5",Ruby Embedded Binary - rake,Wiz detected a potentially malicious embedded binary within the Ruby rake utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00034,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-035,"SI-3, RA-5",Ruby Embedded Binary - gem,Wiz detected a potentially malicious embedded binary within the Ruby gem package manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00035,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-036,"SI-3, RA-5",Ruby Embedded Binary - irb,Wiz detected a potentially malicious embedded binary within the Ruby IRB (Interactive Ruby) utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00036,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-037,"SI-3, RA-5",Ruby Embedded Binary - rdoc,Wiz detected a potentially malicious embedded binary within the Ruby RDoc documentation generator bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00037,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-038,"SI-3, RA-5",Ruby Embedded Binary - erb,Wiz detected a potentially malicious embedded binary within the Ruby ERB templating engine bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00038,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-039,"SI-3, RA-5",Ruby Embedded Binary - ri,Wiz detected a potentially malicious embedded binary within the Ruby ri documentation viewer bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00039,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-040,"SI-3, RA-5",Ruby Embedded Binary - bundler,Wiz detected a potentially malicious embedded binary within the Ruby Bundler dependency manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00040,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-041,"SI-3, RA-5",Ruby Embedded Binary - ruby,Wiz detected a potentially malicious embedded binary within the Ruby interpreter bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00041,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-042,"SI-3, RA-5",Ruby Shared Object - libruby,Wiz detected a potentially malicious shared object (libruby.so) bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00042,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-043,"SI-3, RA-5",Ruby Embedded Binary - miniruby,Wiz detected a potentially malicious embedded binary within the miniruby utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00043,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-044,"SI-3, RA-5",Ruby Embedded Binary - testrb,Wiz detected a potentially malicious embedded binary within the Ruby testrb utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-01).,Wiz Cloud Security Platform,wiz-malware-00044,ghes-ha-replica-01 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-045,"SI-3, RA-5",Ruby Embedded Binary - rake,Wiz detected a potentially malicious embedded binary within the Ruby rake utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00045,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-046,"SI-3, RA-5",Ruby Embedded Binary - gem,Wiz detected a potentially malicious embedded binary within the Ruby gem package manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00046,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-047,"SI-3, RA-5",Ruby Embedded Binary - irb,Wiz detected a potentially malicious embedded binary within the Ruby IRB (Interactive Ruby) utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00047,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-048,"SI-3, RA-5",Ruby Embedded Binary - rdoc,Wiz detected a potentially malicious embedded binary within the Ruby RDoc documentation generator bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00048,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-049,"SI-3, RA-5",Ruby Embedded Binary - erb,Wiz detected a potentially malicious embedded binary within the Ruby ERB templating engine bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00049,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-050,"SI-3, RA-5",Ruby Embedded Binary - ri,Wiz detected a potentially malicious embedded binary within the Ruby ri documentation viewer bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00050,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-051,"SI-3, RA-5",Ruby Embedded Binary - bundler,Wiz detected a potentially malicious embedded binary within the Ruby Bundler dependency manager bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00051,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-052,"SI-3, RA-5",Ruby Embedded Binary - ruby,Wiz detected a potentially malicious embedded binary within the Ruby interpreter bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00052,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-053,"SI-3, RA-5",Ruby Shared Object - libruby,Wiz detected a potentially malicious shared object (libruby.so) bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00053,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-054,"SI-3, RA-5",Ruby Embedded Binary - miniruby,Wiz detected a potentially malicious embedded binary within the miniruby utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00054,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
+,WIZ-GHES-055,"SI-3, RA-5",Ruby Embedded Binary - testrb,Wiz detected a potentially malicious embedded binary within the Ruby testrb utility bundled in the GitHub Enterprise Server virtual appliance (host: ghes-ha-replica-02).,Wiz Cloud Security Platform,wiz-malware-00055,ghes-ha-replica-02 (Azure Gov),<Your Team POC>,GitHub Enterprise Support,"1. Opened GitHub Enterprise Support ticket requesting vendor acknowledgment that flagged Ruby binaries are expected components of the GHES appliance image.
+2. Monthly check-in with GitHub support for GHES image updates that may resolve heuristic detections.
+3. Continue monitoring via Wiz for any changes in finding severity or new CVE associations.
+4. Maintain compensating controls documented in Deviation Rationale.",2026-04-03 00:00:00,2026-07-02 00:00:00,2026-04-03 00:00:00,Yes,2026-04-03 00:00:00,GitHub Enterprise Server,Moderate,Low,Pending,Pending,No,"GitHub Enterprise Server is distributed as a sealed OVA/VHD virtual appliance. Per GitHub's support policy, modifying the underlying OS or removing bundled components (including Ruby runtime binaries) is unsupported and may result in appliance failure. The flagged Ruby binaries are legitimate components of the GHES application stack and are required for core functionality. Wiz heuristic malware detection has flagged these as potentially malicious due to binary packing/obfuscation patterns, but no CVE is associated and no malicious behavior has been observed. Risk is mitigated through network isolation and defense-in-depth controls.",Wiz scan report; GitHub Support ticket #<TBD>; Azure NSG flow logs; NVA firewall rules,"VENDOR DEPENDENCY - GitHub Enterprise Server is a sealed virtual appliance. The flagged Ruby binaries ship as part of the vendor-provided GHES image and cannot be modified or removed without breaking the appliance or voiding vendor support.
+
+COMPENSATING CONTROLS:
+1. GHES VMs hosted in Azure Government Cloud (IL4/IL5 compliant)
+2. VMs deployed on internal spoke VNet with no direct internet egress
+3. Spoke VNet peered to hub VNet utilizing Network Virtual Appliance (NVA) for traffic inspection
+4. NSG rules restrict inbound/outbound traffic to approved sources only
+5. SSH admin access restricted to bastion host with MFA
+6. Microsoft Defender for Cloud enabled on all GHES VMs
+7. No CVE associated with these findings - heuristic malware detection only",,,"N/A - Heuristic detection, no CVE"
