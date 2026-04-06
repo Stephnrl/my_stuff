@@ -33,8 +33,14 @@ data "aws_ssm_parameter" "sink_arn" {
 # Create the link to the security account's sink
 resource "aws_oam_link" "this" {
   label_template  = "$AccountName"
-  resource_types  = var.oam_resource_types
+  resource_types  = ["AWS::CloudWatch::Metric", "AWS::Logs::LogGroup", "AWS::XRay::Trace"]
   sink_identifier = data.aws_ssm_parameter.sink_arn.value
+
+  link_configuration {
+    log_group_configuration {
+      filter = "LogGroupName LIKE 'aws/flow-log/%' OR LogGroupName LIKE 'aws/eks/%' OR LogGroupName LIKE 'aws/containerinsights/%'"
+    }
+  }
 
   tags = {
     ManagedBy = "terraform"
