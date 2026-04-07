@@ -149,3 +149,19 @@ resource "aws_config_configuration_recorder_status" "this" {
 
   depends_on = [aws_config_delivery_channel.this]
 }
+
+
+
+output "config_recorder_id" {
+  description = "ID of the Config recorder"
+  value       = aws_config_configuration_recorder.this.id
+}
+
+output "config_s3_bucket" {
+  description = "S3 bucket for Config delivery"
+  value       = aws_s3_bucket.config.id
+}
+
+
+
+
