@@ -1,52 +1,12 @@
-# oam.tf — Member Account
+Resolution Notes / Update:
+Summary: The 33+ malware/vulnerability findings identified by Wiz are associated with Ruby Gem dependencies embedded within the GitHub Enterprise Server (GHES) virtual appliance. After investigation, these findings require no direct remediation action on our part and cannot be patched independently.
+Justification:
+GitHub Enterprise Server is a vendor-managed virtual appliance. All internal components — including the Ruby runtime, bundled Gems, and OS-level packages — are packaged, maintained, and patched exclusively by GitHub as part of their release cycle. Independently modifying, patching, or removing these components would risk breaking the appliance, violating GitHub's support terms, and potentially causing a service outage.
+This is consistent with GitHub's own documented guidance: customers should not modify the underlying appliance and should instead apply GHES version upgrades to receive security fixes.
+Remediation Plan:
 
-variable "security_account_id" {
-  description = "AWS account ID of the security account"
-  type        = string
-}
+A Plan of Action and Milestones (POA&M) has been created to formally track these findings for compliance purposes.
+We are planning an upgrade of our GHES instance to the latest supported release. GitHub routinely updates bundled dependencies (including Ruby Gems) as part of their release process, which is expected to remediate some or all of the flagged findings.
+Post-upgrade, we will re-scan the environment with Wiz and reconcile the results against the POA&M. Any residual findings that persist in the latest supported version will be documented as accepted vendor risk.
 
-variable "oam_resource_types" {
-  type = list(string)
-  default = [
-    "AWS::CloudWatch::Metric",
-    "AWS::Logs::LogGroup",
-    "AWS::XRay::Trace",
-  ]
-}
-
-# Provider that assumes into the security account to read SSM
-provider "aws" {
-  alias  = "security"
-  region = "us-gov-west-1"
-
-  assume_role {
-    role_arn = "arn:aws-us-gov:iam::${var.security_account_id}:role/oam-ssm-reader"
-  }
-}
-
-# Read the sink ARN from the security account's SSM
-data "aws_ssm_parameter" "sink_arn" {
-  provider = aws.security
-  name     = "/observability/oam-sink-arn"
-}
-
-# Create the link to the security account's sink
-resource "aws_oam_link" "this" {
-  label_template  = "$AccountName"
-  resource_types  = ["AWS::CloudWatch::Metric", "AWS::Logs::LogGroup", "AWS::XRay::Trace"]
-  sink_identifier = data.aws_ssm_parameter.sink_arn.value
-
-  link_configuration {
-    log_group_configuration {
-      filter = "LogGroupName LIKE 'aws/flow-log/%' OR LogGroupName LIKE 'aws/eks/%' OR LogGroupName LIKE 'aws/containerinsights/%'"
-    }
-  }
-
-  tags = {
-    ManagedBy = "terraform"
-  }
-}
-
-output "oam_link_arn" {
-  value = aws_oam_link.this.arn
-}
+Risk Acceptance Rationale: These findings represent inherited risk from a vendor-managed appliance. The appropriate control is maintaining the appliance at a current, vendor-supported version — not direct patching of internal components. This approach aligns with standard practices for managing virtual appliances (e.g., vCenter, GitLab Omnibus, etc.).
