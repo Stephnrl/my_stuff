@@ -1,11 +1,12 @@
-# config-aggregator.tf — Security Account (Delegated Admin)
+# config.tf — Member Account
 #
-# Org-wide Config aggregator. Pulls configuration and compliance data
-# from every member account automatically — no per-account auth needed
-# because this account is already a delegated admin for Config.
+# Enables AWS Config so the security account's aggregator can see this
+# account's resources and the CMMC conformance pack rules can evaluate here.
 
-resource "aws_iam_role" "config_aggregator" {
-  name = "aws-config-aggregator-role"
+# ----- IAM Role -----
+
+resource "aws_iam_role" "config_recorder" {
+  name = "aws-config-recorder-role"
   tags = var.tags
 
   assume_role_policy = jsonencode({
@@ -22,119 +23,129 @@ resource "aws_iam_role" "config_aggregator" {
   })
 }
 
-resource "aws_iam_role_policy_attachment" "config_aggregator" {
-  role       = aws_iam_role.config_aggregator.name
-  policy_arn = "arn:${local.partition}:iam::aws:policy/service-role/AWSConfigRoleForOrganizations"
+resource "aws_iam_role_policy_attachment" "config_recorder" {
+  role       = aws_iam_role.config_recorder.name
+  policy_arn = "arn:${local.partition}:iam::aws:policy/service-role/AWS_ConfigRole"
 }
 
-resource "aws_config_configuration_aggregator" "org" {
-  name = "org-config-aggregator"
-  tags = var.tags
+# ----- S3 Bucket for Config Delivery -----
 
-  organization_aggregation_source {
-    all_regions = true
-    role_arn    = aws_iam_role.config_aggregator.arn
+resource "aws_s3_bucket" "config" {
+  bucket = "aws-config-delivery-${local.account_id}-${var.region}"
+  tags   = var.tags
+}
+
+resource "aws_s3_bucket_versioning" "config" {
+  bucket = aws_s3_bucket.config.id
+  versioning_configuration {
+    status = "Enabled"
   }
 }
 
-
-
-
-
-# cmmc-conformance-pack.tf — Security Account
-#
-# Deploys CMMC 2.0 Level 2 Config rules to ALL member accounts in the Org.
-# Rules evaluate resources locally in each member account.
-# Results aggregate back here via the Config aggregator.
-#
-# Download the template first:
-#   cd conformance-packs
-#   curl -o cmmc-2.0-level-2.yaml \
-#     https://raw.githubusercontent.com/awslabs/aws-config-rules/master/aws-config-conformance-packs/Operational-Best-Practices-for-CMMC-2.0-Level-2.yaml
-#
-# Review and remove any rules not available in your GovCloud region before deploying.
-
-resource "aws_config_organization_conformance_pack" "cmmc_level_2" {
-  name = "cmmc-2-0-level-2"
-
-  template_body = file("${path.module}/conformance-packs/cmmc-2.0-level-2.yaml")
-
-  dynamic "input_parameter" {
-    for_each = var.cmmc_params
-    content {
-      parameter_name  = input_parameter.key
-      parameter_value = input_parameter.value
+resource "aws_s3_bucket_server_side_encryption_configuration" "config" {
+  bucket = aws_s3_bucket.config.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "aws:kms"
     }
   }
+}
 
-  excluded_accounts = var.conformance_pack_excluded_accounts
+resource "aws_s3_bucket_public_access_block" "config" {
+  bucket                  = aws_s3_bucket.config.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "config" {
+  bucket = aws_s3_bucket.config.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSConfigBucketPermissionsCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.config.arn
+        Condition = {
+          StringEquals = {
+            "AWS:SourceAccount" = local.account_id
+          }
+        }
+      },
+      {
+        Sid    = "AWSConfigBucketDelivery"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.config.arn}/AWSLogs/${local.account_id}/Config/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"     = "bucket-owner-full-control"
+            "AWS:SourceAccount" = local.account_id
+          }
+        }
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.config.arn,
+          "${aws_s3_bucket.config.arn}/*"
+        ]
+        Condition = {
+          Bool = {
+            "aws:SecureTransport" = "false"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# ----- Config Recorder -----
+
+resource "aws_config_configuration_recorder" "this" {
+  name     = "default"
+  role_arn = aws_iam_role.config_recorder.arn
+
+  recording_group {
+    all_supported                 = true
+    include_global_resource_types = true
+  }
+}
+
+# ----- Delivery Channel -----
+
+resource "aws_config_delivery_channel" "this" {
+  name           = "default"
+  s3_bucket_name = aws_s3_bucket.config.id
+
+  snapshot_delivery_properties {
+    delivery_frequency = "TwentyFour_Hours"
+  }
 
   depends_on = [
-    aws_config_configuration_aggregator.org
+    aws_config_configuration_recorder.this,
+    aws_s3_bucket_policy.config,
   ]
 }
 
+# ----- Turn It On -----
 
+resource "aws_config_configuration_recorder_status" "this" {
+  name       = aws_config_configuration_recorder.this.name
+  is_enabled = true
 
-
-output "config_aggregator_name" {
-  description = "Name of the organization Config aggregator"
-  value       = aws_config_configuration_aggregator.org.name
+  depends_on = [aws_config_delivery_channel.this]
 }
-
-output "cmmc_conformance_pack_name" {
-  description = "Name of the CMMC 2.0 Level 2 organization conformance pack"
-  value       = aws_config_organization_conformance_pack.cmmc_level_2.name
-}
-
-
-
-variable "region" {
-  description = "Primary AWS GovCloud region"
-  type        = string
-  default     = "us-gov-west-1"
-}
-
-variable "conformance_pack_excluded_accounts" {
-  description = "Account IDs to exclude from the CMMC conformance pack (e.g., sandbox accounts)"
-  type        = list(string)
-  default     = []
-}
-
-variable "cmmc_params" {
-  description = "Override parameters for the CMMC 2.0 Level 2 conformance pack"
-  type        = map(string)
-  default = {
-    AccessKeysRotatedParamMaxAccessKeyAge                                 = "90"
-    AcmCertificateExpirationCheckParamDaysToExpiration                    = "90"
-    CwLoggroupRetentionPeriodCheckParamMinRetentionTime                   = "365"
-    IamPasswordPolicyParamMaxPasswordAge                                  = "60"
-    IamPasswordPolicyParamMinimumPasswordLength                           = "14"
-    IamPasswordPolicyParamPasswordReusePrevention                         = "24"
-    IamCustomerPolicyBlockedKmsActionsParamBlockedActionsPatterns         = "kms:Decrypt,kms:ReEncryptFrom"
-    IamInlinePolicyBlockedKmsActionsParamBlockedActionsPatterns           = "kms:Decrypt,kms:ReEncryptFrom"
-    BackupPlanMinFrequencyAndMinRetentionCheckParamRequiredFrequencyUnit  = "days"
-    BackupPlanMinFrequencyAndMinRetentionCheckParamRequiredFrequencyValue = "1"
-    BackupPlanMinFrequencyAndMinRetentionCheckParamRequiredRetentionDays  = "35"
-  }
-}
-
-variable "tags" {
-  description = "Common tags for all resources"
-  type        = map(string)
-  default = {
-    ManagedBy   = "terraform"
-    Environment = "security"
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
