@@ -1,0 +1,124 @@
+data "aws_iam_policy_document" "delegated_admin_manager" {
+  # Organizations - register/deregister delegated admins
+  statement {
+    sid    = "OrganizationsDelegatedAdmin"
+    effect = "Allow"
+    actions = [
+      "organizations:RegisterDelegatedAdministrator",
+      "organizations:DeregisterDelegatedAdministrator",
+      "organizations:ListDelegatedAdministrators",
+      "organizations:ListDelegatedServicesForAccount",
+      "organizations:ListAccounts",
+      "organizations:ListAWSServiceAccessForOrganization",
+      "organizations:DescribeOrganization",
+      "organizations:DescribeAccount",
+      "organizations:EnableAWSServiceAccess",
+      "organizations:DisableAWSServiceAccess",
+    ]
+    resources = ["*"]
+  }
+
+  # Service-specific admin enablement (must be called from mgmt account)
+  statement {
+    sid    = "SecurityHubOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "securityhub:EnableOrganizationAdminAccount",
+      "securityhub:DisableOrganizationAdminAccount",
+      "securityhub:ListOrganizationAdminAccounts",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "GuardDutyOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "guardduty:EnableOrganizationAdminAccount",
+      "guardduty:DisableOrganizationAdminAccount",
+      "guardduty:ListOrganizationAdminAccounts",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "ConfigOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "config:PutOrganizationConfigRule",
+      "config:PutOrganizationConformancePack",
+      "config:DeleteOrganizationConfigRule",
+      "config:DeleteOrganizationConformancePack",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "FirewallManagerOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "fms:AssociateAdminAccount",
+      "fms:DisassociateAdminAccount",
+      "fms:GetAdminAccount",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "MaicieOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "macie2:EnableOrganizationAdminAccount",
+      "macie2:DisableOrganizationAdminAccount",
+      "macie2:ListOrganizationAdminAccounts",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "InspectorOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "inspector2:EnableDelegatedAdminAccount",
+      "inspector2:DisableDelegatedAdminAccount",
+      "inspector2:ListDelegatedAdminAccounts",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid    = "AccessAnalyzerOrgAdmin"
+    effect = "Allow"
+    actions = [
+      "access-analyzer:*",
+    ]
+    resources = ["*"]
+  }
+
+  # Terraform state access
+  statement {
+    sid    = "TerraformStateAccess"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:ListBucket",
+    ]
+    resources = [
+      aws_s3_bucket.state.arn,
+      "${aws_s3_bucket.state.arn}/*",
+    ]
+  }
+
+  statement {
+    sid    = "TerraformStateLock"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [aws_dynamodb_table.lock.arn]
+  }
+}
