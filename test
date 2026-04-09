@@ -1,0 +1,45 @@
+name: "Audit - Delegated Admin Report"
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # Every Monday at 8am UTC
+  workflow_dispatch: {}   # Manual trigger
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  AWS_REGION: "us-east-1"
+
+jobs:
+  audit-report:
+    name: Generate Delegated Admin Report
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Generate Report
+        run: |
+          chmod +x ./scripts/delegated-admin-audit.sh
+          ./scripts/delegated-admin-audit.sh
+
+      - name: Commit Report
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          if git diff --cached --quiet; then
+            echo "No changes to report"
+          else
+            git commit -m "chore: update delegated admin audit report [$(date -u +%Y-%m-%d)]"
+            git push
+          fi
