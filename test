@@ -1,45 +1,127 @@
-name: "Audit - Delegated Admin Report"
+###############################################################################
+# Module: delegated-admin
+# Registers a member account as delegated admin for specified AWS services
+###############################################################################
 
-on:
-  schedule:
-    - cron: "0 8 * * 1"  # Every Monday at 8am UTC
-  workflow_dispatch: {}   # Manual trigger
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
 
-permissions:
-  id-token: write
-  contents: write
+variable "delegated_account_id" {
+  description = "AWS account ID to designate as delegated administrator"
+  type        = string
+}
 
-env:
-  AWS_REGION: "us-east-1"
+variable "services" {
+  description = "Map of service keys to their Organizations service principal. Set value to true to enable."
+  type        = map(bool)
+  default = {
+    config          = true
+    securityhub     = true
+    guardduty       = true
+    firewall_manager = false
+    macie           = false
+    inspector       = false
+    access_analyzer = false
+  }
+}
 
-jobs:
-  audit-report:
-    name: Generate Delegated Admin Report
-    runs-on: ubuntu-latest
-    environment: production
+locals {
+  # Maps friendly key -> Organizations service principal
+  service_principals = {
+    config           = "config.amazonaws.com"
+    securityhub      = "securityhub.amazonaws.com"
+    guardduty        = "guardduty.amazonaws.com"
+    firewall_manager = "fms.amazonaws.com"
+    macie            = "macie.amazonaws.com"
+    inspector        = "inspector2.amazonaws.com"
+    access_analyzer  = "access-analyzer.amazonaws.com"
+  }
 
-    steps:
-      - uses: actions/checkout@v4
+  enabled_services = {
+    for k, v in var.services : k => local.service_principals[k]
+    if v && contains(keys(local.service_principals), k)
+  }
+}
 
-      - name: Configure AWS Credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+###############################################################################
+# Enable trusted access for each service in Organizations
+###############################################################################
 
-      - name: Generate Report
-        run: |
-          chmod +x ./scripts/delegated-admin-audit.sh
-          ./scripts/delegated-admin-audit.sh
+resource "aws_organizations_organization" "this" {
+  # This is a data-source-like usage; if your org already exists,
+  # import it: terraform import aws_organizations_organization.this <org-id>
+  # Or use a data source if you prefer not to manage the org resource.
+  aws_service_access_principals = [for _, v in local.service_principals : v]
+  feature_set                   = "ALL"
 
-      - name: Commit Report
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add reports/
-          if git diff --cached --quiet; then
-            echo "No changes to report"
-          else
-            git commit -m "chore: update delegated admin audit report [$(date -u +%Y-%m-%d)]"
-            git push
-          fi
+  lifecycle {
+    # Don't destroy the org if this module is removed
+    prevent_destroy = true
+    # Ignore changes to service access since other modules may add principals
+    ignore_changes = [aws_service_access_principals]
+  }
+}
+
+###############################################################################
+# Register delegated administrator per enabled service
+###############################################################################
+
+resource "aws_organizations_delegated_administrator" "this" {
+  for_each = local.enabled_services
+
+  account_id        = var.delegated_account_id
+  service_principal = each.value
+}
+
+###############################################################################
+# Service-specific admin enablement
+# Some services require their own API call beyond the Organizations registration
+###############################################################################
+
+resource "aws_securityhub_organization_admin_account" "this" {
+  count            = var.services["securityhub"] ? 1 : 0
+  admin_account_id = var.delegated_account_id
+
+  depends_on = [aws_organizations_delegated_administrator.this["securityhub"]]
+}
+
+resource "aws_guardduty_organization_admin_account" "this" {
+  count            = var.services["guardduty"] ? 1 : 0
+  admin_account_id = var.delegated_account_id
+
+  depends_on = [aws_organizations_delegated_administrator.this["guardduty"]]
+}
+
+resource "aws_macie2_organization_admin_account" "this" {
+  count            = try(var.services["macie"], false) ? 1 : 0
+  admin_account_id = var.delegated_account_id
+
+  depends_on = [aws_organizations_delegated_administrator.this["macie"]]
+}
+
+resource "aws_inspector2_delegated_admin_account" "this" {
+  count      = try(var.services["inspector"], false) ? 1 : 0
+  account_id = var.delegated_account_id
+
+  depends_on = [aws_organizations_delegated_administrator.this["inspector"]]
+}
+
+###############################################################################
+# Outputs
+###############################################################################
+
+output "delegated_services" {
+  description = "Services with delegated admin enabled"
+  value       = keys(local.enabled_services)
+}
+
+output "delegated_account_id" {
+  value = var.delegated_account_id
+}
