@@ -1,124 +1,189 @@
-data "aws_iam_policy_document" "delegated_admin_manager" {
-  # Organizations - register/deregister delegated admins
-  statement {
-    sid    = "OrganizationsDelegatedAdmin"
-    effect = "Allow"
-    actions = [
-      "organizations:RegisterDelegatedAdministrator",
-      "organizations:DeregisterDelegatedAdministrator",
-      "organizations:ListDelegatedAdministrators",
-      "organizations:ListDelegatedServicesForAccount",
-      "organizations:ListAccounts",
-      "organizations:ListAWSServiceAccessForOrganization",
-      "organizations:DescribeOrganization",
-      "organizations:DescribeAccount",
-      "organizations:EnableAWSServiceAccess",
-      "organizations:DisableAWSServiceAccess",
-    ]
-    resources = ["*"]
-  }
+#!/usr/bin/env bash
+set -euo pipefail
 
-  # Service-specific admin enablement (must be called from mgmt account)
-  statement {
-    sid    = "SecurityHubOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "securityhub:EnableOrganizationAdminAccount",
-      "securityhub:DisableOrganizationAdminAccount",
-      "securityhub:ListOrganizationAdminAccounts",
-    ]
-    resources = ["*"]
-  }
+REPORT_DIR="reports"
+REPORT_FILE="${REPORT_DIR}/delegated-admin-audit.md"
+JSON_FILE="${REPORT_DIR}/delegated-admin-audit.json"
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-  statement {
-    sid    = "GuardDutyOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "guardduty:EnableOrganizationAdminAccount",
-      "guardduty:DisableOrganizationAdminAccount",
-      "guardduty:ListOrganizationAdminAccounts",
-    ]
-    resources = ["*"]
-  }
+mkdir -p "$REPORT_DIR"
 
-  statement {
-    sid    = "ConfigOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "config:PutOrganizationConfigRule",
-      "config:PutOrganizationConformancePack",
-      "config:DeleteOrganizationConfigRule",
-      "config:DeleteOrganizationConformancePack",
-    ]
-    resources = ["*"]
-  }
+echo "Gathering delegated admin data..."
 
-  statement {
-    sid    = "FirewallManagerOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "fms:AssociateAdminAccount",
-      "fms:DisassociateAdminAccount",
-      "fms:GetAdminAccount",
-    ]
-    resources = ["*"]
-  }
+###############################################################################
+# Collect data
+###############################################################################
 
-  statement {
-    sid    = "MaicieOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "macie2:EnableOrganizationAdminAccount",
-      "macie2:DisableOrganizationAdminAccount",
-      "macie2:ListOrganizationAdminAccounts",
-    ]
-    resources = ["*"]
-  }
+# All delegated admins from Organizations
+DELEGATED_ADMINS=$(aws organizations list-delegated-administrators \
+  --output json 2>/dev/null || echo '{"DelegatedAdministrators":[]}')
 
-  statement {
-    sid    = "InspectorOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "inspector2:EnableDelegatedAdminAccount",
-      "inspector2:DisableDelegatedAdminAccount",
-      "inspector2:ListDelegatedAdminAccounts",
-    ]
-    resources = ["*"]
-  }
+# Get account list for friendly names
+ACCOUNTS=$(aws organizations list-accounts \
+  --query 'Accounts[*].{Id:Id,Name:Name,Email:Email,Status:Status}' \
+  --output json 2>/dev/null || echo '[]')
 
-  statement {
-    sid    = "AccessAnalyzerOrgAdmin"
-    effect = "Allow"
-    actions = [
-      "access-analyzer:*",
-    ]
-    resources = ["*"]
-  }
+# Per-account service breakdown
+declare -A ACCOUNT_SERVICES
+for ACCOUNT_ID in $(echo "$DELEGATED_ADMINS" | jq -r '.DelegatedAdministrators[].Id'); do
+  SERVICES=$(aws organizations list-delegated-services-for-account \
+    --account-id "$ACCOUNT_ID" \
+    --query 'DelegatedServices[*].ServicePrincipal' \
+    --output json 2>/dev/null || echo '[]')
+  ACCOUNT_SERVICES[$ACCOUNT_ID]="$SERVICES"
+done
 
-  # Terraform state access
-  statement {
-    sid    = "TerraformStateAccess"
-    effect = "Allow"
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:DeleteObject",
-      "s3:ListBucket",
-    ]
-    resources = [
-      aws_s3_bucket.state.arn,
-      "${aws_s3_bucket.state.arn}/*",
-    ]
-  }
+# Service-specific admin checks
+SECURITYHUB_ADMIN=$(aws securityhub list-organization-admin-accounts \
+  --query 'AdminAccounts[*].{AccountId:AccountId,Status:Status}' \
+  --output json 2>/dev/null || echo '[]')
 
-  statement {
-    sid    = "TerraformStateLock"
-    effect = "Allow"
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem",
-    ]
-    resources = [aws_dynamodb_table.lock.arn]
-  }
-}
+# GuardDuty needs a detector first
+GUARDDUTY_ADMIN="[]"
+GD_DETECTOR=$(aws guardduty list-detectors --query 'DetectorIds[0]' --output text 2>/dev/null || echo "")
+if [[ -n "$GD_DETECTOR" && "$GD_DETECTOR" != "None" ]]; then
+  GUARDDUTY_ADMIN=$(aws guardduty list-organization-admin-accounts \
+    --query 'AdminAccounts[*].{AccountId:AdminAccountId,Status:AdminStatus}' \
+    --output json 2>/dev/null || echo '[]')
+fi
+
+MACIE_ADMIN=$(aws macie2 list-organization-admin-accounts \
+  --query 'adminAccounts[*].{AccountId:accountId,Status:status}' \
+  --output json 2>/dev/null || echo '[]')
+
+INSPECTOR_ADMIN=$(aws inspector2 list-delegated-admin-accounts \
+  --query 'delegatedAdminAccounts[*].{AccountId:accountId,Status:status}' \
+  --output json 2>/dev/null || echo '[]')
+
+FMS_ADMIN_ACCOUNT=""
+FMS_ADMIN=$(aws fms get-admin-account --output json 2>/dev/null || echo '{}')
+FMS_ADMIN_ACCOUNT=$(echo "$FMS_ADMIN" | jq -r '.AdminAccount // "none"')
+
+# Trusted service access
+TRUSTED_ACCESS=$(aws organizations list-aws-service-access-for-organization \
+  --query 'EnabledServicePrincipals[*].ServicePrincipal' \
+  --output json 2>/dev/null || echo '[]')
+
+###############################################################################
+# Build JSON report (machine-readable)
+###############################################################################
+
+jq -n \
+  --arg ts "$TIMESTAMP" \
+  --argjson accounts "$ACCOUNTS" \
+  --argjson delegated "$DELEGATED_ADMINS" \
+  --argjson sechub "$SECURITYHUB_ADMIN" \
+  --argjson gd "$GUARDDUTY_ADMIN" \
+  --argjson macie "$MACIE_ADMIN" \
+  --argjson inspector "$INSPECTOR_ADMIN" \
+  --arg fms "$FMS_ADMIN_ACCOUNT" \
+  --argjson trusted "$TRUSTED_ACCESS" \
+  '{
+    generated_at: $ts,
+    organization_accounts: $accounts,
+    delegated_administrators: $delegated.DelegatedAdministrators,
+    service_specific: {
+      security_hub: $sechub,
+      guardduty: $gd,
+      macie: $macie,
+      inspector: $inspector,
+      firewall_manager: $fms
+    },
+    trusted_service_access: $trusted
+  }' > "$JSON_FILE"
+
+###############################################################################
+# Build Markdown report (human-readable)
+###############################################################################
+
+cat > "$REPORT_FILE" << EOF
+# Delegated Admin Audit Report
+
+**Generated:** ${TIMESTAMP}
+
+---
+
+## Delegated Administrators
+
+| Account ID | Account Name | Delegated Services |
+|---|---|---|
+EOF
+
+for ACCOUNT_ID in $(echo "$DELEGATED_ADMINS" | jq -r '.DelegatedAdministrators[].Id'); do
+  ACCOUNT_NAME=$(echo "$ACCOUNTS" | jq -r ".[] | select(.Id==\"$ACCOUNT_ID\") | .Name // \"unknown\"")
+  SERVICES="${ACCOUNT_SERVICES[$ACCOUNT_ID]:-[]}"
+  SERVICES_FORMATTED=$(echo "$SERVICES" | jq -r '.[]' | sed 's/.amazonaws.com//' | tr '\n' ', ' | sed 's/,$//')
+  echo "| ${ACCOUNT_ID} | ${ACCOUNT_NAME} | ${SERVICES_FORMATTED} |" >> "$REPORT_FILE"
+done
+
+cat >> "$REPORT_FILE" << 'EOF'
+
+## Service-Specific Admin Accounts
+
+EOF
+
+# Security Hub
+echo "### Security Hub" >> "$REPORT_FILE"
+if [[ $(echo "$SECURITYHUB_ADMIN" | jq 'length') -gt 0 ]]; then
+  echo "$SECURITYHUB_ADMIN" | jq -r '.[] | "- **\(.AccountId)** (\(.Status))"' >> "$REPORT_FILE"
+else
+  echo "- _No admin configured_" >> "$REPORT_FILE"
+fi
+
+# GuardDuty
+echo -e "\n### GuardDuty" >> "$REPORT_FILE"
+if [[ $(echo "$GUARDDUTY_ADMIN" | jq 'length') -gt 0 ]]; then
+  echo "$GUARDDUTY_ADMIN" | jq -r '.[] | "- **\(.AccountId)** (\(.Status))"' >> "$REPORT_FILE"
+else
+  echo "- _No admin configured_" >> "$REPORT_FILE"
+fi
+
+# Macie
+echo -e "\n### Macie" >> "$REPORT_FILE"
+if [[ $(echo "$MACIE_ADMIN" | jq 'length') -gt 0 ]]; then
+  echo "$MACIE_ADMIN" | jq -r '.[] | "- **\(.AccountId)** (\(.Status))"' >> "$REPORT_FILE"
+else
+  echo "- _No admin configured_" >> "$REPORT_FILE"
+fi
+
+# Inspector
+echo -e "\n### Inspector" >> "$REPORT_FILE"
+if [[ $(echo "$INSPECTOR_ADMIN" | jq 'length') -gt 0 ]]; then
+  echo "$INSPECTOR_ADMIN" | jq -r '.[] | "- **\(.AccountId)** (\(.Status))"' >> "$REPORT_FILE"
+else
+  echo "- _No admin configured_" >> "$REPORT_FILE"
+fi
+
+# Firewall Manager
+echo -e "\n### Firewall Manager" >> "$REPORT_FILE"
+if [[ "$FMS_ADMIN_ACCOUNT" != "none" && -n "$FMS_ADMIN_ACCOUNT" ]]; then
+  echo "- **${FMS_ADMIN_ACCOUNT}**" >> "$REPORT_FILE"
+else
+  echo "- _No admin configured_" >> "$REPORT_FILE"
+fi
+
+# Trusted access
+cat >> "$REPORT_FILE" << EOF
+
+## Trusted Service Access (Enabled)
+
+EOF
+
+echo "$TRUSTED_ACCESS" | jq -r '.[]' | sort | while read -r svc; do
+  echo "- \`${svc}\`" >> "$REPORT_FILE"
+done
+
+# Drift detection vs Terraform
+cat >> "$REPORT_FILE" << 'EOF'
+
+## Drift Notes
+
+> Compare the above against Terraform state. Any account/service combo listed
+> above but not in `terraform state list | grep delegated_administrator` is
+> unmanaged and should be imported or removed.
+EOF
+
+echo ""
+echo "Report written to:"
+echo "  Markdown: ${REPORT_FILE}"
+echo "  JSON:     ${JSON_FILE}"
