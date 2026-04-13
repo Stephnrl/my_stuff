@@ -1,0 +1,291 @@
+# AWS Organization Management Account Architecture — Technical Review
+
+**Status:** Current
+**Owner:** [Your Name / Team]
+**Last Updated:** April 2026
+**Environment:** AWS GovCloud (us-gov-west-1)
+
+---
+
+## Overview
+
+This document describes the architecture and Terraform-managed configuration of the AWS Organization management account. The management account is the root of the AWS Organization and is responsible for account management, delegated admin registration, trusted access enablement, Service Control Policies (SCPs), and organizational unit (OU) structure. All management account infrastructure is now controlled via Terraform and deployed through a GitHub Actions CI/CD pipeline using OIDC federation.
+
+---
+
+## Management Account Responsibilities
+
+The management account is the only account in the organization that can perform the following actions:
+
+- Create and manage organizational units (OUs)
+- Invite or create member accounts
+- Register and deregister delegated administrators for AWS services
+- Enable and disable trusted access for AWS service principals
+- Create, attach, and manage Service Control Policies (SCPs)
+- Manage the organization's root-level settings
+
+**Important:** SCPs do not apply to the management account itself. The management account always retains full permissions regardless of any SCP attached to the organization root or any OU.
+
+---
+
+## Organizational Unit Structure
+
+The OU hierarchy organizes accounts by function and controls which SCPs apply to each group of accounts.
+
+| OU | Purpose | Accounts | SCPs Applied |
+|---|---|---|---|
+| Root | Organization root | Management account | FullAWSAccess (default) |
+| Security OU | Centralized security tooling | Security account | FullAWSAccess, deny-org-nonadmin (with exception) |
+| [Workload OU] | Application workloads | Member accounts | FullAWSAccess, deny-org-nonadmin |
+| [Sandbox OU] | Development and testing | Sandbox accounts | [As applicable] |
+
+*Update the table above to reflect your actual OU names and structure.*
+
+---
+
+## Delegated Admin Registration
+
+The management account registers the security account as a delegated administrator for the following service principals. This is managed via Terraform using `aws_organizations_delegated_administrator` resources.
+
+### Registered Delegated Admins
+
+| Service | Service Principal | Delegated Account | Status |
+|---|---|---|---|
+| AWS Config | `config.amazonaws.com` | Security account | Active |
+| AWS Config Multi-Account Setup | `config-multiaccountsetup.amazonaws.com` | Security account | Active |
+| Amazon GuardDuty | `guardduty.amazonaws.com` | Security account | Active |
+| AWS Security Hub | `securityhub.amazonaws.com` | Security account | Active |
+
+**Terraform resource example:**
+```hcl
+resource "aws_organizations_delegated_administrator" "config" {
+  account_id        = var.security_account_id
+  service_principal = "config.amazonaws.com"
+}
+
+resource "aws_organizations_delegated_administrator" "config_multiaccountsetup" {
+  account_id        = var.security_account_id
+  service_principal = "config-multiaccountsetup.amazonaws.com"
+}
+
+resource "aws_organizations_delegated_administrator" "guardduty" {
+  account_id        = var.security_account_id
+  service_principal = "guardduty.amazonaws.com"
+}
+
+resource "aws_organizations_delegated_administrator" "securityhub" {
+  account_id        = var.security_account_id
+  service_principal = "securityhub.amazonaws.com"
+}
+```
+
+**Verification CLI commands (run from management account):**
+```bash
+aws organizations list-delegated-administrators --service-principal config.amazonaws.com
+aws organizations list-delegated-administrators --service-principal guardduty.amazonaws.com
+aws organizations list-delegated-administrators --service-principal securityhub.amazonaws.com
+```
+
+---
+
+## Trusted Access
+
+Trusted access must be enabled at the Organization level for each service that uses delegated admin or org-wide features. Delegation registration alone is not sufficient — both delegation and trusted access are required. This is managed via Terraform using `aws_organizations_organization` resource features or explicit `aws_organizations_service_access` resources.
+
+### Enabled Service Principals
+
+| Service Principal | Purpose |
+|---|---|
+| `config.amazonaws.com` | Allows Config to operate org-wide (aggregator, org rules) |
+| `config-multiaccountsetup.amazonaws.com` | Allows Config multi-account setup features |
+| `guardduty.amazonaws.com` | Allows GuardDuty org-wide threat detection |
+| `securityhub.amazonaws.com` | Allows Security Hub org-wide finding aggregation |
+
+**Verification CLI command:**
+```bash
+aws organizations list-aws-service-access-for-organization
+```
+
+All four service principals must appear in the output. If any are missing, the corresponding delegated admin features will fail in the security account even though delegation is registered.
+
+---
+
+## Service Control Policies (SCPs)
+
+SCPs are managed via Terraform and applied to OUs to enforce organization-wide guardrails. The management account is exempt from all SCPs.
+
+### FullAWSAccess (Default)
+
+The default AWS-managed SCP that allows all actions. Attached to the organization root and inherited by all OUs.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### deny-org-nonadmin
+
+A custom SCP that prevents member accounts from making Organizations API calls. This blocks actions like listing accounts, describing the organization, or modifying org settings from non-admin accounts.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Action": "organizations:*",
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:PrincipalAccount": "<security-account-id>"
+        }
+      }
+    }
+  ]
+}
+```
+
+**Target:** Applied to the parent OU that contains the security account and workload accounts.
+
+**Security account exception:** The condition `StringNotEquals` on `aws:PrincipalAccount` exempts the security account from this deny. This is required because delegated admin services (Config, GuardDuty, Security Hub) need to call Organizations APIs such as `organizations:ListDelegatedAdministrators` and `organizations:ListAccounts` from the security account.
+
+**Why this matters:** Without this exception, the security account will receive `OrganizationAccessDeniedException` errors when creating Config aggregators, deploying organization conformance packs, or performing other delegated admin operations — even though the IAM role has the correct permissions. SCPs are evaluated before IAM policies, and an SCP deny overrides any IAM allow.
+
+**Terraform resource example:**
+```hcl
+resource "aws_organizations_policy" "deny_org_nonadmin" {
+  name        = "deny-org-nonadmin"
+  description = "Deny organizations API access except for security account"
+  type        = "SERVICE_CONTROL_POLICY"
+  content     = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Deny"
+        Action    = "organizations:*"
+        Resource  = "*"
+        Condition = {
+          StringNotEquals = {
+            "aws:PrincipalAccount" = var.security_account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_organizations_policy_attachment" "deny_org_nonadmin" {
+  policy_id = aws_organizations_policy.deny_org_nonadmin.id
+  target_id = var.target_ou_id
+}
+```
+
+---
+
+## CI/CD Pipeline
+
+All management account infrastructure is managed as code in a GitHub repository and deployed via Terraform.
+
+**Deployment flow:**
+
+1. Engineer pushes code to the GitHub repository.
+2. GitHub Actions workflow triggers on merge to the main branch.
+3. The workflow authenticates to AWS using OIDC federation — GitHub's OIDC provider issues a short-lived token, which is exchanged for temporary AWS credentials by assuming the Terraform execution role in the management account.
+4. Terraform runs `plan` and `apply` against the management account in `us-gov-west-1`.
+5. Terraform manages delegated admin registrations, trusted access, SCPs, OU structure, and any other management-account-level resources.
+
+**No long-lived credentials are used.** The OIDC trust relationship ensures that only the authorized repository and branch can assume the deployment role.
+
+### IAM — Terraform Execution Role
+
+**Purpose:** The role assumed by the CI/CD pipeline to manage organization-level resources.
+
+**Trust Policy:** Federated trust via GitHub OIDC provider (`token.actions.githubusercontent.com`). Scoped to the specific repository and branch.
+
+**Permissions (key policies):**
+
+- `organizations:*` — Full Organizations access for managing OUs, SCPs, delegated admins, and trusted access.
+- `iam:*` — IAM management within the management account (for the execution role itself and any management-account-specific roles).
+- Additional permissions as needed for any management-account-level resources.
+
+**Note:** Because SCPs do not apply to the management account, there are no SCP-related restrictions on this role. However, IAM policies and any permissions boundaries still apply.
+
+---
+
+## Relationship to Security Account
+
+The management account and security account work together but have clearly separated responsibilities:
+
+| Responsibility | Management Account | Security Account |
+|---|---|---|
+| Register delegated admins | Yes | No |
+| Enable trusted access | Yes | No |
+| Manage SCPs | Yes | No |
+| Manage OU structure | Yes | No |
+| Operate Config aggregator | No | Yes |
+| Deploy conformance packs | No | Yes |
+| Triage GuardDuty findings | No | Yes |
+| Manage Security Hub dashboard | No | Yes |
+| Deploy security-account infra | No | Yes |
+
+Both accounts are deployed via separate Terraform configurations in the same or separate GitHub repositories. Changes to delegation or SCPs in the management account can impact the security account — coordinate changes between the two.
+
+---
+
+## Terraform State and Repository Structure
+
+| Component | Repository / Workspace | AWS Account Target |
+|---|---|---|
+| Org management (OUs, SCPs, delegation, trusted access) | [repo/path] | Management account |
+| Security tooling (Config, GuardDuty, Security Hub, IAM roles) | [repo/path] | Security account |
+
+*Update the table above with your actual repository paths and workspace names.*
+
+**Order of operations for initial deployment:**
+
+1. Deploy management account Terraform first — this creates the OUs, SCPs, delegated admin registrations, and trusted access.
+2. Deploy security account Terraform second — this creates the Config aggregator, conformance packs, GuardDuty configuration, Security Hub settings, and IAM roles.
+
+If the security account Terraform is applied before the management account Terraform has completed delegation and trusted access setup, Config aggregator creation and other delegated admin operations will fail.
+
+---
+
+## Troubleshooting
+
+**Delegated admin registration fails with "account is already a delegated administrator":**
+
+- The registration already exists. Verify with `aws organizations list-delegated-administrators --service-principal <principal>`. If Terraform state is out of sync, import the existing resource.
+
+**Security account receives `OrganizationAccessDeniedException` after management account changes:**
+
+- Check that the SCP exception for the security account is still in place. SCP modifications or OU moves can remove the exception.
+- Verify trusted access is still enabled: `aws organizations list-aws-service-access-for-organization`.
+- Verify delegation is still active: `aws organizations list-delegated-administrators --service-principal <principal>`.
+
+**Trusted access appears enabled but delegated admin features still fail:**
+
+- After enabling trusted access, propagation can take 15–30 minutes. Wait and retry.
+- If the issue persists, deregister and re-register the delegated admin for the affected service principal from the management account. This resets any stale state.
+
+**Terraform destroy considerations:**
+
+- Destroying the management account Terraform will deregister delegated admins and remove SCPs. This will immediately break all delegated admin functionality in the security account.
+- Always coordinate management account and security account Terraform changes. Destroy security account resources before removing their delegation from the management account.
+
+---
+
+## References
+
+- [AWS Organizations Delegated Administrator](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_delegate_policies.html)
+- [AWS Organizations Trusted Access](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_integrate_services.html)
+- [Service Control Policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html)
+- [Security Account Architecture Wiki](/link-to-security-account-wiki-page)
+- [GitHub OIDC with AWS](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services)
