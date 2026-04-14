@@ -1,1 +1,1 @@
-Get-ChildItem -Path "D:\Program Files" -Filter "VSIXInstaller.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest
