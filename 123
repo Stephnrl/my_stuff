@@ -1,29 +1,18 @@
-output "securityhub_cspm_account" {
-  description = "The Security Hub CSPM account resource (aws_securityhub_account)."
-  value       = try(aws_securityhub_account.this[0], null)
-}
+terraform {
+  required_version = ">= 1.3"
 
-output "securityhub_v2" {
-  description = "The unified Security Hub v2 resource (awscc_securityhub_hub_v2), if created."
-  value       = try(awscc_securityhub_hub_v2.this[0], null)
-}
-
-output "enabled_standards" {
-  description = "Map of enabled standards subscriptions (ARN => resource)."
-  value       = aws_securityhub_standards_subscription.this
-}
-
-output "subscribed_products" {
-  description = "Map of subscribed products (ARN => resource)."
-  value       = aws_securityhub_product_subscription.this
-}
-
-output "finding_aggregator" {
-  description = "The finding aggregator resource, if created."
-  value       = try(aws_securityhub_finding_aggregator.this[0], null)
-}
-
-output "action_targets" {
-  description = "Map of custom action targets (identifier => resource)."
-  value       = aws_securityhub_action_target.this
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    # The AWSCC provider is auto-generated from the AWS CloudFormation Cloud
+    # Control API, giving same-day access to new AWS resources like Security
+    # Hub v2 that are not yet available in the standard AWS provider.
+    # https://registry.terraform.io/providers/hashicorp/awscc
+    awscc = {
+      source  = "hashicorp/awscc"
+      version = ">= 1.0"
+    }
+  }
 }
