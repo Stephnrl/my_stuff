@@ -1,1 +1,2 @@
-Get-ChildItem -Path "D:\Program Files\Microsoft Visual Studio\2022" -Filter "DisableOutOfProcBuild.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+$vsSetup = "D:\Program Files\Microsoft Visual Studio\2022\Professional\Common7\IDE\vs_setup.exe"
+Start-Process -FilePath "vs_professional.exe" -ArgumentList "modify", "--installPath `"D:\Program Files\Microsoft Visual Studio\2022\Professional`"", "--add Microsoft.VisualStudio.Workload.Office", "--includeRecommended", "--passive", "--norestart", "--wait" -Wait
