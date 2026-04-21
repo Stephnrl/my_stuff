@@ -1,8 +1,13 @@
-$url = "http://timestamp.digicert.com" # Use the EXACT string you pass to the tool
+$url = "http://timestamp.digicert.com"
 try {
-    $response = Invoke-WebRequest -Uri $url -Method Get -TimeoutSec 5
-    Write-Host "Connection Successful: $($response.StatusCode)" -ForegroundColor Green
+    # Sending an empty POST to see if the server processes the request
+    $response = Invoke-WebRequest -Uri $url -Method Post -Body "test" -ContentType "application/timestamp-query"
+    Write-Host "Success: Server is reachable and responding to POST." -ForegroundColor Green
 } catch {
-    Write-Host "Connection Failed!" -ForegroundColor Red
-    Write-Host $_.Exception.Message
+    $statusCode = [int]$_.Exception.Response.StatusCode
+    if ($statusCode -eq 415 -or $statusCode -eq 400) {
+        Write-Host "Success: Reached DigiCert! (Server rejected 'test' data, which is expected)." -ForegroundColor Green
+    } else {
+        Write-Host "Failed: Code $statusCode - Check firewall/proxy." -ForegroundColor Red
+    }
 }
