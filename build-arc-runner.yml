@@ -1,0 +1,51 @@
+name: build-arc-runner
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - docker-bake.hcl
+      - .github/workflows/build-arc-runner.yml
+  workflow_dispatch:
+    inputs:
+      runner_version:
+        description: actions-runner base image tag
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  packages: write   # GHCR push; swap for id-token:write if using OIDC to ACR/ECR
+
+concurrency:
+  group: arc-runner-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (bake matrix)
+        uses: docker/bake-action@v5
+        env:
+          REGISTRY:       ghcr.io/${{ github.repository_owner }}
+          IMAGE_NAME:     arc-runner
+          IMAGE_TAG:      ${{ github.sha }}
+          RUNNER_VERSION: ${{ inputs.runner_version || 'latest' }}
+          CACHE_BACKEND:  gha
+        with:
+          files: docker-bake.hcl
+          push: true
