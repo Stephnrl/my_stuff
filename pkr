@@ -1,182 +1,218 @@
 #!/usr/bin/env bash
 #
-# scripts/99-deprovision.sh
+# scripts/20-reboot-wait.sh  (a.k.a. 02-reboot-wait.sh)
 #
-# Final cleanup before Packer captures the image.
-# Order matters: strip artifacts -> strip logs/history -> waagent deprovision LAST.
-# After waagent runs, the VM is effectively unusable until it's generalized
-# and redeployed from the captured image, so nothing else can run after it.
+# Runs AFTER the post-FIPS reboot. Verifies:
+#   1. SSH came back (implicit — if we're running, it did)
+#   2. System finished booting (not still in "starting" state)
+#   3. FIPS is actually enabled in the kernel
+#   4. Crypto policy reports FIPS
+#   5. /boot is mounted (FIPS integrity check depends on it)
+#   6. waagent is new enough for FIPS 140-3
+#   7. waagent.service is active and not stuck in a restart loop
+#   8. waagent successfully fetched a goal state post-FIPS
+#      (this is the exact failure mode the historical bug produced)
+#   9. No known-bad error signatures in waagent.log
+#
+# Exits non-zero on any failure so Packer aborts the build BEFORE
+# we bake a broken image into the gallery.
 
 set -euo pipefail
 
-LOG=/var/log/packer-deprovision.log
+LOG=/var/log/packer-fips-verify.log
 exec > >(tee -a "$LOG") 2>&1
-echo "=== Deprovision starting at $(date -u) ==="
+
+echo "=========================================="
+echo "Post-FIPS-reboot verification"
+echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "=========================================="
+
+fail() {
+  echo ""
+  echo "FAIL: $*"
+  echo ""
+  echo "--- Last 80 lines of waagent.log ---"
+  tail -80 /var/log/waagent.log 2>/dev/null || echo "(no waagent.log)"
+  echo "--- systemctl status waagent ---"
+  systemctl status waagent --no-pager -l 2>/dev/null || true
+  echo "--- journalctl -u waagent (last 50) ---"
+  journalctl -u waagent --no-pager -n 50 2>/dev/null || true
+  exit 1
+}
 
 # ---------------------------------------------------------------------------
-# 1. Preserve the artifacts we still want off the box
+# 1. Wait for systemd to finish booting.
+#    Without this, subsequent checks race against services still starting.
 # ---------------------------------------------------------------------------
-# The Packer 'file' download provisioner already pulled /var/tmp/oscap/* back
-# to the runner in an earlier step. Nothing to do here except confirm it exists
-# so we can safely wipe the ansible bundle next.
-if [[ ! -d /var/tmp/oscap ]]; then
-  echo "WARN: /var/tmp/oscap not found -- OSCAP step may not have run"
-fi
-
-# ---------------------------------------------------------------------------
-# 2. Remove Ansible + pip + Galaxy collections
-# ---------------------------------------------------------------------------
-echo "--- Removing Ansible and pip ---"
-
-# Uninstall ansible-core. clean_requirements_on_remove pulls orphaned deps.
-# We DO NOT remove python3 itself, python3-libselinux, or platform-python.
-dnf -y remove \
-    --setopt=clean_requirements_on_remove=True \
-    ansible-core \
-    python3-pip \
-  || echo "WARN: some packages were not installed; continuing"
-
-# Any pip-installed user packages (shouldn't be any, but belt + suspenders)
-rm -rf /root/.local/lib/python*     || true
-rm -rf /root/.cache/pip             || true
-rm -rf /home/*/.local/lib/python*   || true
-rm -rf /home/*/.cache/pip           || true
-
-# Galaxy collections + ansible config
-rm -rf /root/.ansible               || true
-rm -rf /home/*/.ansible             || true
-rm -rf /usr/share/ansible           || true
-rm -rf /etc/ansible                 || true
-
-# ---------------------------------------------------------------------------
-# 3. Remove the uploaded bundle and any scratch content
-# ---------------------------------------------------------------------------
-echo "--- Removing build artifacts ---"
-rm -rf /tmp/ansible-bundle              \
-       /tmp/ansible-bundle.tar.gz       \
-       /tmp/jfrog-rhel9.repo            \
-       /var/tmp/.ansible-tmp            \
-       /root/.ansible_async             \
-       /root/.ssh/known_hosts           \
-       || true
-
-# ---------------------------------------------------------------------------
-# 4. JFrog repo: decide keep vs remove
-# ---------------------------------------------------------------------------
-# Keep the JFrog repo file so VMs instantiated from this image can patch from
-# the same mirror. But if the repo file has credentials embedded, strip them.
-if [[ -f /etc/yum.repos.d/jfrog-rhel9.repo ]]; then
-  if grep -qE '^(username|password)=' /etc/yum.repos.d/jfrog-rhel9.repo; then
-    echo "Scrubbing credentials from JFrog repo file"
-    sed -i -E '/^(username|password)=/d' /etc/yum.repos.d/jfrog-rhel9.repo
+echo ""
+echo "[1/9] Waiting for system boot to settle..."
+for i in $(seq 1 30); do
+  state=$(systemctl is-system-running 2>/dev/null || true)
+  case "$state" in
+    running|degraded)
+      echo "      system state: $state"
+      # 'degraded' is acceptable — some STIG lockdowns intentionally
+      # leave services masked. We just need boot to have finished.
+      break
+      ;;
+    starting|initializing)
+      sleep 5
+      ;;
+    *)
+      # Unknown state; give it a beat then re-check
+      sleep 5
+      ;;
+  esac
+  if [[ $i -eq 30 ]]; then
+    fail "system did not finish booting after 150s (last state: $state)"
   fi
-fi
-
-# ---------------------------------------------------------------------------
-# 5. Clean dnf caches + history
-# ---------------------------------------------------------------------------
-echo "--- Cleaning dnf state ---"
-dnf -y clean all
-rm -rf /var/cache/dnf/* /var/cache/yum/* || true
-
-# dnf history reveals what we did. For CMMC traceability you may WANT to keep
-# it. If your policy says wipe, uncomment:
-# rm -rf /var/lib/dnf/history*
-
-# ---------------------------------------------------------------------------
-# 6. Logs, shell history, machine identity
-# ---------------------------------------------------------------------------
-echo "--- Wiping logs and history ---"
-
-# Rotate + truncate, don't rm -- some services hold open file handles
-find /var/log -type f \( \
-      -name '*.log'     -o \
-      -name '*.log.*'   -o \
-      -name 'messages*' -o \
-      -name 'secure*'   -o \
-      -name 'cron*'     -o \
-      -name 'maillog*'  -o \
-      -name 'boot.log*' \
-    \) -exec truncate -s 0 {} \;
-
-# Journald: flush then vacuum to zero
-journalctl --rotate   || true
-journalctl --vacuum-time=1s || true
-rm -rf /var/log/journal/* /run/log/journal/* || true
-
-# Audit logs -- CMMC consideration: some orgs want audit.log to start fresh
-# on each instantiation, others want the build history preserved. Truncating
-# is the common choice since per-instance auditing starts at first boot.
-truncate -s 0 /var/log/audit/audit.log 2>/dev/null || true
-rm -f /var/log/audit/audit.log.*                   || true
-
-# Shell history for every user
-rm -f /root/.bash_history /root/.lesshst /root/.viminfo
-for home in /home/*; do
-  [[ -d "$home" ]] || continue
-  rm -f "$home/.bash_history" "$home/.lesshst" "$home/.viminfo"
 done
-# Prevent history from being written during the rest of this script
-history -c 2>/dev/null || true
-export HISTSIZE=0
-
-# Machine ID: must be blank so cloud-init regenerates it on first boot.
-# Leaving a machine-id causes every VM from this image to share an identity,
-# which breaks journald and a few other things.
-truncate -s 0 /etc/machine-id
-rm -f /var/lib/dbus/machine-id
-ln -sf /etc/machine-id /var/lib/dbus/machine-id
 
 # ---------------------------------------------------------------------------
-# 7. SSH host keys + the ephemeral packer user's keys
+# 2. Kernel FIPS flag
 # ---------------------------------------------------------------------------
-echo "--- Removing SSH host keys and packer user keys ---"
-
-# Host keys MUST be regenerated on first boot -- otherwise every VM from this
-# image has identical host keys (serious security issue).
-rm -f /etc/ssh/ssh_host_*
-
-# Packer's ephemeral authorized_keys was already cleared by
-# ssh_clear_authorized_keys=true in the builder, but double-check:
-rm -f /home/packer/.ssh/authorized_keys 2>/dev/null || true
-rm -f /root/.ssh/authorized_keys         2>/dev/null || true
+echo ""
+echo "[2/9] Checking /proc/sys/crypto/fips_enabled..."
+fips_flag=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo "missing")
+if [[ "$fips_flag" != "1" ]]; then
+  fail "kernel fips_enabled is '$fips_flag', expected '1'"
+fi
+echo "      OK: kernel fips_enabled=1"
 
 # ---------------------------------------------------------------------------
-# 8. cloud-init reset (so it runs fresh on every new VM)
+# 3. fips-mode-setup agrees
 # ---------------------------------------------------------------------------
-if command -v cloud-init >/dev/null 2>&1; then
-  echo "--- Resetting cloud-init state ---"
-  cloud-init clean --logs --seed || true
-  rm -rf /var/lib/cloud/instances/* /var/lib/cloud/instance || true
+echo ""
+echo "[3/9] Checking fips-mode-setup --check..."
+if ! fips-mode-setup --check | grep -q "FIPS mode is enabled."; then
+  fail "fips-mode-setup disagrees with kernel flag"
+fi
+echo "      OK: fips-mode-setup reports enabled"
+
+# ---------------------------------------------------------------------------
+# 4. System-wide crypto policy is FIPS
+# ---------------------------------------------------------------------------
+echo ""
+echo "[4/9] Checking system crypto policy..."
+policy=$(update-crypto-policies --show 2>/dev/null || echo "unknown")
+if [[ "$policy" != "FIPS" ]]; then
+  fail "crypto policy is '$policy', expected 'FIPS'"
+fi
+echo "      OK: crypto policy = FIPS"
+
+# ---------------------------------------------------------------------------
+# 5. /boot is mounted (FIPS integrity check depends on it)
+# ---------------------------------------------------------------------------
+echo ""
+echo "[5/9] Checking /boot is mounted..."
+if ! mountpoint -q /boot; then
+  # Not necessarily fatal on every marketplace image, but worth logging loudly
+  echo "      WARN: /boot is not a separate mountpoint"
+  echo "            STIG will flag this; document or re-partition at build time"
+else
+  echo "      OK: /boot is mounted"
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Temp space
+# 6. waagent version is >= 2.14.0.1 (minimum for FIPS 140-3 goal state)
 # ---------------------------------------------------------------------------
-find /tmp     -mindepth 1 -delete 2>/dev/null || true
-find /var/tmp -mindepth 1 -delete 2>/dev/null || true
+echo ""
+echo "[6/9] Checking waagent version..."
+if ! command -v waagent >/dev/null 2>&1; then
+  fail "waagent binary not found"
+fi
+
+wa_raw=$(waagent --version 2>/dev/null | head -1)
+echo "      waagent: $wa_raw"
+
+# Extract just the version number: "WALinuxAgent-2.14.0.1 running on ..." -> "2.14.0.1"
+wa_ver=$(echo "$wa_raw" | sed -nE 's/^WALinuxAgent-([0-9]+(\.[0-9]+)+).*/\1/p')
+if [[ -z "$wa_ver" ]]; then
+  fail "could not parse waagent version from: $wa_raw"
+fi
+
+# Version comparison via sort -V
+min_ver="2.14.0.1"
+lowest=$(printf '%s\n%s\n' "$wa_ver" "$min_ver" | sort -V | head -1)
+if [[ "$lowest" != "$min_ver" ]]; then
+  fail "waagent $wa_ver is older than required $min_ver for FIPS 140-3"
+fi
+echo "      OK: waagent $wa_ver >= $min_ver"
 
 # ---------------------------------------------------------------------------
-# 10. Zero free space so the captured VHD compresses well
+# 7. waagent.service is active
 # ---------------------------------------------------------------------------
-# Optional but recommended. Shrinks gallery storage footprint significantly.
-# Skip if your build timeout is tight.
-echo "--- Zeroing free space (may take a few minutes) ---"
-dd if=/dev/zero of=/zerofile bs=1M status=none || true
-sync
-rm -f /zerofile
-sync
+echo ""
+echo "[7/9] Checking waagent.service status..."
+if ! systemctl is-active --quiet waagent; then
+  fail "waagent.service is not active"
+fi
+
+# Detect the "internal loop, never Ready" failure mode explicitly:
+# if the service has restarted a lot in a short window, that's the symptom.
+restart_count=$(systemctl show waagent -p NRestarts --value 2>/dev/null || echo "0")
+if [[ "$restart_count" -gt 5 ]]; then
+  fail "waagent.service has restarted $restart_count times — likely stuck in FIPS loop"
+fi
+echo "      OK: waagent.service active (restarts: $restart_count)"
 
 # ---------------------------------------------------------------------------
-# 11. Final: Azure Linux Agent deprovision. MUST BE LAST.
+# 8. waagent successfully fetched a goal state post-FIPS.
+#    This is THE canary for the historical bug. If waagent can't decrypt
+#    Certificates.p7m under FIPS, it never gets past goal-state fetch.
 # ---------------------------------------------------------------------------
-# -deprovision+user also removes the 'packer' user and its home.
-# -force skips the interactive confirmation.
-# After this runs the VM is generalized; Packer will power it off and capture.
-echo "--- waagent deprovision (final step) ---"
-echo "=== Deprovision finished at $(date -u) ==="
+echo ""
+echo "[8/9] Waiting for waagent to fetch goal state post-FIPS..."
 
-# Flush this log to the OSCAP bundle location so it survives capture
-cp "$LOG" /var/tmp/oscap/packer-deprovision.log 2>/dev/null || true
+# /var/log/waagent.log may have been truncated on reboot; be patient.
+deadline=$(( $(date +%s) + 300 ))   # up to 5 minutes
+goal_state_ok=0
 
-/usr/sbin/waagent -deprovision+user -force
+while [[ $(date +%s) -lt $deadline ]]; do
+  if [[ -f /var/log/waagent.log ]]; then
+    # Positive signal: agent reports fetching an incarnation or goal state
+    if grep -qE "Fetched a new incarnation|Fetched goal state|Goal state .* fetched" \
+         /var/log/waagent.log; then
+      goal_state_ok=1
+      break
+    fi
+    # Negative signal: the specific bug pattern. Fail fast.
+    if grep -qE "Failed to decrypt .*Certificates\.p7m|FIPS mode not supported|Error converting PFX to PEM" \
+         /var/log/waagent.log; then
+      fail "waagent hit the known FIPS goal-state decryption bug"
+    fi
+  fi
+  sleep 10
+done
+
+if [[ $goal_state_ok -ne 1 ]]; then
+  fail "waagent did not fetch a goal state within 5 minutes post-FIPS"
+fi
+echo "      OK: waagent fetched goal state successfully"
+
+# ---------------------------------------------------------------------------
+# 9. Final scan for any ERROR-level entries in waagent.log since reboot
+# ---------------------------------------------------------------------------
+echo ""
+echo "[9/9] Scanning waagent.log for ERROR entries..."
+err_count=$(grep -cE '^\S+ ERROR ' /var/log/waagent.log 2>/dev/null || echo "0")
+if [[ "$err_count" -gt 0 ]]; then
+  echo "      WARN: $err_count ERROR lines in waagent.log (inspect manually):"
+  grep -E '^\S+ ERROR ' /var/log/waagent.log | head -10
+  # Not a hard fail — some transient errors are normal during boot.
+  # Escalate to fail if your policy requires it.
+else
+  echo "      OK: no ERROR entries"
+fi
+
+echo ""
+echo "=========================================="
+echo "Post-FIPS verification PASSED"
+echo "Finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "=========================================="
+
+# Copy this log to the OSCAP bundle dir so it rides out with results
+mkdir -p /var/tmp/oscap
+cp "$LOG" /var/tmp/oscap/packer-fips-verify.log 2>/dev/null || true
+
+exit 0
