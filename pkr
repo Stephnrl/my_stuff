@@ -1,155 +1,59 @@
-name: Build CMMC Image
+- hosts: localhost
+  become: true
+  gather_facts: true
+  vars:
+    waagent_min_version: "2.14.0.1"
+  tasks:
+    - name: Patch system
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: true
 
-on:
-  workflow_dispatch:
-    inputs:
-      os:
-        type: choice
-        options: [rhel9]
-        default: rhel9
-      image_version:
-        type: string
-        description: "semver x.y.z (leave blank to auto)"
-        required: false
+    # Azure-tuned RHEL marketplace images ship a waagent RPM from Red Hat
+    # that's typically older than what we need for FIPS 140-3.
+    # Upgrade it explicitly from the JFrog-mirrored Microsoft repo.
+    - name: Ensure WALinuxAgent is new enough for FIPS 140-3
+      ansible.builtin.dnf:
+        name: WALinuxAgent
+        state: latest
 
-permissions:
-  id-token: write     # OIDC to Azure
-  contents: read
+    - name: Capture waagent version
+      ansible.builtin.command: waagent --version
+      register: waagent_ver
+      changed_when: false
 
-jobs:
-  rhel9:
-    if: ${{ inputs.os == 'rhel9' }}
-    uses: ./.github/workflows/_reusable-packer-build.yml
-    with:
-      os: rhel9
-      image_definition: rhel9-cmmc
-      image_version: ${{ inputs.image_version }}
-    secrets: inherit
+    - name: Fail if waagent is too old for FIPS 140-3
+      ansible.builtin.assert:
+        that:
+          - waagent_ver.stdout is search('WALinuxAgent-(2\.(1[4-9]|[2-9][0-9])|[3-9])')
+        fail_msg: >-
+          waagent is older than 2.14.0.1 ({{ waagent_ver.stdout }}).
+          FIPS + this waagent = broken goal state. Update the JFrog mirror.
 
+    - name: Install crypto + FIPS prereqs
+      ansible.builtin.dnf:
+        name:
+          - crypto-policies
+          - crypto-policies-scripts
+        state: present
 
-name: _reusable-packer-build
+    - name: Ensure waagent AutoUpdate is enabled
+      ansible.builtin.lineinfile:
+        path: /etc/waagent.conf
+        regexp: '^AutoUpdate\.Enabled='
+        line: 'AutoUpdate.Enabled=y'
 
-on:
-  workflow_call:
-    inputs:
-      os:               { type: string, required: true }
-      image_definition: { type: string, required: true }
-      image_version:    { type: string, required: false }
+    # Do NOT set OS.EnableFIPS=y in waagent.conf. That legacy flag forces
+    # waagent to emit OPENSSL_FIPS=1 to child openssl calls, which under
+    # FIPS 140-3 support is the wrong path. Leave it default (n).
+    - name: Ensure legacy OS.EnableFIPS is NOT set
+      ansible.builtin.lineinfile:
+        path: /etc/waagent.conf
+        regexp: '^OS\.EnableFIPS='
+        line: 'OS.EnableFIPS=n'
 
-permissions:
-  id-token: write
-  contents: read
-
-jobs:
-  build:
-    runs-on: [self-hosted, linux, ghes-runner]
-    env:
-      # Azure (App Reg / SPN with Federated Credential for this repo)
-      ARM_CLIENT_ID:       ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID:       ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # Packer picks these up via PKR_VAR_*
-      PKR_VAR_subscription_id:        ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      PKR_VAR_tenant_id:              ${{ vars.AZURE_TENANT_ID }}
-      PKR_VAR_client_id:              ${{ vars.AZURE_CLIENT_ID }}
-      PKR_VAR_location:               ${{ vars.AZURE_LOCATION }}
-      PKR_VAR_build_resource_group:   ${{ vars.BUILD_RG }}
-      PKR_VAR_gallery_resource_group: ${{ vars.GALLERY_RG }}
-      PKR_VAR_gallery_name:           ${{ vars.GALLERY_NAME }}
-      PKR_VAR_image_definition_name:  ${{ inputs.image_definition }}
-      PKR_VAR_vnet_name:              ${{ vars.VNET_NAME }}
-      PKR_VAR_vnet_resource_group:    ${{ vars.VNET_RG }}
-      PKR_VAR_subnet_name:            ${{ vars.SUBNET_NAME }}
-
-    steps:
-      - name: Checkout packer repo
-        uses: actions/checkout@v4
-
-      - name: Compute image version
-        id: ver
-        run: |
-          if [[ -n "${{ inputs.image_version }}" ]]; then
-            echo "v=${{ inputs.image_version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "v=$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate GitHub App token (for cloning ansible repos)
-        id: app
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id:      ${{ vars.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner:       ${{ github.repository_owner }}
-          repositories: >-
-            ansible-rhel9-stig,
-            ansible-cmmc-common,
-            ansible-oscap-scan
-
-      - name: Clone ansible content (on runner)
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p ansible-bundle/playbooks ansible-bundle/roles ansible-bundle/vars
-          # Clone STIG role into roles/rhel9_stig (path alignment matters)
-          git clone --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.mycorp.mil/org/ansible-rhel9-stig.git" \
-            ansible-bundle/roles/rhel9_stig
-          git clone --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.mycorp.mil/org/ansible-cmmc-common.git" \
-            ansible-bundle/roles/cmmc_common
-          git clone --depth=1 \
-            "https://x-access-token:${GH_TOKEN}@github.mycorp.mil/org/ansible-oscap-scan.git" \
-            ansible-bundle/roles/oscap_scan
-          # Copy our orchestrating playbooks from this repo
-          cp -r ansible/playbooks/* ansible-bundle/playbooks/
-          cp -r ansible/vars/* ansible-bundle/vars/ 2>/dev/null || true
-          [[ -f ansible/requirements.yml ]] && cp ansible/requirements.yml ansible-bundle/
-          # Strip any leftover .git (token leak prevention)
-          find ansible-bundle -name '.git' -type d -prune -exec rm -rf {} +
-          tar -czf /tmp/ansible-bundle.tar.gz -C ansible-bundle .
-
-      - name: Azure login (OIDC to GovCloud)
-        uses: azure/login@v2
-        with:
-          client-id:       ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          environment:     AzureUSGovernment
-          audience:        api://AzureADTokenExchange
-
-      - name: Packer init + validate
-        working-directory: packer/builds/${{ inputs.os }}
-        env:
-          PKR_VAR_image_version:      ${{ steps.ver.outputs.v }}
-          PKR_VAR_ansible_bundle_path: /tmp/ansible-bundle.tar.gz
-          PKR_VAR_jfrog_repo_file_path: ${{ github.workspace }}/files/jfrog-rhel9.repo
-        run: |
-          packer init -upgrade ../../
-          packer validate -var-file=variables.pkr.hcl ../../
-
-      - name: Packer build
-        working-directory: packer/builds/${{ inputs.os }}
-        env:
-          PKR_VAR_image_version:       ${{ steps.ver.outputs.v }}
-          PKR_VAR_ansible_bundle_path: /tmp/ansible-bundle.tar.gz
-          PKR_VAR_jfrog_repo_file_path: ${{ github.workspace }}/files/jfrog-rhel9.repo
-          PACKER_LOG: 1
-          PACKER_LOG_PATH: ${{ github.workspace }}/packer.log
-        run: packer build -color=false ../../
-
-      - name: Upload OSCAP + packer logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: oscap-${{ inputs.os }}-${{ steps.ver.outputs.v }}
-          path: |
-            packer/builds/${{ inputs.os }}/oscap-results/**
-            packer.log
-          retention-days: 90
-
-      - name: Scrub bundle
-        if: always()
-        run: rm -f /tmp/ansible-bundle.tar.gz && rm -rf ansible-bundle
+    - name: Enable FIPS mode (reboot handled by Packer)
+      ansible.builtin.command: fips-mode-setup --enable
+      register: fips_out
+      changed_when: "'FIPS mode will be enabled' in fips_out.stdout"
