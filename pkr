@@ -1,14 +1,19 @@
-[jfrog-rhel9-baseos]
-name=JFrog RHEL 9 BaseOS
-baseurl=https://artifactory.mycorp.mil/artifactory/rhel9-baseos/
-enabled=1
-gpgcheck=1
-gpgkey=https://artifactory.mycorp.mil/artifactory/rhel9-baseos/RPM-GPG-KEY-redhat-release
-sslverify=1
+#!/usr/bin/env bash
+set -euo pipefail
 
-[jfrog-rhel9-appstream]
-name=JFrog RHEL 9 AppStream
-baseurl=https://artifactory.mycorp.mil/artifactory/rhel9-appstream/
-enabled=1
-gpgcheck=1
-gpgkey=https://artifactory.mycorp.mil/artifactory/rhel9-baseos/RPM-GPG-KEY-redhat-release
+BUNDLE_DIR=/tmp/ansible-bundle
+if [[ ! -d "$BUNDLE_DIR" ]]; then
+  mkdir -p "$BUNDLE_DIR"
+  tar -xzf /tmp/ansible-bundle.tar.gz -C "$BUNDLE_DIR"
+fi
+
+cd "$BUNDLE_DIR"
+
+export ANSIBLE_STDOUT_CALLBACK=default
+export ANSIBLE_FORCE_COLOR=0
+export ANSIBLE_LOCAL_TEMP=/var/tmp/.ansible-tmp
+export ANSIBLE_REMOTE_TEMP=/var/tmp/.ansible-tmp
+
+ansible-playbook -i 'localhost,' -c local \
+  "playbooks/${PLAYBOOK}" \
+  --extra-vars "@vars/build.yml" 2>&1 | tee "/var/log/ansible-${PLAYBOOK}.log"
