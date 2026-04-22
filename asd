@@ -1,134 +1,141 @@
-############################################
-# Network interface (private only, no PIP) #
-############################################
-resource "azurerm_network_interface" "this" {
-  name                = "${var.name}-nic"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  tags                = var.tags
+output "id" {
+  description = "VM resource ID."
+  value       = azurerm_linux_virtual_machine.this.id
+}
 
-  ip_configuration {
-    name                          = "primary"
-    subnet_id                     = var.subnet_id
-    private_ip_address_allocation = "Dynamic"
+output "name" {
+  description = "VM name — also the Ansible inventory hostname."
+  value       = azurerm_linux_virtual_machine.this.name
+}
+
+output "private_ip_address" {
+  description = "Private IP. This is what AAP targets for SSH."
+  value       = azurerm_network_interface.this.private_ip_address
+}
+
+output "principal_id" {
+  description = "System-assigned managed identity principal ID (grant Key Vault / Log Analytics RBAC to this)."
+  value       = azurerm_linux_virtual_machine.this.identity[0].principal_id
+}
+
+output "admin_username" {
+  description = "Local account AAP will SSH as."
+  value       = var.admin_username
+}
+
+output "nic_id" {
+  description = "NIC resource ID (useful for DCR / NSG association outside the module)."
+  value       = azurerm_network_interface.this.id
+}
+
+
+
+variable "name" {
+  description = "VM name. Also used as the prefix for the NIC and any module-owned child resources."
+  type        = string
+  validation {
+    condition     = length(var.name) <= 64
+    error_message = "Linux VM computer_name must be <= 64 chars."
   }
 }
 
-############################################
-# Virtual machine                          #
-############################################
-resource "azurerm_linux_virtual_machine" "this" {
-  name                            = var.name
-  computer_name                   = var.name
-  resource_group_name             = var.resource_group_name
-  location                        = var.location
-  size                            = var.vm_size
-  admin_username                  = var.admin_username
-  network_interface_ids           = [azurerm_network_interface.this.id]
-  disable_password_authentication = true
-  source_image_id                 = var.source_image_id
-  tags                            = var.tags
-
-  # Trusted Launch — NIST 800-171 3.14.x (boot integrity)
-  secure_boot_enabled = var.enable_trusted_launch
-  vtpm_enabled        = var.enable_trusted_launch
-
-  admin_ssh_key {
-    username   = var.admin_username
-    public_key = var.admin_ssh_public_key
-  }
-
-  os_disk {
-    caching                = "ReadWrite"
-    storage_account_type   = "Premium_LRS"
-    disk_size_gb           = var.os_disk_size_gb
-    disk_encryption_set_id = var.disk_encryption_set_id
-  }
-
-  identity {
-    type         = length(var.user_assigned_identity_ids) > 0 ? "SystemAssigned, UserAssigned" : "SystemAssigned"
-    identity_ids = var.user_assigned_identity_ids
-  }
-
-  boot_diagnostics {
-    storage_account_uri = var.boot_diagnostics_storage_uri
-  }
-
-  lifecycle {
-    # Image version drift is managed by the pipeline — a new Packer build bumps source_image_id
-    # intentionally. Ignoring here prevents accidental redeploys on plan.
-    ignore_changes = [source_image_id]
-  }
+variable "resource_group_name" {
+  description = "Resource group the VM lands in."
+  type        = string
 }
 
-############################################
-# Data disks                               #
-############################################
-resource "azurerm_managed_disk" "data" {
-  for_each = { for d in var.data_disks : d.name => d }
-
-  name                   = each.value.name
-  location               = var.location
-  resource_group_name    = var.resource_group_name
-  storage_account_type   = each.value.storage_account_type
-  create_option          = "Empty"
-  disk_size_gb           = each.value.disk_size_gb
-  disk_encryption_set_id = var.disk_encryption_set_id
-  tags                   = var.tags
+variable "location" {
+  description = "Azure region (e.g. usgovvirginia, usgovtexas)."
+  type        = string
 }
 
-resource "azurerm_virtual_machine_data_disk_attachment" "data" {
-  for_each = { for d in var.data_disks : d.name => d }
-
-  managed_disk_id    = azurerm_managed_disk.data[each.key].id
-  virtual_machine_id = azurerm_linux_virtual_machine.this.id
-  lun                = each.value.lun
-  caching            = each.value.caching
+variable "vm_size" {
+  description = "VM SKU. Must be a Gen2 / Trusted Launch capable size when enable_trusted_launch = true."
+  type        = string
+  default     = "Standard_D2s_v5"
 }
 
-############################################
-# Entra ID SSH login (human access)        #
-############################################
-resource "azurerm_virtual_machine_extension" "aad_ssh" {
-  count = var.enable_aad_ssh_login ? 1 : 0
-
-  name                       = "AADSSHLoginForLinux"
-  virtual_machine_id         = azurerm_linux_virtual_machine.this.id
-  publisher                  = "Microsoft.Azure.ActiveDirectory"
-  type                       = "AADSSHLoginForLinux"
-  type_handler_version       = "1.0"
-  auto_upgrade_minor_version = true
-  tags                       = var.tags
-
-  # RBAC role assignments ("Virtual Machine User Login" / "Virtual Machine Administrator Login")
-  # belong at the RG or VM scope and are assigned in the calling root module, not here —
-  # that keeps the module free of specific group object IDs.
-
-  depends_on = [
-    azurerm_virtual_machine_data_disk_attachment.data,
-  ]
+variable "admin_username" {
+  description = "Local service account used by AAP for SSH. Human users authenticate via Entra ID and should NOT use this account."
+  type        = string
+  default     = "aapadmin"
 }
 
-############################################
-# Azure Monitor Agent (logging)            #
-############################################
-resource "azurerm_virtual_machine_extension" "ama" {
-  count = var.enable_azure_monitor_agent ? 1 : 0
+variable "admin_ssh_public_key" {
+  description = "Public key for admin_username. The matching private key lives in an AAP Machine Credential — never in Git, never in tfvars."
+  type        = string
+  sensitive   = true
+}
 
-  name                       = "AzureMonitorLinuxAgent"
-  virtual_machine_id         = azurerm_linux_virtual_machine.this.id
-  publisher                  = "Microsoft.Azure.Monitor"
-  type                       = "AzureMonitorLinuxAgent"
-  type_handler_version       = "1.33"
-  auto_upgrade_minor_version = true
-  automatic_upgrade_enabled  = true
-  tags                       = var.tags
+variable "subnet_id" {
+  description = "Subnet resource ID. The NIC is deployed private-IP only — no public IP is ever created by this module."
+  type        = string
+}
 
-  # AMA itself has no settings worth passing here — the actual log routing is a DCR
-  # (azurerm_monitor_data_collection_rule) + DCR association, which belongs in the
-  # root module because it's shared across many VMs.
+variable "source_image_id" {
+  description = "Compute Gallery image version ID produced by the Packer pipeline. Use the explicit version ID (not 'latest') so Terraform state matches what was actually deployed."
+  type        = string
+}
 
-  depends_on = [
-    azurerm_virtual_machine_data_disk_attachment.data,
-  ]
+variable "data_disks" {
+  description = "Managed data disks to create and attach."
+  type = list(object({
+    name                 = string
+    lun                  = number
+    disk_size_gb         = number
+    storage_account_type = optional(string, "Premium_LRS")
+    caching              = optional(string, "ReadWrite")
+  }))
+  default = []
+}
+
+variable "os_disk_size_gb" {
+  description = "OS disk size override. Leave null to inherit from the gallery image."
+  type        = number
+  default     = null
+}
+
+variable "disk_encryption_set_id" {
+  description = "Disk Encryption Set ID backed by a customer-managed key in Key Vault. REQUIRED for CMMC L2 (NIST 800-171 3.13.11 / 3.13.16) when the VM processes CUI. Applied to OS + data disks."
+  type        = string
+}
+
+variable "enable_trusted_launch" {
+  description = "Enable Secure Boot + vTPM. Defaults on. Image in the gallery must be Gen2 / TrustedLaunchSupported."
+  type        = bool
+  default     = true
+}
+
+variable "enable_aad_ssh_login" {
+  description = "Install the Entra ID SSH login extension for human access via 'az ssh vm'."
+  type        = bool
+  default     = true
+}
+
+variable "enable_azure_monitor_agent" {
+  description = "Install Azure Monitor Agent. Pair with a Data Collection Rule association (outside this module) to ship syslog/auditd to Log Analytics / Sentinel."
+  type        = bool
+  default     = true
+}
+
+variable "user_assigned_identity_ids" {
+  description = "User-assigned managed identity IDs (e.g. one with Key Vault access for AMA or secret retrieval). System-assigned identity is always enabled."
+  type        = list(string)
+  default     = []
+}
+
+variable "boot_diagnostics_storage_uri" {
+  description = "Storage account blob URI for boot diagnostics. Set to null to use Azure-managed storage (simpler, and fine for CMMC)."
+  type        = string
+  default     = null
+}
+
+variable "tags" {
+  description = "Tags. Include at minimum: data_classification, cmmc_level, owner, cost_center."
+  type        = map(string)
+  default     = {}
+  validation {
+    condition     = contains(keys(var.tags), "data_classification") && contains(keys(var.tags), "cmmc_level")
+    error_message = "tags must include 'data_classification' and 'cmmc_level' for audit/inventory traceability."
+  }
 }
