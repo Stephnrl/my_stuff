@@ -1,218 +1,155 @@
-#!/usr/bin/env bash
-#
-# scripts/20-reboot-wait.sh  (a.k.a. 02-reboot-wait.sh)
-#
-# Runs AFTER the post-FIPS reboot. Verifies:
-#   1. SSH came back (implicit — if we're running, it did)
-#   2. System finished booting (not still in "starting" state)
-#   3. FIPS is actually enabled in the kernel
-#   4. Crypto policy reports FIPS
-#   5. /boot is mounted (FIPS integrity check depends on it)
-#   6. waagent is new enough for FIPS 140-3
-#   7. waagent.service is active and not stuck in a restart loop
-#   8. waagent successfully fetched a goal state post-FIPS
-#      (this is the exact failure mode the historical bug produced)
-#   9. No known-bad error signatures in waagent.log
-#
-# Exits non-zero on any failure so Packer aborts the build BEFORE
-# we bake a broken image into the gallery.
+name: Build CMMC Image
 
-set -euo pipefail
+on:
+  workflow_dispatch:
+    inputs:
+      os:
+        type: choice
+        options: [rhel9]
+        default: rhel9
+      image_version:
+        type: string
+        description: "semver x.y.z (leave blank to auto)"
+        required: false
 
-LOG=/var/log/packer-fips-verify.log
-exec > >(tee -a "$LOG") 2>&1
+permissions:
+  id-token: write     # OIDC to Azure
+  contents: read
 
-echo "=========================================="
-echo "Post-FIPS-reboot verification"
-echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "=========================================="
+jobs:
+  rhel9:
+    if: ${{ inputs.os == 'rhel9' }}
+    uses: ./.github/workflows/_reusable-packer-build.yml
+    with:
+      os: rhel9
+      image_definition: rhel9-cmmc
+      image_version: ${{ inputs.image_version }}
+    secrets: inherit
 
-fail() {
-  echo ""
-  echo "FAIL: $*"
-  echo ""
-  echo "--- Last 80 lines of waagent.log ---"
-  tail -80 /var/log/waagent.log 2>/dev/null || echo "(no waagent.log)"
-  echo "--- systemctl status waagent ---"
-  systemctl status waagent --no-pager -l 2>/dev/null || true
-  echo "--- journalctl -u waagent (last 50) ---"
-  journalctl -u waagent --no-pager -n 50 2>/dev/null || true
-  exit 1
-}
 
-# ---------------------------------------------------------------------------
-# 1. Wait for systemd to finish booting.
-#    Without this, subsequent checks race against services still starting.
-# ---------------------------------------------------------------------------
-echo ""
-echo "[1/9] Waiting for system boot to settle..."
-for i in $(seq 1 30); do
-  state=$(systemctl is-system-running 2>/dev/null || true)
-  case "$state" in
-    running|degraded)
-      echo "      system state: $state"
-      # 'degraded' is acceptable — some STIG lockdowns intentionally
-      # leave services masked. We just need boot to have finished.
-      break
-      ;;
-    starting|initializing)
-      sleep 5
-      ;;
-    *)
-      # Unknown state; give it a beat then re-check
-      sleep 5
-      ;;
-  esac
-  if [[ $i -eq 30 ]]; then
-    fail "system did not finish booting after 150s (last state: $state)"
-  fi
-done
+name: _reusable-packer-build
 
-# ---------------------------------------------------------------------------
-# 2. Kernel FIPS flag
-# ---------------------------------------------------------------------------
-echo ""
-echo "[2/9] Checking /proc/sys/crypto/fips_enabled..."
-fips_flag=$(cat /proc/sys/crypto/fips_enabled 2>/dev/null || echo "missing")
-if [[ "$fips_flag" != "1" ]]; then
-  fail "kernel fips_enabled is '$fips_flag', expected '1'"
-fi
-echo "      OK: kernel fips_enabled=1"
+on:
+  workflow_call:
+    inputs:
+      os:               { type: string, required: true }
+      image_definition: { type: string, required: true }
+      image_version:    { type: string, required: false }
 
-# ---------------------------------------------------------------------------
-# 3. fips-mode-setup agrees
-# ---------------------------------------------------------------------------
-echo ""
-echo "[3/9] Checking fips-mode-setup --check..."
-if ! fips-mode-setup --check | grep -q "FIPS mode is enabled."; then
-  fail "fips-mode-setup disagrees with kernel flag"
-fi
-echo "      OK: fips-mode-setup reports enabled"
+permissions:
+  id-token: write
+  contents: read
 
-# ---------------------------------------------------------------------------
-# 4. System-wide crypto policy is FIPS
-# ---------------------------------------------------------------------------
-echo ""
-echo "[4/9] Checking system crypto policy..."
-policy=$(update-crypto-policies --show 2>/dev/null || echo "unknown")
-if [[ "$policy" != "FIPS" ]]; then
-  fail "crypto policy is '$policy', expected 'FIPS'"
-fi
-echo "      OK: crypto policy = FIPS"
+jobs:
+  build:
+    runs-on: [self-hosted, linux, ghes-runner]
+    env:
+      # Azure (App Reg / SPN with Federated Credential for this repo)
+      ARM_CLIENT_ID:       ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID:       ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-# ---------------------------------------------------------------------------
-# 5. /boot is mounted (FIPS integrity check depends on it)
-# ---------------------------------------------------------------------------
-echo ""
-echo "[5/9] Checking /boot is mounted..."
-if ! mountpoint -q /boot; then
-  # Not necessarily fatal on every marketplace image, but worth logging loudly
-  echo "      WARN: /boot is not a separate mountpoint"
-  echo "            STIG will flag this; document or re-partition at build time"
-else
-  echo "      OK: /boot is mounted"
-fi
+      # Packer picks these up via PKR_VAR_*
+      PKR_VAR_subscription_id:        ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      PKR_VAR_tenant_id:              ${{ vars.AZURE_TENANT_ID }}
+      PKR_VAR_client_id:              ${{ vars.AZURE_CLIENT_ID }}
+      PKR_VAR_location:               ${{ vars.AZURE_LOCATION }}
+      PKR_VAR_build_resource_group:   ${{ vars.BUILD_RG }}
+      PKR_VAR_gallery_resource_group: ${{ vars.GALLERY_RG }}
+      PKR_VAR_gallery_name:           ${{ vars.GALLERY_NAME }}
+      PKR_VAR_image_definition_name:  ${{ inputs.image_definition }}
+      PKR_VAR_vnet_name:              ${{ vars.VNET_NAME }}
+      PKR_VAR_vnet_resource_group:    ${{ vars.VNET_RG }}
+      PKR_VAR_subnet_name:            ${{ vars.SUBNET_NAME }}
 
-# ---------------------------------------------------------------------------
-# 6. waagent version is >= 2.14.0.1 (minimum for FIPS 140-3 goal state)
-# ---------------------------------------------------------------------------
-echo ""
-echo "[6/9] Checking waagent version..."
-if ! command -v waagent >/dev/null 2>&1; then
-  fail "waagent binary not found"
-fi
+    steps:
+      - name: Checkout packer repo
+        uses: actions/checkout@v4
 
-wa_raw=$(waagent --version 2>/dev/null | head -1)
-echo "      waagent: $wa_raw"
+      - name: Compute image version
+        id: ver
+        run: |
+          if [[ -n "${{ inputs.image_version }}" ]]; then
+            echo "v=${{ inputs.image_version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "v=$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
 
-# Extract just the version number: "WALinuxAgent-2.14.0.1 running on ..." -> "2.14.0.1"
-wa_ver=$(echo "$wa_raw" | sed -nE 's/^WALinuxAgent-([0-9]+(\.[0-9]+)+).*/\1/p')
-if [[ -z "$wa_ver" ]]; then
-  fail "could not parse waagent version from: $wa_raw"
-fi
+      - name: Generate GitHub App token (for cloning ansible repos)
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id:      ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner:       ${{ github.repository_owner }}
+          repositories: >-
+            ansible-rhel9-stig,
+            ansible-cmmc-common,
+            ansible-oscap-scan
 
-# Version comparison via sort -V
-min_ver="2.14.0.1"
-lowest=$(printf '%s\n%s\n' "$wa_ver" "$min_ver" | sort -V | head -1)
-if [[ "$lowest" != "$min_ver" ]]; then
-  fail "waagent $wa_ver is older than required $min_ver for FIPS 140-3"
-fi
-echo "      OK: waagent $wa_ver >= $min_ver"
+      - name: Clone ansible content (on runner)
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p ansible-bundle/playbooks ansible-bundle/roles ansible-bundle/vars
+          # Clone STIG role into roles/rhel9_stig (path alignment matters)
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.mycorp.mil/org/ansible-rhel9-stig.git" \
+            ansible-bundle/roles/rhel9_stig
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.mycorp.mil/org/ansible-cmmc-common.git" \
+            ansible-bundle/roles/cmmc_common
+          git clone --depth=1 \
+            "https://x-access-token:${GH_TOKEN}@github.mycorp.mil/org/ansible-oscap-scan.git" \
+            ansible-bundle/roles/oscap_scan
+          # Copy our orchestrating playbooks from this repo
+          cp -r ansible/playbooks/* ansible-bundle/playbooks/
+          cp -r ansible/vars/* ansible-bundle/vars/ 2>/dev/null || true
+          [[ -f ansible/requirements.yml ]] && cp ansible/requirements.yml ansible-bundle/
+          # Strip any leftover .git (token leak prevention)
+          find ansible-bundle -name '.git' -type d -prune -exec rm -rf {} +
+          tar -czf /tmp/ansible-bundle.tar.gz -C ansible-bundle .
 
-# ---------------------------------------------------------------------------
-# 7. waagent.service is active
-# ---------------------------------------------------------------------------
-echo ""
-echo "[7/9] Checking waagent.service status..."
-if ! systemctl is-active --quiet waagent; then
-  fail "waagent.service is not active"
-fi
+      - name: Azure login (OIDC to GovCloud)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment:     AzureUSGovernment
+          audience:        api://AzureADTokenExchange
 
-# Detect the "internal loop, never Ready" failure mode explicitly:
-# if the service has restarted a lot in a short window, that's the symptom.
-restart_count=$(systemctl show waagent -p NRestarts --value 2>/dev/null || echo "0")
-if [[ "$restart_count" -gt 5 ]]; then
-  fail "waagent.service has restarted $restart_count times — likely stuck in FIPS loop"
-fi
-echo "      OK: waagent.service active (restarts: $restart_count)"
+      - name: Packer init + validate
+        working-directory: packer/builds/${{ inputs.os }}
+        env:
+          PKR_VAR_image_version:      ${{ steps.ver.outputs.v }}
+          PKR_VAR_ansible_bundle_path: /tmp/ansible-bundle.tar.gz
+          PKR_VAR_jfrog_repo_file_path: ${{ github.workspace }}/files/jfrog-rhel9.repo
+        run: |
+          packer init -upgrade ../../
+          packer validate -var-file=variables.pkr.hcl ../../
 
-# ---------------------------------------------------------------------------
-# 8. waagent successfully fetched a goal state post-FIPS.
-#    This is THE canary for the historical bug. If waagent can't decrypt
-#    Certificates.p7m under FIPS, it never gets past goal-state fetch.
-# ---------------------------------------------------------------------------
-echo ""
-echo "[8/9] Waiting for waagent to fetch goal state post-FIPS..."
+      - name: Packer build
+        working-directory: packer/builds/${{ inputs.os }}
+        env:
+          PKR_VAR_image_version:       ${{ steps.ver.outputs.v }}
+          PKR_VAR_ansible_bundle_path: /tmp/ansible-bundle.tar.gz
+          PKR_VAR_jfrog_repo_file_path: ${{ github.workspace }}/files/jfrog-rhel9.repo
+          PACKER_LOG: 1
+          PACKER_LOG_PATH: ${{ github.workspace }}/packer.log
+        run: packer build -color=false ../../
 
-# /var/log/waagent.log may have been truncated on reboot; be patient.
-deadline=$(( $(date +%s) + 300 ))   # up to 5 minutes
-goal_state_ok=0
+      - name: Upload OSCAP + packer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oscap-${{ inputs.os }}-${{ steps.ver.outputs.v }}
+          path: |
+            packer/builds/${{ inputs.os }}/oscap-results/**
+            packer.log
+          retention-days: 90
 
-while [[ $(date +%s) -lt $deadline ]]; do
-  if [[ -f /var/log/waagent.log ]]; then
-    # Positive signal: agent reports fetching an incarnation or goal state
-    if grep -qE "Fetched a new incarnation|Fetched goal state|Goal state .* fetched" \
-         /var/log/waagent.log; then
-      goal_state_ok=1
-      break
-    fi
-    # Negative signal: the specific bug pattern. Fail fast.
-    if grep -qE "Failed to decrypt .*Certificates\.p7m|FIPS mode not supported|Error converting PFX to PEM" \
-         /var/log/waagent.log; then
-      fail "waagent hit the known FIPS goal-state decryption bug"
-    fi
-  fi
-  sleep 10
-done
-
-if [[ $goal_state_ok -ne 1 ]]; then
-  fail "waagent did not fetch a goal state within 5 minutes post-FIPS"
-fi
-echo "      OK: waagent fetched goal state successfully"
-
-# ---------------------------------------------------------------------------
-# 9. Final scan for any ERROR-level entries in waagent.log since reboot
-# ---------------------------------------------------------------------------
-echo ""
-echo "[9/9] Scanning waagent.log for ERROR entries..."
-err_count=$(grep -cE '^\S+ ERROR ' /var/log/waagent.log 2>/dev/null || echo "0")
-if [[ "$err_count" -gt 0 ]]; then
-  echo "      WARN: $err_count ERROR lines in waagent.log (inspect manually):"
-  grep -E '^\S+ ERROR ' /var/log/waagent.log | head -10
-  # Not a hard fail — some transient errors are normal during boot.
-  # Escalate to fail if your policy requires it.
-else
-  echo "      OK: no ERROR entries"
-fi
-
-echo ""
-echo "=========================================="
-echo "Post-FIPS verification PASSED"
-echo "Finished: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "=========================================="
-
-# Copy this log to the OSCAP bundle dir so it rides out with results
-mkdir -p /var/tmp/oscap
-cp "$LOG" /var/tmp/oscap/packer-fips-verify.log 2>/dev/null || true
-
-exit 0
+      - name: Scrub bundle
+        if: always()
+        run: rm -f /tmp/ansible-bundle.tar.gz && rm -rf ansible-bundle
