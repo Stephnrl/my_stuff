@@ -1,0 +1,24 @@
+variable "subscription_id"        { type = string }
+variable "tenant_id"              { type = string }
+variable "client_id"              { type = string }   # App Reg (SPN)
+variable "location"               { type = string  default = "usgovvirginia" }
+variable "build_resource_group"   { type = string }   # pre-created, SPN scoped here
+variable "gallery_resource_group" { type = string }
+variable "gallery_name"           { type = string }
+variable "image_definition_name"  { type = string }   # set per-OS at invocation
+variable "image_version"          { type = string }   # x.y.z from workflow
+variable "replication_regions"    { type = list(string) default = ["usgovvirginia","usgovtexas"] }
+variable "vnet_name"              { type = string }
+variable "vnet_resource_group"    { type = string }
+variable "subnet_name"            { type = string }
+variable "ansible_bundle_path"    { type = string }   # path on runner
+variable "jfrog_repo_file_path"   { type = string }
+variable "extra_tags"             { type = map(string) default = {} }
+
+
+variable "image_publisher" { type = string  default = "RedHat" }
+variable "image_offer"     { type = string  default = "RHEL" }
+variable "image_sku"       { type = string  default = "9-lvm-gen2" }   # or "9_4" etc
+variable "image_src_ver"   { type = string  default = "latest" }
+variable "vm_size"         { type = string  default = "Standard_D4s_v5" }
+variable "ssh_username"    { type = string  default = "packer" }
