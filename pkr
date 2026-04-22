@@ -1,19 +1,182 @@
 #!/usr/bin/env bash
+#
+# scripts/99-deprovision.sh
+#
+# Final cleanup before Packer captures the image.
+# Order matters: strip artifacts -> strip logs/history -> waagent deprovision LAST.
+# After waagent runs, the VM is effectively unusable until it's generalized
+# and redeployed from the captured image, so nothing else can run after it.
+
 set -euo pipefail
 
-BUNDLE_DIR=/tmp/ansible-bundle
-if [[ ! -d "$BUNDLE_DIR" ]]; then
-  mkdir -p "$BUNDLE_DIR"
-  tar -xzf /tmp/ansible-bundle.tar.gz -C "$BUNDLE_DIR"
+LOG=/var/log/packer-deprovision.log
+exec > >(tee -a "$LOG") 2>&1
+echo "=== Deprovision starting at $(date -u) ==="
+
+# ---------------------------------------------------------------------------
+# 1. Preserve the artifacts we still want off the box
+# ---------------------------------------------------------------------------
+# The Packer 'file' download provisioner already pulled /var/tmp/oscap/* back
+# to the runner in an earlier step. Nothing to do here except confirm it exists
+# so we can safely wipe the ansible bundle next.
+if [[ ! -d /var/tmp/oscap ]]; then
+  echo "WARN: /var/tmp/oscap not found -- OSCAP step may not have run"
 fi
 
-cd "$BUNDLE_DIR"
+# ---------------------------------------------------------------------------
+# 2. Remove Ansible + pip + Galaxy collections
+# ---------------------------------------------------------------------------
+echo "--- Removing Ansible and pip ---"
 
-export ANSIBLE_STDOUT_CALLBACK=default
-export ANSIBLE_FORCE_COLOR=0
-export ANSIBLE_LOCAL_TEMP=/var/tmp/.ansible-tmp
-export ANSIBLE_REMOTE_TEMP=/var/tmp/.ansible-tmp
+# Uninstall ansible-core. clean_requirements_on_remove pulls orphaned deps.
+# We DO NOT remove python3 itself, python3-libselinux, or platform-python.
+dnf -y remove \
+    --setopt=clean_requirements_on_remove=True \
+    ansible-core \
+    python3-pip \
+  || echo "WARN: some packages were not installed; continuing"
 
-ansible-playbook -i 'localhost,' -c local \
-  "playbooks/${PLAYBOOK}" \
-  --extra-vars "@vars/build.yml" 2>&1 | tee "/var/log/ansible-${PLAYBOOK}.log"
+# Any pip-installed user packages (shouldn't be any, but belt + suspenders)
+rm -rf /root/.local/lib/python*     || true
+rm -rf /root/.cache/pip             || true
+rm -rf /home/*/.local/lib/python*   || true
+rm -rf /home/*/.cache/pip           || true
+
+# Galaxy collections + ansible config
+rm -rf /root/.ansible               || true
+rm -rf /home/*/.ansible             || true
+rm -rf /usr/share/ansible           || true
+rm -rf /etc/ansible                 || true
+
+# ---------------------------------------------------------------------------
+# 3. Remove the uploaded bundle and any scratch content
+# ---------------------------------------------------------------------------
+echo "--- Removing build artifacts ---"
+rm -rf /tmp/ansible-bundle              \
+       /tmp/ansible-bundle.tar.gz       \
+       /tmp/jfrog-rhel9.repo            \
+       /var/tmp/.ansible-tmp            \
+       /root/.ansible_async             \
+       /root/.ssh/known_hosts           \
+       || true
+
+# ---------------------------------------------------------------------------
+# 4. JFrog repo: decide keep vs remove
+# ---------------------------------------------------------------------------
+# Keep the JFrog repo file so VMs instantiated from this image can patch from
+# the same mirror. But if the repo file has credentials embedded, strip them.
+if [[ -f /etc/yum.repos.d/jfrog-rhel9.repo ]]; then
+  if grep -qE '^(username|password)=' /etc/yum.repos.d/jfrog-rhel9.repo; then
+    echo "Scrubbing credentials from JFrog repo file"
+    sed -i -E '/^(username|password)=/d' /etc/yum.repos.d/jfrog-rhel9.repo
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Clean dnf caches + history
+# ---------------------------------------------------------------------------
+echo "--- Cleaning dnf state ---"
+dnf -y clean all
+rm -rf /var/cache/dnf/* /var/cache/yum/* || true
+
+# dnf history reveals what we did. For CMMC traceability you may WANT to keep
+# it. If your policy says wipe, uncomment:
+# rm -rf /var/lib/dnf/history*
+
+# ---------------------------------------------------------------------------
+# 6. Logs, shell history, machine identity
+# ---------------------------------------------------------------------------
+echo "--- Wiping logs and history ---"
+
+# Rotate + truncate, don't rm -- some services hold open file handles
+find /var/log -type f \( \
+      -name '*.log'     -o \
+      -name '*.log.*'   -o \
+      -name 'messages*' -o \
+      -name 'secure*'   -o \
+      -name 'cron*'     -o \
+      -name 'maillog*'  -o \
+      -name 'boot.log*' \
+    \) -exec truncate -s 0 {} \;
+
+# Journald: flush then vacuum to zero
+journalctl --rotate   || true
+journalctl --vacuum-time=1s || true
+rm -rf /var/log/journal/* /run/log/journal/* || true
+
+# Audit logs -- CMMC consideration: some orgs want audit.log to start fresh
+# on each instantiation, others want the build history preserved. Truncating
+# is the common choice since per-instance auditing starts at first boot.
+truncate -s 0 /var/log/audit/audit.log 2>/dev/null || true
+rm -f /var/log/audit/audit.log.*                   || true
+
+# Shell history for every user
+rm -f /root/.bash_history /root/.lesshst /root/.viminfo
+for home in /home/*; do
+  [[ -d "$home" ]] || continue
+  rm -f "$home/.bash_history" "$home/.lesshst" "$home/.viminfo"
+done
+# Prevent history from being written during the rest of this script
+history -c 2>/dev/null || true
+export HISTSIZE=0
+
+# Machine ID: must be blank so cloud-init regenerates it on first boot.
+# Leaving a machine-id causes every VM from this image to share an identity,
+# which breaks journald and a few other things.
+truncate -s 0 /etc/machine-id
+rm -f /var/lib/dbus/machine-id
+ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
+# ---------------------------------------------------------------------------
+# 7. SSH host keys + the ephemeral packer user's keys
+# ---------------------------------------------------------------------------
+echo "--- Removing SSH host keys and packer user keys ---"
+
+# Host keys MUST be regenerated on first boot -- otherwise every VM from this
+# image has identical host keys (serious security issue).
+rm -f /etc/ssh/ssh_host_*
+
+# Packer's ephemeral authorized_keys was already cleared by
+# ssh_clear_authorized_keys=true in the builder, but double-check:
+rm -f /home/packer/.ssh/authorized_keys 2>/dev/null || true
+rm -f /root/.ssh/authorized_keys         2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 8. cloud-init reset (so it runs fresh on every new VM)
+# ---------------------------------------------------------------------------
+if command -v cloud-init >/dev/null 2>&1; then
+  echo "--- Resetting cloud-init state ---"
+  cloud-init clean --logs --seed || true
+  rm -rf /var/lib/cloud/instances/* /var/lib/cloud/instance || true
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Temp space
+# ---------------------------------------------------------------------------
+find /tmp     -mindepth 1 -delete 2>/dev/null || true
+find /var/tmp -mindepth 1 -delete 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 10. Zero free space so the captured VHD compresses well
+# ---------------------------------------------------------------------------
+# Optional but recommended. Shrinks gallery storage footprint significantly.
+# Skip if your build timeout is tight.
+echo "--- Zeroing free space (may take a few minutes) ---"
+dd if=/dev/zero of=/zerofile bs=1M status=none || true
+sync
+rm -f /zerofile
+sync
+
+# ---------------------------------------------------------------------------
+# 11. Final: Azure Linux Agent deprovision. MUST BE LAST.
+# ---------------------------------------------------------------------------
+# -deprovision+user also removes the 'packer' user and its home.
+# -force skips the interactive confirmation.
+# After this runs the VM is generalized; Packer will power it off and capture.
+echo "--- waagent deprovision (final step) ---"
+echo "=== Deprovision finished at $(date -u) ==="
+
+# Flush this log to the OSCAP bundle location so it survives capture
+cp "$LOG" /var/tmp/oscap/packer-deprovision.log 2>/dev/null || true
+
+/usr/sbin/waagent -deprovision+user -force
