@@ -1,53 +1,72 @@
-source "azure-arm" "rhel9" {
-  # ---- Auth: federated via az CLI session established by azure/login@v2 ----
-  use_azure_cli_auth = true
-  subscription_id    = var.subscription_id
-  tenant_id          = var.tenant_id
-  client_id          = var.client_id
+build {
+  name = "rhel9-cmmc"
+  sources = ["source.azure-arm.rhel9"]
 
-  # ---- GovCloud ----
-  cloud_environment_name = "USGovernment"
-
-  # ---- Source marketplace image ----
-  os_type         = "Linux"
-  image_publisher = var.image_publisher
-  image_offer     = var.image_offer
-  image_sku       = var.image_sku
-  image_version   = var.image_src_ver
-
-  # ---- Build infra: existing RG + existing VNet (private) ----
-  build_resource_group_name         = var.build_resource_group
-  virtual_network_name              = var.vnet_name
-  virtual_network_resource_group_name = var.vnet_resource_group
-  virtual_network_subnet_name       = var.subnet_name
-  private_virtual_network_with_public_ip = false   # no public IP
-  vm_size                           = var.vm_size
-
-  # ---- Destination: Compute Gallery (SIG) ----
-  managed_image_name                = "${var.image_definition_name}-${var.image_version}"
-  managed_image_resource_group_name = var.build_resource_group
-
-  shared_image_gallery_destination {
-    resource_group       = var.gallery_resource_group
-    gallery_name         = var.gallery_name
-    image_name           = var.image_definition_name
-    image_version        = var.image_version
-    replication_regions  = var.replication_regions
-    storage_account_type = "Premium_LRS"
+  # 1) Drop JFrog repo file before we try any yum operations
+  provisioner "file" {
+    source      = var.jfrog_repo_file_path
+    destination = "/tmp/jfrog-rhel9.repo"
   }
 
-  # ---- SSH: Packer generates a one-time keypair, uses it, throws it away ----
-  ssh_username           = var.ssh_username
-  ssh_pty                = true
-  ssh_clear_authorized_keys = true
+  # 2) Bootstrap: disable RH subscription repos, install JFrog repo,
+  #    install python3 + ansible-core from the mirror
+  provisioner "shell" {
+    execute_command = "sudo -E bash '{{ .Path }}'"
+    scripts = ["scripts/00-bootstrap-ansible.sh"]
+  }
 
-  # ---- Long build timeouts for STIG + OSCAP ----
-  polling_duration_timeout = "2h"
+  # 3) Upload the ansible bundle (pre-cloned on the runner via GH App token)
+  provisioner "file" {
+    source      = var.ansible_bundle_path   # /tmp/ansible-bundle.tar.gz on runner
+    destination = "/tmp/ansible-bundle.tar.gz"
+  }
 
-  azure_tags = merge({
-    os           = "rhel9"
-    compliance   = "cmmc"
-    built_by     = "packer"
-    build_source = "github-actions"
-  }, var.extra_tags)
+  # 4) Run patching + FIPS enable playbook (no reboot inside ansible)
+  provisioner "shell" {
+    execute_command = "sudo -E bash '{{ .Path }}'"
+    environment_vars = ["PLAYBOOK=01-prep-and-fips.yml"]
+    scripts = ["scripts/10-run-ansible.sh"]
+  }
+
+  # 5) Reboot — Packer handles disconnect, waits for SSH
+  provisioner "shell" {
+    inline              = ["sudo /sbin/shutdown -r +0 'packer fips reboot'"]
+    expect_disconnect   = true
+    skip_clean          = true
+  }
+
+  # 6) Verify FIPS is actually on after reboot
+  provisioner "shell" {
+    pause_before    = "45s"
+    execute_command = "sudo -E bash '{{ .Path }}'"
+    scripts         = ["scripts/20-reboot-wait.sh"]
+  }
+
+  # 7) STIG hardening
+  provisioner "shell" {
+    execute_command  = "sudo -E bash '{{ .Path }}'"
+    environment_vars = ["PLAYBOOK=02-stig-harden.yml"]
+    scripts          = ["scripts/10-run-ansible.sh"]
+  }
+
+  # 8) OSCAP scan
+  provisioner "shell" {
+    execute_command  = "sudo -E bash '{{ .Path }}'"
+    environment_vars = ["PLAYBOOK=03-oscap-scan.yml"]
+    scripts          = ["scripts/10-run-ansible.sh"]
+  }
+
+  # 9) Pull OSCAP artifacts back to the runner for CI upload
+  provisioner "file" {
+    direction   = "download"
+    source      = "/var/tmp/oscap/"
+    destination = "./oscap-results/"
+  }
+
+  # 10) Deprovision (waagent) + remove traces of ansible bundle, tokens, ssh keys
+  provisioner "shell" {
+    execute_command = "sudo -E bash '{{ .Path }}'"
+    scripts         = ["scripts/99-deprovision.sh"]
+    skip_clean      = true
+  }
 }
