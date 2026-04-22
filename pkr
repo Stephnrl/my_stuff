@@ -1,24 +1,14 @@
-#!/usr/bin/env bash
-set -euo pipefail
+[jfrog-rhel9-baseos]
+name=JFrog RHEL 9 BaseOS
+baseurl=https://artifactory.mycorp.mil/artifactory/rhel9-baseos/
+enabled=1
+gpgcheck=1
+gpgkey=https://artifactory.mycorp.mil/artifactory/rhel9-baseos/RPM-GPG-KEY-redhat-release
+sslverify=1
 
-# Turn off RHSM/marketplace repos so we ONLY use the JFrog mirror
-subscription-manager config --rhsm.manage_repos=0 || true
-rm -f /etc/yum.repos.d/redhat.repo || true
-find /etc/yum.repos.d/ -maxdepth 1 -type f -name '*.repo' \
-  -not -name 'jfrog-*.repo' -exec mv {} {}.disabled \;
-
-install -m 0644 /tmp/jfrog-rhel9.repo /etc/yum.repos.d/jfrog-rhel9.repo
-
-dnf -y clean all
-dnf -y makecache
-dnf -y install python3 python3-pip python3-libselinux openscap-scanner scap-security-guide
-
-# ansible-core from JFrog-mirrored AppStream (RHEL 9 ships ansible-core 2.14+)
-dnf -y install ansible-core
-
-# Vendor collections offline if you choose; otherwise from Galaxy-mirror in JFrog
-if [[ -f /tmp/ansible-bundle/requirements.yml ]]; then
-  ansible-galaxy collection install -r /tmp/ansible-bundle/requirements.yml
-fi
-
-ansible --version
+[jfrog-rhel9-appstream]
+name=JFrog RHEL 9 AppStream
+baseurl=https://artifactory.mycorp.mil/artifactory/rhel9-appstream/
+enabled=1
+gpgcheck=1
+gpgkey=https://artifactory.mycorp.mil/artifactory/rhel9-baseos/RPM-GPG-KEY-redhat-release
