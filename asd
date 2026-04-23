@@ -1,29 +1,47 @@
-# AAP.psm1 — module loader
-# Convention: Private/*.ps1 are internal helpers, Public/*.ps1 are exported functions.
-# Dot-source Private first so Public functions can reference them at parse time.
+function Connect-AAPController {
+    <#
+    .SYNOPSIS
+        Sets the AAP controller URL and bearer token used by all other AAP cmdlets.
+    .DESCRIPTION
+        Stores connection state in module scope so subsequent calls don't need to
+        repeat the URL and token. Validates connectivity by hitting the /api/ ping
+        unless -SkipConnectionTest is specified.
+    .PARAMETER BaseUrl
+        AAP controller base URL. Trailing slash is stripped.
+    .PARAMETER Token
+        OAuth2 bearer token for an AAP service user.
+    .PARAMETER SkipConnectionTest
+        Skip the connectivity probe. Useful in retry loops where you've already validated.
+    .EXAMPLE
+        Connect-AAPController -BaseUrl 'https://aap.example.gov' -Token $env:AAP_TOKEN
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidatePattern('^https?://')]
+        [string]$BaseUrl,
 
-$ErrorActionPreference = 'Stop'
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Token,
 
-# Module-scoped state. Connect-AAPController populates this; everything else reads it.
-$script:AAPContext = $null
+        [switch]$SkipConnectionTest
+    )
 
-foreach ($folder in @('Private', 'Public')) {
-    $path = Join-Path $PSScriptRoot $folder
-    if (Test-Path $path) {
-        Get-ChildItem -Path $path -Filter '*.ps1' -File | ForEach-Object {
-            . $_.FullName
+    $script:AAPContext = [pscustomobject]@{
+        BaseUrl     = $BaseUrl.TrimEnd('/')
+        Token       = $Token
+        ConnectedAt = Get-Date
+    }
+
+    if (-not $SkipConnectionTest) {
+        try {
+            $ping = Invoke-AAPRestMethod -Path '/api/controller/v2/ping/' -Method GET
+            Write-Verbose "Connected to AAP $($ping.version) (instance: $($ping.active_node))"
+        }
+        catch {
+            $script:AAPContext = $null
+            throw "Failed to connect to AAP at $BaseUrl : $($_.Exception.Message)"
         }
     }
 }
-
-# Export only what the manifest declares — defensive against accidentally
-# exporting helpers that happen to be named like cmdlets.
-Export-ModuleMember -Function @(
-    'Connect-AAPController'
-    'Invoke-AAPJobTemplate'
-    'Get-AAPJob'
-    'Get-AAPJobStdout'
-    'Stop-AAPJob'
-    'Wait-AAPJob'
-    'Resolve-AAPJobTemplate'
-)
