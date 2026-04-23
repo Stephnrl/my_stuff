@@ -1,18 +1,27 @@
-function Get-AAPJob {
+function Get-AAPJobStdout {
     <#
     .SYNOPSIS
-        Retrieves an AAP job by ID.
+        Returns the stdout of an AAP job as plain text.
     .PARAMETER Id
-        Numeric job ID. Accepts pipeline input from Invoke-AAPJobTemplate.
+        Numeric job ID.
+    .PARAMETER Tail
+        Return only the last N lines. Useful for failure triage.
     #>
     [CmdletBinding()]
-    [OutputType([pscustomobject])]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
         [Alias('JobId')]
-        [int]$Id
+        [int]$Id,
+
+        [int]$Tail
     )
     process {
-        Invoke-AAPRestMethod -Path "/api/controller/v2/jobs/$Id/"
+        $stdout = Invoke-AAPRestMethod -Path "/api/controller/v2/jobs/$Id/stdout/?format=txt&content_encoding=raw"
+
+        if ($PSBoundParameters.ContainsKey('Tail')) {
+            return ($stdout -split "`n" | Select-Object -Last $Tail) -join "`n"
+        }
+        $stdout
     }
 }
