@@ -1,126 +1,101 @@
-<#
-.SYNOPSIS
-    Pester v5 tests for the AAP module.
-.DESCRIPTION
-    Demonstrates how the module structure makes AAP interactions unit-testable
-    without hitting a real controller. Run with:
-        Invoke-Pester ./tests/AAP.Tests.ps1 -Output Detailed
-#>
+# launch-aap-job (PowerShell)
 
-BeforeAll {
-    $modulePath = Join-Path $PSScriptRoot '..' 'AAP' 'AAP.psd1'
-    Import-Module $modulePath -Force
+GitHub composite action backed by a PowerShell module for interacting with Red Hat Ansible Automation Platform 2.5.
 
-    # Establish context without a real ping
-    Connect-AAPController -BaseUrl 'https://aap.test' -Token 'fake-token' -SkipConnectionTest
-}
+## Layout
 
-Describe 'Resolve-AAPJobTemplate' {
+```
+launch-aap-job-pwsh/
+├── action.yml                          # GHA composite action manifest (thin)
+├── src/
+│   └── entrypoint.ps1                  # GHA glue: env vars in, $GITHUB_OUTPUT out
+├── AAP/                                # Module — usable independently of GHA
+│   ├── AAP.psd1                        # Manifest (version, exports, requirements)
+│   ├── AAP.psm1                        # Loader
+│   ├── Public/                         # Exported cmdlets
+│   │   ├── Connect-AAPController.ps1
+│   │   ├── Invoke-AAPJobTemplate.ps1
+│   │   ├── Get-AAPJob.ps1
+│   │   ├── Get-AAPJobStdout.ps1
+│   │   ├── Stop-AAPJob.ps1
+│   │   ├── Wait-AAPJob.ps1
+│   │   └── Resolve-AAPJobTemplate.ps1
+│   └── Private/                        # Internal helpers
+│       ├── Invoke-AAPRestMethod.ps1    # Auth, retry, error handling
+│       └── Write-AAPLog.ps1            # GHA-aware logging
+└── tests/
+    └── AAP.Tests.ps1                   # Pester v5 — runs without an AAP instance
+```
 
-    It 'returns numeric input unchanged' {
-        # Numeric short-circuit shouldn't even hit the API
-        Mock -ModuleName AAP Invoke-AAPRestMethod { throw 'should not be called' }
-        Resolve-AAPJobTemplate -Identifier '42' | Should -Be 42
-    }
+## Why this structure
 
-    It 'resolves a unique name to its ID' {
-        Mock -ModuleName AAP Invoke-AAPRestMethod {
-            [pscustomobject]@{
-                count   = 1
-                results = @([pscustomobject]@{ id = 99; name = 'rhel9-configure' })
-            }
-        }
-        Resolve-AAPJobTemplate -Identifier 'rhel9-configure' | Should -Be 99
-    }
+The action.yml is a shim. All real logic lives in the `AAP/` module, which means:
 
-    It 'throws when name is ambiguous' {
-        Mock -ModuleName AAP Invoke-AAPRestMethod {
-            [pscustomobject]@{ count = 2; results = @() }
-        }
-        { Resolve-AAPJobTemplate -Identifier 'duplicate' } | Should -Throw '*got 2*'
-    }
+- **Pester unit tests don't need AAP.** Mock `Invoke-AAPRestMethod` and you can exercise launch / poll / cancel logic against fixture data in CI.
+- **Operators get a real cmdlet library.** Anyone who installs the module on their workstation can `Connect-AAPController` and use the same cmdlets the pipeline uses to debug failed jobs, query inventories, etc.
+- **The GHA wrapper is replaceable.** If you later run this from Azure DevOps, GitLab, or a scheduled task, you keep the module — just write a new entrypoint.
+- **Testability stays honest.** Bash scripts that grow past 50 lines almost never get tests. PowerShell modules with a Public/Private split tend to.
 
-    It 'throws when name is not found' {
-        Mock -ModuleName AAP Invoke-AAPRestMethod {
-            [pscustomobject]@{ count = 0; results = @() }
-        }
-        { Resolve-AAPJobTemplate -Identifier 'nope' } | Should -Throw '*No AAP job template*'
-    }
-}
+## Usage from a workflow
 
-Describe 'Invoke-AAPJobTemplate' {
+```yaml
+- name: Checkout shared actions
+  uses: actions/checkout@v4
+  with:
+    repository: your-org/gha-actions
+    ref: v1.4.0
+    path: .gha-actions
+    token: ${{ secrets.INTERNAL_REPO_PAT }}
 
-    It 'POSTs to the launch endpoint with extra_vars and limit' {
-        Mock -ModuleName AAP Resolve-AAPJobTemplate { 42 }
-        Mock -ModuleName AAP Invoke-AAPRestMethod {
-            param($Path, $Method, $Body)
-            $Path   | Should -Be '/api/controller/v2/job_templates/42/launch/'
-            $Method | Should -Be 'POST'
-            $Body.limit             | Should -Be 'vm-app01'
-            $Body.extra_vars.cmmc_level | Should -Be '2'
+- name: Configure VM via AAP
+  uses: ./.gha-actions/launch-aap-job-pwsh
+  with:
+    aap-url:      ${{ secrets.AAP_URL }}
+    aap-token:    ${{ secrets.AAP_OAUTH_TOKEN }}
+    job-template: ${{ vars.AAP_JT_RHEL9_CONFIGURE }}
+    limit:        ${{ needs.terraform.outputs.vm_name }}
+    extra-vars: |
+      {
+        "target_host":         "${{ needs.terraform.outputs.vm_name }}",
+        "target_ip":           "${{ needs.terraform.outputs.vm_private_ip }}",
+        "cmmc_level":          "2",
+        "data_classification": "cui"
+      }
+    timeout-seconds: 1800
+```
 
-            [pscustomobject]@{ id = 1234; status = 'pending' }
-        }
+## Usage from a workstation
 
-        $result = Invoke-AAPJobTemplate `
-            -JobTemplate '42' `
-            -Limit 'vm-app01' `
-            -ExtraVars @{ cmmc_level = '2' }
+```powershell
+Import-Module ./AAP/AAP.psd1
+Connect-AAPController -BaseUrl 'https://aap.example.gov' -Token $env:AAP_TOKEN
 
-        $result.id     | Should -Be 1234
-        $result.ui_url | Should -Match '/#/jobs/playbook/1234/output$'
-    }
+# One-liner: launch and wait
+Invoke-AAPJobTemplate -JobTemplate 'rhel9-configure' -Limit 'vm-app01' -ExtraVars @{
+    cmmc_level = '2'
+} | Wait-AAPJob -TimeoutSeconds 1800
 
-    It 'omits limit and inventory from payload when not provided' {
-        Mock -ModuleName AAP Resolve-AAPJobTemplate { 42 }
-        Mock -ModuleName AAP Invoke-AAPRestMethod {
-            param($Path, $Method, $Body)
-            $Body.PSObject.Properties.Name | Should -Not -Contain 'limit'
-            $Body.PSObject.Properties.Name | Should -Not -Contain 'inventory'
-            [pscustomobject]@{ id = 1; status = 'pending' }
-        }
+# Triage a failed job
+Get-AAPJobStdout -Id 12345 -Tail 100
+```
 
-        Invoke-AAPJobTemplate -JobTemplate '42' | Out-Null
-    }
-}
+## Runner requirements
 
-Describe 'Wait-AAPJob' {
+- PowerShell 7.2+ (the module manifest enforces this — `pwsh` on default `ubuntu-*` runners satisfies it).
+- Network reach to your AAP controller.
 
-    It 'returns immediately when status is successful' {
-        Mock -ModuleName AAP Get-AAPJob { [pscustomobject]@{ id = 1; status = 'successful' } }
-        $job = Wait-AAPJob -Id 1 -PollIntervalSeconds 1
-        $job.status | Should -Be 'successful'
-    }
+## Running the tests
 
-    It 'throws on failed status when FailOnJobFailure is true' {
-        Mock -ModuleName AAP Get-AAPJob       { [pscustomobject]@{ id = 1; status = 'failed' } }
-        Mock -ModuleName AAP Get-AAPJobStdout { 'TASK [foo] FAILED' }
+```powershell
+Install-Module Pester -Scope CurrentUser -MinimumVersion 5.0 -Force
+Invoke-Pester ./tests/AAP.Tests.ps1 -Output Detailed
+```
 
-        { Wait-AAPJob -Id 1 -PollIntervalSeconds 1 -FailOnJobFailure $true } |
-            Should -Throw "*finished with status 'failed'*"
-    }
+The tests don't need a real AAP — `Invoke-AAPRestMethod` is mocked at the module scope.
 
-    It 'returns the job on failure when FailOnJobFailure is false' {
-        Mock -ModuleName AAP Get-AAPJob       { [pscustomobject]@{ id = 1; status = 'failed' } }
-        Mock -ModuleName AAP Get-AAPJobStdout { 'log tail' }
+## Why a module per concern, not one giant script
 
-        $job = Wait-AAPJob -Id 1 -PollIntervalSeconds 1 -FailOnJobFailure $false
-        $job.status | Should -Be 'failed'
-    }
+Two reasons that pay off over time:
 
-    It 'progresses through running states before terminal' {
-        $script:callCount = 0
-        Mock -ModuleName AAP Get-AAPJob {
-            $script:callCount++
-            switch ($script:callCount) {
-                1 { [pscustomobject]@{ id = 1; status = 'pending' } }
-                2 { [pscustomobject]@{ id = 1; status = 'running' } }
-                3 { [pscustomobject]@{ id = 1; status = 'successful' } }
-            }
-        }
-
-        $job = Wait-AAPJob -Id 1 -PollIntervalSeconds 1
-        $job.status        | Should -Be 'successful'
-        $script:callCount  | Should -Be 3
-    }
-}
+1. **Each cmdlet does one thing.** `Invoke-AAPJobTemplate` launches. `Wait-AAPJob` polls. `Stop-AAPJob` cancels. They compose via the pipeline. When you need a "launch but don't wait" workflow (fire-and-forget reconciliation jobs), you already have it — drop the `| Wait-AAPJob`.
+2. **The module grows without action.yml growing.** Adding `Get-AAPInventory`, `Sync-AAPProject`, `Get-AAPWorkflowJob` is a new file in `Public/` and a line in the manifest. The composite action stays at one entrypoint.
