@@ -1,84 +1,59 @@
-function Invoke-AAPRestMethod {
+function Write-AAPLog {
     <#
     .SYNOPSIS
-        Internal wrapper around Invoke-RestMethod for AAP controller API calls.
+        Writes log output that GitHub Actions renders as annotations when running in CI,
+        and as plain colored output when running interactively.
     .DESCRIPTION
-        Centralizes auth header injection, base URL composition, retry on transient
-        failures (5xx, 429), and consistent error surfacing. Public functions should
-        always go through this rather than calling Invoke-RestMethod directly.
+        Detects $env:GITHUB_ACTIONS and emits workflow commands (::notice::, ::warning::,
+        ::error::) so messages surface in the Actions UI. Falls back to Write-Host with
+        colors for local debugging.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]
-        [string]$Path,
+        [Parameter(Mandatory, Position = 0)]
+        [string]$Message,
 
-        [ValidateSet('GET', 'POST', 'PATCH', 'DELETE')]
-        [string]$Method = 'GET',
+        [ValidateSet('Info', 'Notice', 'Warning', 'Error')]
+        [string]$Level = 'Info',
 
-        [object]$Body,
-
-        [int]$MaxRetries = 3,
-
-        [int]$RetryDelaySeconds = 5
+        [string]$Title
     )
 
-    if (-not $script:AAPContext) {
-        throw "Not connected to an AAP controller. Run Connect-AAPController first."
-    }
+    $inGHA = $env:GITHUB_ACTIONS -eq 'true'
 
-    $uri = "$($script:AAPContext.BaseUrl)$Path"
-    $headers = @{
-        'Authorization' = "Bearer $($script:AAPContext.Token)"
-        'Accept'        = 'application/json'
-    }
-
-    $params = @{
-        Uri             = $uri
-        Method          = $Method
-        Headers         = $headers
-        ErrorAction     = 'Stop'
-        # AAP can return non-2xx with JSON error bodies — capture them
-        SkipHttpErrorCheck = $true
-        StatusCodeVariable = 'statusCode'
-    }
-
-    if ($PSBoundParameters.ContainsKey('Body') -and $null -ne $Body) {
-        $params.Body        = if ($Body -is [string]) { $Body } else { $Body | ConvertTo-Json -Depth 10 -Compress }
-        $params.ContentType = 'application/json'
-    }
-
-    $attempt = 0
-    while ($true) {
-        $attempt++
-        try {
-            $response = Invoke-RestMethod @params
-
-            # Success
-            if ($statusCode -ge 200 -and $statusCode -lt 300) {
-                return $response
-            }
-
-            # Retryable
-            if (($statusCode -eq 429 -or $statusCode -ge 500) -and $attempt -le $MaxRetries) {
-                $delay = $RetryDelaySeconds * [math]::Pow(2, $attempt - 1)
-                Write-Verbose "AAP returned $statusCode on attempt $attempt — retrying in ${delay}s"
-                Start-Sleep -Seconds $delay
-                continue
-            }
-
-            # Non-retryable error — surface AAP's error body when present
-            $errorDetail = if ($response) { ($response | ConvertTo-Json -Depth 5 -Compress) } else { '<no body>' }
-            throw "AAP API call failed: $Method $Path returned HTTP $statusCode. Body: $errorDetail"
+    if ($inGHA) {
+        $titlePart = if ($Title) { " title=$Title" } else { '' }
+        switch ($Level) {
+            'Notice'  { Write-Host "::notice${titlePart}::$Message" }
+            'Warning' { Write-Host "::warning${titlePart}::$Message" }
+            'Error'   { Write-Host "::error${titlePart}::$Message" }
+            default   { Write-Host $Message }
         }
-        catch [System.Net.Http.HttpRequestException] {
-            # Network-layer failure (DNS, TLS, connection reset)
-            if ($attempt -le $MaxRetries) {
-                $delay = $RetryDelaySeconds * [math]::Pow(2, $attempt - 1)
-                Write-Verbose "Network error on attempt ${attempt}: $($_.Exception.Message). Retrying in ${delay}s"
-                Start-Sleep -Seconds $delay
-                continue
-            }
-            throw
+    }
+    else {
+        $color = switch ($Level) {
+            'Notice'  { 'Cyan' }
+            'Warning' { 'Yellow' }
+            'Error'   { 'Red' }
+            default   { 'Gray' }
+        }
+        Write-Host $Message -ForegroundColor $color
+    }
+}
+
+function Add-AAPStepSummary {
+    <#
+    .SYNOPSIS
+        Appends markdown to the GitHub Actions step summary. No-op when not in CI.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [string]$Markdown
+    )
+    process {
+        if ($env:GITHUB_STEP_SUMMARY) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $Markdown
         }
     }
 }
