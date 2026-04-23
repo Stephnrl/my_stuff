@@ -1,59 +1,126 @@
-function Write-AAPLog {
-    <#
-    .SYNOPSIS
-        Writes log output that GitHub Actions renders as annotations when running in CI,
-        and as plain colored output when running interactively.
-    .DESCRIPTION
-        Detects $env:GITHUB_ACTIONS and emits workflow commands (::notice::, ::warning::,
-        ::error::) so messages surface in the Actions UI. Falls back to Write-Host with
-        colors for local debugging.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory, Position = 0)]
-        [string]$Message,
+<#
+.SYNOPSIS
+    Pester v5 tests for the AAP module.
+.DESCRIPTION
+    Demonstrates how the module structure makes AAP interactions unit-testable
+    without hitting a real controller. Run with:
+        Invoke-Pester ./tests/AAP.Tests.ps1 -Output Detailed
+#>
 
-        [ValidateSet('Info', 'Notice', 'Warning', 'Error')]
-        [string]$Level = 'Info',
+BeforeAll {
+    $modulePath = Join-Path $PSScriptRoot '..' 'AAP' 'AAP.psd1'
+    Import-Module $modulePath -Force
 
-        [string]$Title
-    )
+    # Establish context without a real ping
+    Connect-AAPController -BaseUrl 'https://aap.test' -Token 'fake-token' -SkipConnectionTest
+}
 
-    $inGHA = $env:GITHUB_ACTIONS -eq 'true'
+Describe 'Resolve-AAPJobTemplate' {
 
-    if ($inGHA) {
-        $titlePart = if ($Title) { " title=$Title" } else { '' }
-        switch ($Level) {
-            'Notice'  { Write-Host "::notice${titlePart}::$Message" }
-            'Warning' { Write-Host "::warning${titlePart}::$Message" }
-            'Error'   { Write-Host "::error${titlePart}::$Message" }
-            default   { Write-Host $Message }
-        }
+    It 'returns numeric input unchanged' {
+        # Numeric short-circuit shouldn't even hit the API
+        Mock -ModuleName AAP Invoke-AAPRestMethod { throw 'should not be called' }
+        Resolve-AAPJobTemplate -Identifier '42' | Should -Be 42
     }
-    else {
-        $color = switch ($Level) {
-            'Notice'  { 'Cyan' }
-            'Warning' { 'Yellow' }
-            'Error'   { 'Red' }
-            default   { 'Gray' }
+
+    It 'resolves a unique name to its ID' {
+        Mock -ModuleName AAP Invoke-AAPRestMethod {
+            [pscustomobject]@{
+                count   = 1
+                results = @([pscustomobject]@{ id = 99; name = 'rhel9-configure' })
+            }
         }
-        Write-Host $Message -ForegroundColor $color
+        Resolve-AAPJobTemplate -Identifier 'rhel9-configure' | Should -Be 99
+    }
+
+    It 'throws when name is ambiguous' {
+        Mock -ModuleName AAP Invoke-AAPRestMethod {
+            [pscustomobject]@{ count = 2; results = @() }
+        }
+        { Resolve-AAPJobTemplate -Identifier 'duplicate' } | Should -Throw '*got 2*'
+    }
+
+    It 'throws when name is not found' {
+        Mock -ModuleName AAP Invoke-AAPRestMethod {
+            [pscustomobject]@{ count = 0; results = @() }
+        }
+        { Resolve-AAPJobTemplate -Identifier 'nope' } | Should -Throw '*No AAP job template*'
     }
 }
 
-function Add-AAPStepSummary {
-    <#
-    .SYNOPSIS
-        Appends markdown to the GitHub Actions step summary. No-op when not in CI.
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory, ValueFromPipeline)]
-        [string]$Markdown
-    )
-    process {
-        if ($env:GITHUB_STEP_SUMMARY) {
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $Markdown
+Describe 'Invoke-AAPJobTemplate' {
+
+    It 'POSTs to the launch endpoint with extra_vars and limit' {
+        Mock -ModuleName AAP Resolve-AAPJobTemplate { 42 }
+        Mock -ModuleName AAP Invoke-AAPRestMethod {
+            param($Path, $Method, $Body)
+            $Path   | Should -Be '/api/controller/v2/job_templates/42/launch/'
+            $Method | Should -Be 'POST'
+            $Body.limit             | Should -Be 'vm-app01'
+            $Body.extra_vars.cmmc_level | Should -Be '2'
+
+            [pscustomobject]@{ id = 1234; status = 'pending' }
         }
+
+        $result = Invoke-AAPJobTemplate `
+            -JobTemplate '42' `
+            -Limit 'vm-app01' `
+            -ExtraVars @{ cmmc_level = '2' }
+
+        $result.id     | Should -Be 1234
+        $result.ui_url | Should -Match '/#/jobs/playbook/1234/output$'
+    }
+
+    It 'omits limit and inventory from payload when not provided' {
+        Mock -ModuleName AAP Resolve-AAPJobTemplate { 42 }
+        Mock -ModuleName AAP Invoke-AAPRestMethod {
+            param($Path, $Method, $Body)
+            $Body.PSObject.Properties.Name | Should -Not -Contain 'limit'
+            $Body.PSObject.Properties.Name | Should -Not -Contain 'inventory'
+            [pscustomobject]@{ id = 1; status = 'pending' }
+        }
+
+        Invoke-AAPJobTemplate -JobTemplate '42' | Out-Null
+    }
+}
+
+Describe 'Wait-AAPJob' {
+
+    It 'returns immediately when status is successful' {
+        Mock -ModuleName AAP Get-AAPJob { [pscustomobject]@{ id = 1; status = 'successful' } }
+        $job = Wait-AAPJob -Id 1 -PollIntervalSeconds 1
+        $job.status | Should -Be 'successful'
+    }
+
+    It 'throws on failed status when FailOnJobFailure is true' {
+        Mock -ModuleName AAP Get-AAPJob       { [pscustomobject]@{ id = 1; status = 'failed' } }
+        Mock -ModuleName AAP Get-AAPJobStdout { 'TASK [foo] FAILED' }
+
+        { Wait-AAPJob -Id 1 -PollIntervalSeconds 1 -FailOnJobFailure $true } |
+            Should -Throw "*finished with status 'failed'*"
+    }
+
+    It 'returns the job on failure when FailOnJobFailure is false' {
+        Mock -ModuleName AAP Get-AAPJob       { [pscustomobject]@{ id = 1; status = 'failed' } }
+        Mock -ModuleName AAP Get-AAPJobStdout { 'log tail' }
+
+        $job = Wait-AAPJob -Id 1 -PollIntervalSeconds 1 -FailOnJobFailure $false
+        $job.status | Should -Be 'failed'
+    }
+
+    It 'progresses through running states before terminal' {
+        $script:callCount = 0
+        Mock -ModuleName AAP Get-AAPJob {
+            $script:callCount++
+            switch ($script:callCount) {
+                1 { [pscustomobject]@{ id = 1; status = 'pending' } }
+                2 { [pscustomobject]@{ id = 1; status = 'running' } }
+                3 { [pscustomobject]@{ id = 1; status = 'successful' } }
+            }
+        }
+
+        $job = Wait-AAPJob -Id 1 -PollIntervalSeconds 1
+        $job.status        | Should -Be 'successful'
+        $script:callCount  | Should -Be 3
     }
 }
