@@ -1,36 +1,35 @@
-function Stop-AAPJob {
+function Resolve-AAPJobTemplate {
     <#
     .SYNOPSIS
-        Cancels a running AAP job.
+        Resolves a job template identifier (numeric ID or name) to a numeric ID.
     .DESCRIPTION
-        Best-effort cancellation. Does not throw if the job is already in a terminal
-        state — returns $false in that case so callers can branch on the result.
-    .PARAMETER Id
-        Numeric job ID.
+        If passed a numeric value, returns it unchanged. Otherwise queries the AAP API
+        for a JT with the matching name and returns its ID. Errors if zero or more than
+        one match is found.
+    .PARAMETER Identifier
+        Either a numeric job template ID or a JT name string.
     #>
-    [CmdletBinding(SupportsShouldProcess)]
-    [OutputType([bool])]
+    [CmdletBinding()]
+    [OutputType([int])]
     param(
-        [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
-        [Alias('JobId')]
-        [int]$Id
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [string]$Identifier
     )
     process {
-        if (-not $PSCmdlet.ShouldProcess("AAP job $Id", 'Cancel')) { return $false }
+        if ($Identifier -match '^\d+$') {
+            return [int]$Identifier
+        }
 
-        try {
-            $cancelInfo = Invoke-AAPRestMethod -Path "/api/controller/v2/jobs/$Id/cancel/" -Method GET
-            if (-not $cancelInfo.can_cancel) {
-                Write-AAPLog "AAP job $Id is no longer cancelable (likely already terminal)" -Level Warning
-                return $false
-            }
-            Invoke-AAPRestMethod -Path "/api/controller/v2/jobs/$Id/cancel/" -Method POST | Out-Null
-            Write-AAPLog "Cancelled AAP job $Id" -Level Notice
-            return $true
+        $encoded = [uri]::EscapeDataString($Identifier)
+        $resp = Invoke-AAPRestMethod -Path "/api/controller/v2/job_templates/?name=$encoded"
+
+        if ($resp.count -eq 0) {
+            throw "No AAP job template found with name '$Identifier'."
         }
-        catch {
-            Write-AAPLog "Failed to cancel AAP job ${Id}: $($_.Exception.Message)" -Level Warning
-            return $false
+        if ($resp.count -gt 1) {
+            throw "Expected exactly 1 AAP job template named '$Identifier', got $($resp.count). Use the numeric ID instead."
         }
+
+        return [int]$resp.results[0].id
     }
 }
