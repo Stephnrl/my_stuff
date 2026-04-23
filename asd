@@ -1,47 +1,68 @@
-function Connect-AAPController {
+function Invoke-AAPJobTemplate {
     <#
     .SYNOPSIS
-        Sets the AAP controller URL and bearer token used by all other AAP cmdlets.
+        Launches an AAP job template.
     .DESCRIPTION
-        Stores connection state in module scope so subsequent calls don't need to
-        repeat the URL and token. Validates connectivity by hitting the /api/ ping
-        unless -SkipConnectionTest is specified.
-    .PARAMETER BaseUrl
-        AAP controller base URL. Trailing slash is stripped.
-    .PARAMETER Token
-        OAuth2 bearer token for an AAP service user.
-    .PARAMETER SkipConnectionTest
-        Skip the connectivity probe. Useful in retry loops where you've already validated.
+        POSTs to the JT launch endpoint with optional limit, extra_vars, and inventory
+        overrides. Returns the launched job object (containing .id, .url, .status, etc.).
+        Does NOT wait for completion — pipe the result to Wait-AAPJob for that.
+    .PARAMETER JobTemplate
+        Numeric ID or name of the JT to launch.
+    .PARAMETER Limit
+        Inventory limit pattern. Optional but recommended for "configure one host" workflows.
+    .PARAMETER ExtraVars
+        Hashtable of extra_vars. Will be JSON-serialized.
+    .PARAMETER Inventory
+        Override inventory (ID or name). Optional.
     .EXAMPLE
-        Connect-AAPController -BaseUrl 'https://aap.example.gov' -Token $env:AAP_TOKEN
+        Invoke-AAPJobTemplate -JobTemplate 'rhel9-configure' -Limit 'vm-app01' -ExtraVars @{
+            target_host = 'vm-app01'
+            cmmc_level  = '2'
+        } | Wait-AAPJob
     #>
     [CmdletBinding()]
+    [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        [ValidatePattern('^https?://')]
-        [string]$BaseUrl,
+        [string]$JobTemplate,
 
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string]$Token,
+        [string]$Limit,
 
-        [switch]$SkipConnectionTest
+        [hashtable]$ExtraVars = @{},
+
+        [string]$Inventory
     )
 
-    $script:AAPContext = [pscustomobject]@{
-        BaseUrl     = $BaseUrl.TrimEnd('/')
-        Token       = $Token
-        ConnectedAt = Get-Date
+    $jtId = Resolve-AAPJobTemplate -Identifier $JobTemplate
+
+    $payload = @{
+        extra_vars = $ExtraVars
+    }
+    if ($Limit)     { $payload.limit = $Limit }
+    if ($Inventory) {
+        # Accept either numeric ID or name; AAP will reject bad values
+        $payload.inventory = if ($Inventory -match '^\d+$') { [int]$Inventory } else { $Inventory }
     }
 
-    if (-not $SkipConnectionTest) {
-        try {
-            $ping = Invoke-AAPRestMethod -Path '/api/controller/v2/ping/' -Method GET
-            Write-Verbose "Connected to AAP $($ping.version) (instance: $($ping.active_node))"
-        }
-        catch {
-            $script:AAPContext = $null
-            throw "Failed to connect to AAP at $BaseUrl : $($_.Exception.Message)"
-        }
-    }
+    Write-AAPLog "Launching AAP job template $jtId" -Level Info
+
+    $job = Invoke-AAPRestMethod `
+        -Path "/api/controller/v2/job_templates/$jtId/launch/" `
+        -Method POST `
+        -Body $payload
+
+    $jobUrl = "$($script:AAPContext.BaseUrl)/#/jobs/playbook/$($job.id)/output"
+
+    Write-AAPLog "Launched AAP job $($job.id) — $jobUrl" -Level Notice -Title 'AAP Job'
+
+    @"
+### AAP Job Launched
+
+- **Job ID:** $($job.id)
+- **Template:** $jtId
+- **Link:** [$jobUrl]($jobUrl)
+"@ | Add-AAPStepSummary
+
+    # Augment the response with the UI URL — saves callers from rebuilding it
+    $job | Add-Member -NotePropertyName 'ui_url' -NotePropertyValue $jobUrl -PassThru
 }
