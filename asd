@@ -1,43 +1,49 @@
-##############################################################
-# AAP → AWS GovCloud OIDC federation
-#
-# Registers the AAP controller as an OIDC identity provider in
-# IAM, then creates per-job-template roles that trust it.
-##############################################################
+variable "aws_region" {
+  description = "AWS GovCloud region"
+  type        = string
+  default     = "us-gov-west-1"
 
-locals {
-  aap_issuer_url = "https://${var.aap_controller_hostname}${var.aap_oidc_path}"
-  # AWS IAM stores the issuer without the scheme
-  aap_issuer_key = "${var.aap_controller_hostname}${var.aap_oidc_path}"
-}
-
-# Fetch the TLS cert chain of the AAP OIDC issuer so we can pin its
-# root CA thumbprint in IAM. IAM uses this to validate the JWKS endpoint.
-data "tls_certificate" "aap_oidc" {
-  url = local.aap_issuer_url
-}
-
-resource "aws_iam_openid_connect_provider" "aap" {
-  url             = local.aap_issuer_url
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.aap_oidc.certificates[0].sha1_fingerprint]
-
-  tags = {
-    Name = "aap-controller-oidc"
+  validation {
+    condition     = can(regex("^us-gov-(west|east)-1$", var.aws_region))
+    error_message = "Region must be a GovCloud region (us-gov-west-1 or us-gov-east-1)."
   }
 }
 
-# One IAM role per job template (or logical group of templates).
-module "job_template_role" {
-  source = "./modules/aap-role"
+variable "environment" {
+  description = "Deployment environment (prod, staging, dev)"
+  type        = string
+}
 
-  for_each = var.job_template_roles
+variable "aap_controller_hostname" {
+  description = "Fully-qualified hostname of the AAP controller (no scheme, no trailing slash). Example: aap.yourcompany.gov"
+  type        = string
 
-  role_name           = "aap-${var.environment}-${each.key}"
-  oidc_provider_arn   = aws_iam_openid_connect_provider.aap.arn
-  oidc_issuer_key     = local.aap_issuer_key
-  sub_pattern         = each.value.sub_pattern
-  secret_arns         = each.value.secret_arns
-  max_session_hours   = each.value.max_session_hours
-  additional_policies = each.value.additional_policies
+  validation {
+    condition     = !can(regex("^https?://", var.aap_controller_hostname))
+    error_message = "Hostname must not include https:// — just the FQDN."
+  }
+}
+
+variable "aap_oidc_path" {
+  description = "Path portion of the AAP OIDC issuer URL. Default matches AAP 2.5 controller."
+  type        = string
+  default     = "/api/controller/v2/oidc/"
+}
+
+variable "job_template_roles" {
+  description = <<-EOT
+    Map of IAM roles to create, one per AAP job template (or group of templates) that needs
+    AWS access. The 'sub_pattern' pins which AAP job templates may assume the role via the
+    OIDC 'sub' claim. Use specific patterns — avoid wildcards broader than org+template.
+
+    Example sub_pattern values:
+      "organization:prod-ops:job_template:deploy-web"          # single template
+      "organization:prod-ops:job_template:deploy-*"            # all deploy-* templates in prod-ops
+  EOT
+  type = map(object({
+    sub_pattern         = string
+    secret_arns         = list(string)
+    max_session_hours   = optional(number, 1)
+    additional_policies = optional(list(string), [])
+  }))
 }
