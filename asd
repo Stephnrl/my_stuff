@@ -1,71 +1,41 @@
-##############################################################
-# Per-job-template IAM role assumable via AAP OIDC federation.
-##############################################################
+variable "role_name" {
+  description = "IAM role name"
+  type        = string
+}
 
-data "aws_partition" "current" {}
+variable "oidc_provider_arn" {
+  description = "ARN of the OIDC provider (the AAP controller)"
+  type        = string
+}
 
-# Trust policy: only the AAP OIDC provider may assume this role,
-# and only when the 'sub' claim matches the job template pattern,
-# and only with the correct audience.
-data "aws_iam_policy_document" "trust" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRoleWithWebIdentity"]
+variable "oidc_issuer_key" {
+  description = "Issuer key for condition matching (hostname + path, no scheme)"
+  type        = string
+}
 
-    principals {
-      type        = "Federated"
-      identifiers = [var.oidc_provider_arn]
-    }
+variable "sub_pattern" {
+  description = "Pattern matched against the OIDC 'sub' claim from AAP. Pins which job templates may assume this role."
+  type        = string
+}
 
-    condition {
-      test     = "StringEquals"
-      variable = "${var.oidc_issuer_key}:aud"
-      values   = ["sts.amazonaws.com"]
-    }
+variable "secret_arns" {
+  description = "List of Secrets Manager secret ARNs this role may read"
+  type        = list(string)
+}
 
-    condition {
-      test     = "StringLike"
-      variable = "${var.oidc_issuer_key}:sub"
-      values   = [var.sub_pattern]
-    }
+variable "max_session_hours" {
+  description = "Max session duration in hours (1-12). Keep this as short as the longest job."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.max_session_hours >= 1 && var.max_session_hours <= 12
+    error_message = "Session duration must be between 1 and 12 hours."
   }
 }
 
-resource "aws_iam_role" "this" {
-  name                 = var.role_name
-  assume_role_policy   = data.aws_iam_policy_document.trust.json
-  max_session_duration = var.max_session_hours * 3600
-
-  tags = {
-    Name = var.role_name
-  }
-}
-
-# Least-privilege: only GetSecretValue + DescribeSecret on named ARNs.
-data "aws_iam_policy_document" "secrets_read" {
-  statement {
-    sid    = "ReadNamedSecrets"
-    effect = "Allow"
-    actions = [
-      "secretsmanager:GetSecretValue",
-      "secretsmanager:DescribeSecret",
-    ]
-    resources = var.secret_arns
-  }
-}
-
-resource "aws_iam_policy" "secrets_read" {
-  name   = "${var.role_name}-secrets-read"
-  policy = data.aws_iam_policy_document.secrets_read.json
-}
-
-resource "aws_iam_role_policy_attachment" "secrets_read" {
-  role       = aws_iam_role.this.name
-  policy_arn = aws_iam_policy.secrets_read.arn
-}
-
-resource "aws_iam_role_policy_attachment" "additional" {
-  for_each   = toset(var.additional_policies)
-  role       = aws_iam_role.this.name
-  policy_arn = each.value
+variable "additional_policies" {
+  description = "Additional IAM policy ARNs to attach (e.g., KMS decrypt for CMK-encrypted secrets)"
+  type        = list(string)
+  default     = []
 }
