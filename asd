@@ -1,78 +1,34 @@
-version: v1.1.0
+ARG REGISTRY
+ARG BOOTSTRAP_TAG
+FROM ${REGISTRY}/runner-images/bootstrap:${BOOTSTRAP_TAG}
 
-# These steps run sequentially. Step 1 runs on whatever pool the task is invoked with;
-# we'll invoke once with no agent pool (public) for bootstrap+base, then a separate
-# task for the variants on the agent pool. See "How to run it" below.
+USER root
 
-steps:
-  # --- BOOTSTRAP: public tools, no internal config ---
-  - id: build-bootstrap
-    build: >
-      -t {{.Run.Registry}}/runner-images/bootstrap:{{.Run.ID}}
-      -t {{.Run.Registry}}/runner-images/bootstrap:latest
-      -f runner-images/bootstrap/Dockerfile
-      runner-images/bootstrap
+# --- Internal CA certs ---
+COPY shared/certs/ /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 
-  - id: push-bootstrap
-    push:
-      - {{.Run.Registry}}/runner-images/bootstrap:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/bootstrap:latest
-    when: ["build-bootstrap"]
+# --- Apt: swap to JFrog mirror ---
+COPY shared/jfrog-ubuntu-mirror.list /etc/apt/sources.list.d/jfrog.list
+COPY shared/microsoft-packages.list /etc/apt/sources.list.d/microsoft.list
+RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources && \
+    apt-get update
 
-  # --- BASE: applies certs, JFrog config, internal apt sources ---
-  - id: build-base
-    build: >
-      -t {{.Run.Registry}}/runner-images/base:{{.Run.ID}}
-      -t {{.Run.Registry}}/runner-images/base:latest
-      --build-arg BOOTSTRAP_TAG={{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      -f runner-images/base/Dockerfile
-      .
-    when: ["push-bootstrap"]
+# --- Tool configs that point at JFrog ---
+COPY shared/.npmrc /etc/npmrc
+COPY shared/pip.conf /etc/pip.conf
+COPY shared/.terraformrc /etc/terraformrc
 
-  - id: push-base
-    push:
-      - {{.Run.Registry}}/runner-images/base:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/base:latest
-    when: ["build-base"]
+# Make sure the runner user picks them up too
+RUN cp /etc/npmrc /home/runner/.npmrc && \
+    cp /etc/terraformrc /home/runner/.terraformrc && \
+    mkdir -p /home/runner/.config/pip && \
+    cp /etc/pip.conf /home/runner/.config/pip/pip.conf && \
+    chown -R runner:runner /home/runner/.npmrc /home/runner/.terraformrc /home/runner/.config
 
-  # --- VARIANTS: parallel-able, all FROM base ---
-  - id: build-dotnet6
-    build: >
-      -t {{.Run.Registry}}/runner-images/dotnet6:{{.Run.ID}}
-      -t {{.Run.Registry}}/runner-images/dotnet6:latest
-      --build-arg BASE_TAG={{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      -f runner-images/dotnet6/Dockerfile
-      .
-    when: ["push-base"]
+# --- Tell Node/npm/Java about the CA bundle ---
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 
-  - id: build-dotnet8
-    build: >
-      -t {{.Run.Registry}}/runner-images/dotnet8:{{.Run.ID}}
-      -t {{.Run.Registry}}/runner-images/dotnet8:latest
-      --build-arg BASE_TAG={{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      -f runner-images/dotnet8/Dockerfile
-      .
-    when: ["push-base"]
-
-  - id: build-dotnet10
-    build: >
-      -t {{.Run.Registry}}/runner-images/dotnet10:{{.Run.ID}}
-      -t {{.Run.Registry}}/runner-images/dotnet10:latest
-      --build-arg BASE_TAG={{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      -f runner-images/dotnet10/Dockerfile
-      .
-    when: ["push-base"]
-
-  - id: push-variants
-    push:
-      - {{.Run.Registry}}/runner-images/dotnet6:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/dotnet6:latest
-      - {{.Run.Registry}}/runner-images/dotnet8:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/dotnet8:latest
-      - {{.Run.Registry}}/runner-images/dotnet10:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/dotnet10:latest
-    when: ["build-dotnet6", "build-dotnet8", "build-dotnet10"]
+USER runner
