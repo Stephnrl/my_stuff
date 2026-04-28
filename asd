@@ -1,9 +1,8 @@
-## The issue
+## Root cause
  
-A team reported that they could no longer reach the Kudu console for their Function App. The Kudu URL produced a browser DNS error rather than the usual login.
+The ASE was internal-only — fronted by an Internal Load Balancer with a private IP, sitting in a spoke vnet, with no public DNS records. Three independent gaps stacked on top of the v2 → v3 migration:
  
-Symptoms:
- 
-- Browsing to `<app>.scm.<ase>.appserviceenvironment.us` failed to resolve.
-- The Function App itself (the runtime URL) was also affected for any traffic that reached it via hostname rather than IP.
-- Other Azure portal operations against the Function App worked fine because those go through the Azure management plane, not through the ASE's data plane DNS.
+1. **No Private DNS Zone** existed for `<ase>.appserviceenvironment.us`. With no private zone and no public record (because the ASE is ILB), the hostname had nothing authoritative to resolve against.
+2. **Zscaler ZPA had no application segment** covering the new `appserviceenvironment.us` suffix. Even after we fixed DNS, ZPA wouldn't route that traffic through the Azure App Connector to the ILB.
+3. **On-prem DNS had no path** to query Azure Private DNS. On-prem domain controllers can't talk directly to Azure-provided DNS at `168.63.129.16` — that address is only reachable from inside an Azure vnet — so a conditional forwarder is needed to hand the query to a DNS resolver VM that does live inside Azure.
+Any one of those gaps would have broken Kudu on its own. After the v3 migration, all three needed fixing.
