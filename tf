@@ -1,50 +1,93 @@
-locals {
-  # If the caller didn't provide a numeric job_template_id, look it up by name+org.
-  use_data_source = var.job_template_id == null
+###############################################################################
+# Job template selection
+#
+# Either pass `job_template_id` directly, or look it up by
+# `job_template_name` + `job_template_organization`.
+###############################################################################
 
-  # Validation: caller must give us either an ID or a (name, organization) pair.
-  _validate_inputs = (
-    var.job_template_id != null
-    || (var.job_template_name != null && var.job_template_organization != null)
-  ) ? true : tobool("Either job_template_id, or both job_template_name and job_template_organization, must be set.")
-
-  resolved_job_template_id = local.use_data_source ? data.aap_job_template.this[0].id : var.job_template_id
-
-  # AAP wants extra_vars as a JSON (or YAML) string.
-  # Merge non-sensitive and sensitive vars; result inherits the sensitive mark.
-  merged_extra_vars  = merge(var.extra_vars, var.sensitive_extra_vars)
-  encoded_extra_vars = jsonencode(local.merged_extra_vars)
-
-  # Build the triggers map. Any change to any value here causes a rerun.
-  #   - extra_triggers:        caller-supplied (e.g. upstream resource IDs)
-  #   - rerun_token:           manual knob
-  #   - extra_vars_sha256:     auto-rerun when public payload changes
-  #   - sensitive_vars_sha256: auto-rerun when secret payload changes (hash only,
-  #                            never the raw value — safe to land in state)
-  triggers = merge(
-    var.extra_triggers,
-    var.rerun_token == "" ? {} : { rerun_token = var.rerun_token },
-    var.rerun_on_extra_vars_change ? {
-      extra_vars_sha256     = sha256(jsonencode(var.extra_vars))
-      sensitive_vars_sha256 = sha256(jsonencode(var.sensitive_extra_vars))
-    } : {},
-  )
+variable "job_template_id" {
+  description = "ID of the AAP job template to launch. Mutually exclusive with job_template_name."
+  type        = number
+  default     = null
 }
 
-data "aap_job_template" "this" {
-  count = local.use_data_source ? 1 : 0
-
-  name              = var.job_template_name
-  organization_name = var.job_template_organization
+variable "job_template_name" {
+  description = "Name of the AAP job template. Used together with job_template_organization."
+  type        = string
+  default     = null
 }
 
-resource "aap_job" "this" {
-  job_template_id = local.resolved_job_template_id
-  inventory_id    = var.inventory_id
-  extra_vars      = local.encoded_extra_vars
+variable "job_template_organization" {
+  description = "Organization name containing the job template. Required when using job_template_name."
+  type        = string
+  default     = null
+}
 
-  wait_for_completion                 = var.wait_for_completion
-  wait_for_completion_timeout_seconds = var.wait_for_completion_timeout_seconds
+###############################################################################
+# Job inputs
+###############################################################################
 
-  triggers = local.triggers
+variable "inventory_id" {
+  description = "Optional inventory ID. The job template must have inventory prompt-on-launch enabled to accept this."
+  type        = number
+  default     = null
+}
+
+variable "extra_vars" {
+  description = "Non-sensitive extra variables passed to the job template. Encoded as JSON before being sent to AAP."
+  type        = any
+  default     = {}
+}
+
+variable "sensitive_extra_vars" {
+  description = <<-EOT
+    Sensitive extra variables passed to the job template. Merged with extra_vars at apply time.
+    Marked sensitive so values are scrubbed from CLI output and plan diffs. NOTE: Terraform state
+    still stores these in plaintext — prefer AAP credentials for true secrets and only use this
+    for values that genuinely must come from Terraform.
+  EOT
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}
+
+variable "wait_for_completion" {
+  description = "Block `terraform apply` until the AAP job reaches a terminal state."
+  type        = bool
+  default     = true
+}
+
+variable "wait_for_completion_timeout_seconds" {
+  description = "How long to wait for the job to finish before failing the apply."
+  type        = number
+  default     = 1800
+}
+
+###############################################################################
+# Rerun controls
+#
+# Any change to the underlying `triggers` map causes Terraform to destroy the
+# job resource from state and create a new one — i.e. launch the job again.
+# These three knobs cover the common rerun strategies.
+###############################################################################
+
+variable "rerun_token" {
+  description = <<-EOT
+    Manual rerun knob. Change this string (timestamp, build ID, git SHA, version tag, etc.)
+    on the next apply to force the job to launch again. Leave empty to disable.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "rerun_on_extra_vars_change" {
+  description = "When true, a hash of extra_vars is mixed into triggers, so any change to extra_vars reruns the job."
+  type        = bool
+  default     = true
+}
+
+variable "extra_triggers" {
+  description = "Additional trigger key/value pairs. Wire upstream resource attributes here (e.g. instance IDs) so changes upstream cause a rerun."
+  type        = map(string)
+  default     = {}
 }
