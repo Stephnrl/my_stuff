@@ -1,8 +1,34 @@
-## Root cause
+## DNS resolution flow (after the fix)
  
-The ASE was internal-only — fronted by an Internal Load Balancer with a private IP, sitting in a spoke vnet, with no public DNS records. Three independent gaps stacked on top of the v2 → v3 migration:
+When an on-prem user hits `<app>.scm.abccloud1.appserviceenvironment.us`:
  
-1. **No Private DNS Zone** existed for `<ase>.appserviceenvironment.us`. With no private zone and no public record (because the ASE is ILB), the hostname had nothing authoritative to resolve against.
-2. **Zscaler ZPA had no application segment** covering the new `appserviceenvironment.us` suffix. Even after we fixed DNS, ZPA wouldn't route that traffic through the Azure App Connector to the ILB.
-3. **On-prem DNS had no path** to query Azure Private DNS. On-prem domain controllers can't talk directly to Azure-provided DNS at `168.63.129.16` — that address is only reachable from inside an Azure vnet — so a conditional forwarder is needed to hand the query to a DNS resolver VM that does live inside Azure.
-Any one of those gaps would have broken Kudu on its own. After the v3 migration, all three needed fixing.
+1. Browser asks the workstation's configured DNS — an **on-prem domain controller**.
+2. The DC has a **conditional forwarder** for `appserviceenvironment.us` pointing to a pair of **Azure-resident DNS resolver VMs**.
+3. Those resolver VMs sit inside an Azure vnet, so they can query the **Azure-provided DNS at 168.63.129.16**.
+4. 168.63.129.16 resolves the name through the **Private DNS Zone** for that ASE, which is linked to the vnet.
+5. The zone returns the **ILB private IP**.
+Confluence Mermaid (renders if your space has the Mermaid macro / extension; otherwise see the SVG attached to this page):
+ 
+```mermaid
+flowchart TD
+    A[Client browser<br/>On-prem user]
+    B[On-prem domain controller DNS<br/>Conditional forwarder for appserviceenvironment.us]
+    C[Azure DNS resolver VMs<br/>Non-DC VMs inside an Azure vnet]
+    D[Azure-provided DNS<br/>168.63.129.16]
+    E[Private DNS Zone<br/>&lt;ase&gt;.appserviceenvironment.us]
+    F[ILB private IP returned]
+    A --> B --> C --> D --> E --> F
+```
+ 
+After resolution succeeds and the browser has the ILB private IP, the actual TCP traffic still has to *get* to that IP — that's the ZPA path:
+ 
+```mermaid
+flowchart LR
+    U[On-prem user]
+    Z[Zscaler client]
+    P[ZPA cloud]
+    AC[ZPA App Connector<br/>in Azure vnet]
+    ILB[ASE v3 ILB<br/>Private IP]
+    K[Kudu / SCM endpoint]
+    U --> Z --> P --> AC --> ILB --> K
+```
