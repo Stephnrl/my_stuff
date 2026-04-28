@@ -1,33 +1,27 @@
-{
-  "name": "hello-npm",
-  "version": "1.0.0",
-  "description": "Verifies npm can resolve through JFrog",
-  "dependencies": {
-    "lodash": "^4.17.21"
-  }
-}
+version: v1.1.0
 
+steps:
+  - id: build-bootstrap
+    build: >
+      -t {{.Run.Registry}}/runner-images/bootstrap:{{.Run.ID}}
+      -t {{.Run.Registry}}/runner-images/bootstrap:candidate
+      --cache-from={{.Run.Registry}}/runner-images/bootstrap:latest
+      -f runner-images/bootstrap/Dockerfile
+      runner-images/bootstrap
 
-terraform {
-  required_version = ">= 1.5.0"
-  required_providers {
-    null = {
-      source  = "hashicorp/null"
-      version = "~> 3.0"
-    }
-  }
-}
+  - id: push-bootstrap
+    push:
+      - {{.Run.Registry}}/runner-images/bootstrap:{{.Run.ID}}
+      - {{.Run.Registry}}/runner-images/bootstrap:candidate
+    when: ["build-bootstrap"]
 
-resource "null_resource" "smoke" {}
-
-
-
-
-
-Console.WriteLine("Hello from .NET 8");
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
-  </PropertyGroup>
-</Project>
+  - id: smoke-bootstrap
+    cmd: >
+      {{.Run.Registry}}/runner-images/bootstrap:{{.Run.ID}}
+      bash -c "
+        set -e;
+        node --version;
+        pwsh -c 'Get-Module Az -ListAvailable';
+        echo 'Bootstrap smoke OK'
+      "
+    when: ["push-bootstrap"]
