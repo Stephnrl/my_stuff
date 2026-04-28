@@ -1,63 +1,9 @@
-version: v1.1.0
-
-steps:
-  - id: build-base
-    build: >
-      -t {{.Run.Registry}}/runner-images/base:{{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      --build-arg BOOTSTRAP_TAG={{.Values.bootstrap_tag}}
-      -f runner-images/base/Dockerfile
-      .
-
-  - id: push-base
-    push:
-      - {{.Run.Registry}}/runner-images/base:{{.Run.ID}}
-    when: ["build-base"]
-
-  - id: smoke-base
-    cmd: >
-      {{.Run.Registry}}/runner-images/base:{{.Run.ID}}
-      bash -c "
-        set -e;
-        npm config get registry | grep -q jfrog && echo 'npm → JFrog OK';
-        curl -fsS --max-time 10 https://mycorp.jfrog.io/artifactory/api/system/ping && echo 'JFrog reachable';
-        echo 'Base smoke OK'
-      "
-    when: ["push-base"]
-
-  - id: build-dotnet6
-    build: >
-      -t {{.Run.Registry}}/runner-images/dotnet6:{{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      --build-arg BASE_TAG={{.Run.ID}}
-      -f runner-images/dotnet6/Dockerfile
-      .
-    when: ["smoke-base"]
-
-  - id: build-dotnet8
-    build: >
-      -t {{.Run.Registry}}/runner-images/dotnet8:{{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      --build-arg BASE_TAG={{.Run.ID}}
-      -f runner-images/dotnet8/Dockerfile
-      .
-    when: ["smoke-base"]
-
-  - id: build-dotnet10
-    build: >
-      -t {{.Run.Registry}}/runner-images/dotnet10:{{.Run.ID}}
-      --build-arg REGISTRY={{.Run.Registry}}
-      --build-arg BASE_TAG={{.Run.ID}}
-      -f runner-images/dotnet10/Dockerfile
-      .
-    when: ["smoke-base"]
-
-  - id: push-variants
-    push:
-      - {{.Run.Registry}}/runner-images/dotnet6:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/dotnet8:{{.Run.ID}}
-      - {{.Run.Registry}}/runner-images/dotnet10:{{.Run.ID}}
-    when: ["build-dotnet6", "build-dotnet8", "build-dotnet10"]
-
-  # smoke + functional + promote steps continue here, all on agent pool
-  # ...
+## TL;DR
+ 
+Microsoft migrated our App Service Environments from v2 to v3, which changed the DNS endpoint pattern for internal apps. Because our ILB ASE has no public exposure, the new endpoint suffix (`*.appserviceenvironment.us`) needs to resolve through private DNS — but no Private DNS Zone existed for it, no Zscaler ZPA rule covered it, and no on-prem conditional forwarder pointed at it. Kudu (and any direct SCM access) broke for every Function App in the affected ASEs.
+ 
+Fix required changes in three places:
+ 
+1. **Azure** — create a Private DNS Zone per ASE v3 and link it to the spoke vnets.
+2. **Zscaler ZPA** — add the new domains and the ILB IP to the Azure App Connector application segments, including a wildcard for SCM/Kudu hostnames.
+3. **On-prem DNS** — confirm conditional forwarders on the domain controllers point to the Azure-resident DNS resolver VMs, which in turn forward to Azure-provided DNS (168.63.129.16) and resolve the Private DNS Zones.
