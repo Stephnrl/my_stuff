@@ -1,200 +1,242 @@
 ################################################################################
-# Core / naming
-################################################################################
-
-variable "name_prefix" {
-  description = "Prefix applied to created resources (bucket, KMS alias, etc.)."
-  type        = string
-  default     = "org-guardduty"
-
-  validation {
-    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$", var.name_prefix))
-    error_message = "name_prefix must be 3-32 chars, lowercase alphanumeric and hyphens, starting/ending with alphanumeric."
-  }
-}
-
-variable "tags" {
-  description = "Tags applied to all resources. For CMMC scoping, include a data classification tag (e.g. `DataClassification = \"CUI\"`)."
-  type        = map(string)
-  default     = {}
-}
-
-################################################################################
-# Detector
-################################################################################
-
-variable "finding_publishing_frequency" {
-  description = "Frequency at which GuardDuty exports updated findings. CMMC SI.L2-3.14.3 favors faster alerting; FIFTEEN_MINUTES is the most aggressive."
-  type        = string
-  default     = "FIFTEEN_MINUTES"
-
-  validation {
-    condition     = contains(["FIFTEEN_MINUTES", "ONE_HOUR", "SIX_HOURS"], var.finding_publishing_frequency)
-    error_message = "Must be FIFTEEN_MINUTES, ONE_HOUR, or SIX_HOURS."
-  }
-}
-
-################################################################################
-# Organization enrollment
-################################################################################
-
-variable "auto_enable_organization_members" {
-  description = "Controls whether GuardDuty is auto-enabled for member accounts. ALL = enable for all existing and new. NEW = only new joiners. NONE = manual."
-  type        = string
-  default     = "ALL"
-
-  validation {
-    condition     = contains(["ALL", "NEW", "NONE"], var.auto_enable_organization_members)
-    error_message = "Must be ALL, NEW, or NONE."
-  }
-}
-
-################################################################################
-# Protection plans / features
+# S3 bucket for GuardDuty findings export
 #
-# All features default to enabled for CMMC L2 coverage (SI.L2-3.14.6/7).
-# Flip individual features off if a workload type is not present, to control
-# cost (e.g. disable RDS_LOGIN_EVENTS if you do not run Aurora).
+# CMMC controls addressed:
+#  - AU.L2-3.3.1/3.3.2: retain audit records (findings) beyond 90 days
+#  - AU.L2-3.3.8       : protect audit info at rest (SSE-KMS w/ CMK) and
+#                        optionally via Object Lock (WORM)
+#  - SC.L2-3.13.8      : TLS-only bucket policy
+#  - SC.L2-3.13.16     : encryption at rest
 ################################################################################
 
-variable "enable_s3_protection" {
-  description = "Enable S3 Protection (monitors S3 data events). Recommended for any env storing CUI in S3."
-  type        = bool
-  default     = true
+locals {
+  resolved_bucket_name = coalesce(
+    var.findings_bucket_name,
+    "${var.name_prefix}-findings-${local.account_id}-${local.region}",
+  )
 }
 
-variable "enable_eks_audit_logs" {
-  description = "Enable EKS audit log monitoring."
-  type        = bool
-  default     = true
+resource "aws_s3_bucket" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
+
+  bucket              = local.resolved_bucket_name
+  force_destroy       = false
+  object_lock_enabled = var.enable_object_lock
+
+  tags = merge(local.common_tags, {
+    Name = local.resolved_bucket_name
+  })
 }
 
-variable "enable_ebs_malware_protection" {
-  description = "Enable Malware Protection for EC2 (scans EBS volumes on suspicious findings)."
-  type        = bool
-  default     = true
+resource "aws_s3_bucket_public_access_block" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
+
+  bucket                  = aws_s3_bucket.findings[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
-variable "enable_rds_login_events" {
-  description = "Enable RDS Protection (Aurora anomalous login detection)."
-  type        = bool
-  default     = true
-}
+resource "aws_s3_bucket_ownership_controls" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
 
-variable "enable_lambda_network_logs" {
-  description = "Enable Lambda Protection (monitors Lambda network activity)."
-  type        = bool
-  default     = true
-}
-
-variable "enable_runtime_monitoring" {
-  description = "Enable unified Runtime Monitoring (EC2, ECS-Fargate, EKS). This is mutually exclusive with EKS_RUNTIME_MONITORING; the module enforces this."
-  type        = bool
-  default     = true
-}
-
-variable "runtime_monitoring_ec2_agent_management" {
-  description = "Let GuardDuty auto-manage the runtime agent on EC2 (SSM-based install/update). Only used if enable_runtime_monitoring = true."
-  type        = bool
-  default     = true
-}
-
-variable "runtime_monitoring_ecs_fargate_agent_management" {
-  description = "Let GuardDuty auto-manage the runtime agent on ECS Fargate tasks. Only used if enable_runtime_monitoring = true."
-  type        = bool
-  default     = true
-}
-
-variable "runtime_monitoring_eks_addon_management" {
-  description = "Let GuardDuty manage the EKS add-on for runtime monitoring. Only used if enable_runtime_monitoring = true."
-  type        = bool
-  default     = true
-}
-
-################################################################################
-# Findings export (S3 publishing destination)
-#
-# CMMC AU.L2-3.3.1/2/8: retain audit records, protect audit info at rest
-# and in transit. The module creates an encrypted S3 bucket and CMK by default.
-################################################################################
-
-variable "create_findings_bucket" {
-  description = "If true, create the S3 bucket and KMS CMK for findings export. Set to false if you publish findings to a bucket in a separate logging account (supply findings_bucket_arn and findings_kms_key_arn)."
-  type        = bool
-  default     = true
-}
-
-variable "findings_bucket_name" {
-  description = "Override the generated findings bucket name. If null, a name is derived from name_prefix and the account ID. Only used when create_findings_bucket = true."
-  type        = string
-  default     = null
-}
-
-variable "findings_bucket_arn" {
-  description = "ARN of a pre-existing findings bucket. Required when create_findings_bucket = false."
-  type        = string
-  default     = null
-}
-
-variable "findings_kms_key_arn" {
-  description = "ARN of a pre-existing KMS CMK used to encrypt findings. Required when create_findings_bucket = false."
-  type        = string
-  default     = null
-}
-
-variable "findings_retention_days" {
-  description = "Total retention (days) for exported findings before expiration. Default 2555 (~7 years) aligns with common CMMC/DFARS audit-retention expectations. Set to 0 to disable expiration entirely."
-  type        = number
-  default     = 2555
-
-  validation {
-    condition     = var.findings_retention_days == 0 || var.findings_retention_days >= 365
-    error_message = "findings_retention_days must be 0 (no expiration) or >= 365."
+  bucket = aws_s3_bucket.findings[0].id
+  rule {
+    object_ownership = "BucketOwnerEnforced"
   }
 }
 
-variable "findings_transition_to_ia_days" {
-  description = "Days after which findings transition to S3 Standard-IA."
-  type        = number
-  default     = 30
-}
+resource "aws_s3_bucket_versioning" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
 
-variable "findings_transition_to_glacier_days" {
-  description = "Days after which findings transition to Glacier Flexible Retrieval for long-term retention."
-  type        = number
-  default     = 365
-}
-
-variable "enable_object_lock" {
-  description = "Enable S3 Object Lock on the findings bucket (WORM protection for audit integrity, CMMC AU.L2-3.3.8). Must be set at bucket creation; changing this later requires recreating the bucket."
-  type        = bool
-  default     = false
-}
-
-variable "object_lock_mode" {
-  description = "Object Lock retention mode: GOVERNANCE (privileged users can override) or COMPLIANCE (no one can override). COMPLIANCE is stricter but irrevocable."
-  type        = string
-  default     = "GOVERNANCE"
-
-  validation {
-    condition     = contains(["GOVERNANCE", "COMPLIANCE"], var.object_lock_mode)
-    error_message = "object_lock_mode must be GOVERNANCE or COMPLIANCE."
+  bucket = aws_s3_bucket.findings[0].id
+  versioning_configuration {
+    status = "Enabled"
   }
 }
 
-variable "object_lock_retention_days" {
-  description = "Default Object Lock retention in days when enable_object_lock = true."
-  type        = number
-  default     = 365
+resource "aws_s3_bucket_server_side_encryption_configuration" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
+
+  bucket = aws_s3_bucket.findings[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm     = "aws:kms"
+      kms_master_key_id = aws_kms_key.findings[0].arn
+    }
+    bucket_key_enabled = true
+  }
 }
 
-variable "kms_deletion_window_days" {
-  description = "KMS CMK deletion waiting period (7-30)."
-  type        = number
-  default     = 30
+resource "aws_s3_bucket_lifecycle_configuration" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
 
-  validation {
-    condition     = var.kms_deletion_window_days >= 7 && var.kms_deletion_window_days <= 30
-    error_message = "Must be between 7 and 30."
+  bucket = aws_s3_bucket.findings[0].id
+
+  # Current-version transitions + (optional) expiration
+  rule {
+    id     = "findings-current-versions"
+    status = "Enabled"
+
+    filter {}
+
+    transition {
+      days          = var.findings_transition_to_ia_days
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = var.findings_transition_to_glacier_days
+      storage_class = "GLACIER"
+    }
+
+    dynamic "expiration" {
+      for_each = var.findings_retention_days > 0 ? [1] : []
+      content {
+        days = var.findings_retention_days
+      }
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
   }
+
+  # Clean up prior (non-current) versions after 90 days to control storage cost
+  rule {
+    id     = "findings-noncurrent-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "STANDARD_IA"
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+  }
+
+  depends_on = [aws_s3_bucket_versioning.findings]
+}
+
+resource "aws_s3_bucket_object_lock_configuration" "findings" {
+  count = var.create_findings_bucket && var.enable_object_lock ? 1 : 0
+
+  bucket = aws_s3_bucket.findings[0].id
+
+  rule {
+    default_retention {
+      mode = var.object_lock_mode
+      days = var.object_lock_retention_days
+    }
+  }
+}
+
+################################################################################
+# Bucket policy
+################################################################################
+
+data "aws_iam_policy_document" "findings_bucket" {
+  count = var.create_findings_bucket ? 1 : 0
+
+  # GuardDuty service writes findings.
+  statement {
+    sid    = "AllowGuardDutyPutObject"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["guardduty.amazonaws.com"]
+    }
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.findings[0].arn}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+  }
+
+  statement {
+    sid    = "AllowGuardDutyGetBucketLocation"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["guardduty.amazonaws.com"]
+    }
+    actions   = ["s3:GetBucketLocation"]
+    resources = [aws_s3_bucket.findings[0].arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account_id]
+    }
+  }
+
+  # Force KMS-encrypted writes only.
+  statement {
+    sid     = "DenyUnencryptedPuts"
+    effect  = "Deny"
+    actions = ["s3:PutObject"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    resources = ["${aws_s3_bucket.findings[0].arn}/*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "s3:x-amz-server-side-encryption"
+      values   = ["aws:kms"]
+    }
+  }
+
+  # Force the *correct* KMS key.
+  statement {
+    sid     = "DenyWrongKmsKey"
+    effect  = "Deny"
+    actions = ["s3:PutObject"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    resources = ["${aws_s3_bucket.findings[0].arn}/*"]
+    condition {
+      test     = "StringNotEqualsIfExists"
+      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+      values   = [aws_kms_key.findings[0].arn]
+    }
+  }
+
+  # Enforce TLS (CMMC SC.L2-3.13.8).
+  statement {
+    sid     = "DenyInsecureTransport"
+    effect  = "Deny"
+    actions = ["s3:*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["*"]
+    }
+    resources = [
+      aws_s3_bucket.findings[0].arn,
+      "${aws_s3_bucket.findings[0].arn}/*",
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "findings" {
+  count = var.create_findings_bucket ? 1 : 0
+
+  bucket = aws_s3_bucket.findings[0].id
+  policy = data.aws_iam_policy_document.findings_bucket[0].json
+
+  depends_on = [aws_s3_bucket_public_access_block.findings]
 }
