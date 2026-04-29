@@ -1,23 +1,36 @@
-import textwrap
+def generate_diagram(
+    root: Path,
+    items: List[Dict[str, str]],
+    output: str,
+    outformat: str,
+    direction: str,
+) -> None:
+    grouped = group_by_directory(items, root)
 
-def wrap_label(text: str, width: int = 16) -> str:
-    return "\n".join(textwrap.wrap(text, width=width)) if text else ""
+    graph_attr = {
+        "fontsize": "18",
+        "pad": "1.0",
+        "nodesep": "0.9",
+        "ranksep": "1.2",
+        "splines": "spline",
+        "overlap": "false",
+    }
 
-def label_for_item(item: Dict[str, str], short: bool = True) -> str:
-    """
-    Shorter labels reduce overlap a lot.
-    """
-    if item["kind"] == "resource":
-        if short:
-            # just show resource name, and type on next line
-            return wrap_label(f'{item["name"]}\n({item["type"].replace("aws_", "")})', 18)
-        return wrap_label(f'{item["type"]}.{item["name"]}', 22)
+    node_attr = {
+        "fontsize": "10",
+    }
 
-    # module
-    if short:
-        return wrap_label(f'module.{item["name"]}', 18)
-
-    source = item.get("source", "")
-    if source:
-        return wrap_label(f'module.{item["name"]}\n{source}', 22)
-    return wrap_label(f'module.{item["name"]}', 22)
+    with Diagram(
+        name=output,
+        filename=output,
+        outformat=outformat,
+        show=False,
+        direction=direction,
+        graph_attr=graph_attr,
+        node_attr=node_attr,
+    ):
+        for directory, dir_items in sorted(grouped.items()):
+            with Cluster(directory):
+                for item in sorted(dir_items, key=lambda x: (x["kind"], x["type"], x["name"])):
+                    node_cls = node_class_for_item(item)
+                    node_cls(label_for_item(item, short=True))
