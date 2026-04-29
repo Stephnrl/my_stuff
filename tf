@@ -1,739 +1,450 @@
 #!/usr/bin/env python3
+
 """
-tf_docgen.py — Generate HTML documentation from Terraform module directories.
+Generate an AWS architecture diagram from Terraform .tf files.
 
-Handles both layouts you described:
-  * Monolithic repos: main.tf / variables.tf / outputs.tf in the root.
-  * Multi-module repos: subdirectories like EKS/, pod_identity/, S3/, RDS/,
-    each with their own .tf files. Every directory containing .tf files is
-    documented as a separate module.
+Features:
+- Supports root/monolithic Terraform repos.
+- Supports repo subdirectories such as eks/, eks-pod-identity/, eks-addons/.
+- Ignores directories containing "_shared".
+- Parses Terraform HCL2 using python-hcl2.
+- Creates a Mingrammer Diagrams output file.
 
-For each module the report includes:
-  * Description (pulled from README.md, falls back to top-of-file comments)
-  * Auto-generated Usage example (required vars first, optionals with defaults)
-  * Inputs / Outputs tables
-  * Resources, data sources, sub-modules, required providers
-  * Mermaid diagram of the module's structure
+Usage examples:
 
-The output is a single self-contained HTML file. Open it in a browser to view
-(diagrams render via the Mermaid CDN), or paste sections into Confluence —
-tables and headings copy across cleanly. Mermaid source is also exposed in a
-<details> block so you can drop it into a Confluence Mermaid macro.
+  python tf_to_diagram.py ./my-terraform-repo
 
-Usage:
-    pip install python-hcl2
-    python tf_docgen.py                        # scan current directory
-    python tf_docgen.py /path/to/repo          # scan a specific path
-    python tf_docgen.py -o eks-docs.html       # custom output file
-    python tf_docgen.py --title "EKS Modules"  # custom report title
+  python tf_to_diagram.py ./my-terraform-repo \
+    --include eks eks-pod-identity eks-addons \
+    --output eks-architecture
+
+  python tf_to_diagram.py ./my-terraform-repo \
+    --format svg \
+    --direction TB
 """
+
+from __future__ import annotations
 
 import argparse
-import json
 import os
-import re
-import sys
-from datetime import datetime
-from html import escape
 from pathlib import Path
+from typing import Any, Dict, Iterable, List, Tuple
 
-try:
-    import hcl2
-except ImportError:
-    sys.stderr.write(
-        "ERROR: python-hcl2 is required.\n"
-        "Install it with:  pip install python-hcl2\n"
-    )
-    sys.exit(1)
+import hcl2
+
+from diagrams import Cluster, Diagram
+from diagrams.aws.compute import EC2, EKS, Lambda
+from diagrams.aws.database import RDS, Dynamodb, ElastiCache
+from diagrams.aws.integration import SQS, SNS, Eventbridge
+from diagrams.aws.management import Cloudwatch
+from diagrams.aws.network import ALB, ELB, NLB, Route53, VPC, PrivateSubnet, PublicSubnet, NATGateway, InternetGateway
+from diagrams.aws.security import IAM, KMS, SecretsManager
+from diagrams.aws.storage import S3, EFS
+from diagrams.aws.devtools import Codebuild, Codepipeline
+from diagrams.aws.general import General
 
 
-# Directories that should never count as "modules"
-SKIP_DIRS = {
-    ".terraform", ".git", ".github", ".idea", ".vscode",
-    "node_modules", "examples", "example", "test", "tests", "__pycache__",
+# Terraform AWS resource type -> Diagrams node class
+AWS_RESOURCE_MAP = {
+    # Compute
+    "aws_instance": EC2,
+    "aws_launch_template": EC2,
+    "aws_autoscaling_group": EC2,
+    "aws_eks_cluster": EKS,
+    "aws_eks_node_group": EKS,
+    "aws_lambda_function": Lambda,
+
+    # Networking
+    "aws_vpc": VPC,
+    "aws_subnet": PrivateSubnet,
+    "aws_internet_gateway": InternetGateway,
+    "aws_nat_gateway": NATGateway,
+    "aws_route53_zone": Route53,
+    "aws_route53_record": Route53,
+    "aws_lb": ALB,
+    "aws_alb": ALB,
+    "aws_elb": ELB,
+    "aws_lb_listener": ALB,
+    "aws_lb_target_group": ALB,
+    "aws_security_group": General,
+    "aws_security_group_rule": General,
+
+    # Storage
+    "aws_s3_bucket": S3,
+    "aws_efs_file_system": EFS,
+
+    # Database
+    "aws_db_instance": RDS,
+    "aws_rds_cluster": RDS,
+    "aws_rds_cluster_instance": RDS,
+    "aws_dynamodb_table": Dynamodb,
+    "aws_elasticache_cluster": ElastiCache,
+    "aws_elasticache_replication_group": ElastiCache,
+
+    # IAM / Security
+    "aws_iam_role": IAM,
+    "aws_iam_policy": IAM,
+    "aws_iam_policy_attachment": IAM,
+    "aws_iam_role_policy": IAM,
+    "aws_iam_role_policy_attachment": IAM,
+    "aws_kms_key": KMS,
+    "aws_secretsmanager_secret": SecretsManager,
+
+    # Messaging / Events
+    "aws_sqs_queue": SQS,
+    "aws_sns_topic": SNS,
+    "aws_cloudwatch_event_rule": Eventbridge,
+    "aws_cloudwatch_log_group": Cloudwatch,
+
+    # DevOps
+    "aws_codebuild_project": Codebuild,
+    "aws_codepipeline": Codepipeline,
 }
 
 
-# ---------- discovery ----------
+# Module name/source keyword -> Diagrams node class
+MODULE_HINT_MAP = {
+    "eks": EKS,
+    "pod-identity": IAM,
+    "pod_identity": IAM,
+    "addons": EKS,
+    "vpc": VPC,
+    "network": VPC,
+    "s3": S3,
+    "bucket": S3,
+    "rds": RDS,
+    "aurora": RDS,
+    "lambda": Lambda,
+    "iam": IAM,
+    "kms": KMS,
+    "secrets": SecretsManager,
+}
 
-def find_module_dirs(root: Path):
-    """Return every directory under `root` that contains at least one .tf file."""
-    root = root.resolve()
-    found = set()
 
-    def walk(d: Path):
-        if d.name in SKIP_DIRS or (d != root and d.name.startswith('.')):
-            return
+def should_skip_path(path: Path) -> bool:
+    """
+    Skip any directory or file path containing '_shared'.
+    """
+    return any("_shared" in part for part in path.parts)
+
+
+def iter_tf_files(root: Path, include_dirs: List[str] | None = None) -> Iterable[Path]:
+    """
+    Yield .tf files.
+
+    If include_dirs is provided, only scan those child directories under root.
+    Otherwise, scan the entire root recursively.
+    """
+    roots: List[Path]
+
+    if include_dirs:
+        roots = [root / d for d in include_dirs]
+    else:
+        roots = [root]
+
+    for scan_root in roots:
+        if not scan_root.exists():
+            print(f"WARNING: path does not exist, skipping: {scan_root}")
+            continue
+
+        if should_skip_path(scan_root):
+            continue
+
+        for dirpath, dirnames, filenames in os.walk(scan_root):
+            current_dir = Path(dirpath)
+
+            # Prevent walking into ignored dirs
+            dirnames[:] = [
+                d for d in dirnames
+                if "_shared" not in d and not should_skip_path(current_dir / d)
+            ]
+
+            for filename in filenames:
+                if filename.endswith(".tf"):
+                    tf_file = current_dir / filename
+                    if not should_skip_path(tf_file):
+                        yield tf_file
+
+
+def parse_tf_file(tf_file: Path) -> Dict[str, Any]:
+    """
+    Parse one Terraform file.
+    """
+    try:
+        with tf_file.open("r", encoding="utf-8") as f:
+            return hcl2.load(f)
+    except Exception as exc:
+        print(f"WARNING: failed to parse {tf_file}: {exc}")
+        return {}
+
+
+def extract_resources(parsed: Dict[str, Any], tf_file: Path) -> List[Dict[str, str]]:
+    """
+    Extract Terraform resource blocks.
+
+    python-hcl2 commonly returns:
+      {"resource": [{"aws_s3_bucket": {"name": {...}}}]}
+    """
+    results: List[Dict[str, str]] = []
+
+    for resource_block in parsed.get("resource", []):
+        if not isinstance(resource_block, dict):
+            continue
+
+        for resource_type, resources in resource_block.items():
+            if not isinstance(resources, dict):
+                continue
+
+            for resource_name in resources.keys():
+                results.append({
+                    "kind": "resource",
+                    "type": resource_type,
+                    "name": resource_name,
+                    "file": str(tf_file),
+                    "directory": str(tf_file.parent),
+                })
+
+    return results
+
+
+def extract_modules(parsed: Dict[str, Any], tf_file: Path) -> List[Dict[str, str]]:
+    """
+    Extract Terraform module blocks.
+
+    python-hcl2 commonly returns:
+      {"module": [{"eks": {"source": "...", ...}}]}
+    """
+    results: List[Dict[str, str]] = []
+
+    for module_block in parsed.get("module", []):
+        if not isinstance(module_block, dict):
+            continue
+
+        for module_name, module_body in module_block.items():
+            source = ""
+
+            if isinstance(module_body, dict):
+                raw_source = module_body.get("source", "")
+                if isinstance(raw_source, str):
+                    source = raw_source
+
+            results.append({
+                "kind": "module",
+                "type": "module",
+                "name": module_name,
+                "source": source,
+                "file": str(tf_file),
+                "directory": str(tf_file.parent),
+            })
+
+    return results
+
+
+def load_terraform_inventory(root: Path, include_dirs: List[str] | None = None) -> List[Dict[str, str]]:
+    """
+    Parse all Terraform files and return resources/modules.
+    """
+    inventory: List[Dict[str, str]] = []
+
+    for tf_file in iter_tf_files(root, include_dirs):
+        parsed = parse_tf_file(tf_file)
+        inventory.extend(extract_resources(parsed, tf_file))
+        inventory.extend(extract_modules(parsed, tf_file))
+
+    return inventory
+
+
+def node_class_for_item(item: Dict[str, str]):
+    """
+    Choose a Diagrams node class for a Terraform resource or module.
+    """
+    if item["kind"] == "resource":
+        return AWS_RESOURCE_MAP.get(item["type"], General)
+
+    module_name = item.get("name", "").lower()
+    module_source = item.get("source", "").lower()
+    combined = f"{module_name} {module_source}"
+
+    for hint, node_cls in MODULE_HINT_MAP.items():
+        if hint in combined:
+            return node_cls
+
+    return General
+
+
+def label_for_item(item: Dict[str, str]) -> str:
+    """
+    Human-friendly label for the diagram node.
+    """
+    if item["kind"] == "resource":
+        return f'{item["type"]}.{item["name"]}'
+
+    source = item.get("source", "")
+    if source:
+        return f'module.{item["name"]}\n{source}'
+    return f'module.{item["name"]}'
+
+
+def group_by_directory(items: List[Dict[str, str]], root: Path) -> Dict[str, List[Dict[str, str]]]:
+    """
+    Group resources/modules by relative Terraform directory.
+    """
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+
+    for item in items:
+        directory = Path(item["directory"])
         try:
-            entries = list(d.iterdir())
-        except (PermissionError, OSError):
-            return
-        if any(p.suffix == '.tf' and p.is_file() for p in entries):
-            found.add(d)
-        for sub in entries:
-            if sub.is_dir():
-                walk(sub)
+            rel_dir = str(directory.relative_to(root))
+        except ValueError:
+            rel_dir = str(directory)
 
-    walk(root)
-    return sorted(found, key=lambda p: str(p).lower())
+        if rel_dir == ".":
+            rel_dir = "root"
 
+        grouped.setdefault(rel_dir, []).append(item)
 
-# ---------- HCL parsing ----------
-
-def _unwrap(value):
-    """Strip the ${...} wrapping that python-hcl2 puts around expressions/types."""
-    if isinstance(value, str):
-        m = re.fullmatch(r'\$\{(.*)\}', value, flags=re.DOTALL)
-        if m:
-            return m.group(1)
-        return value
-    if isinstance(value, list):
-        return [_unwrap(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _unwrap(v) for k, v in value.items()}
-    return value
+    return grouped
 
 
-def _stringify(val):
-    """Coerce parser output (sometimes wrapped in lists) to a clean string."""
-    if val is None:
-        return ''
-    if isinstance(val, list):
-        return ' '.join(_stringify(x) for x in val).strip()
-    return _strip_quotes(str(val).strip())
+def generate_diagram(
+    root: Path,
+    items: List[Dict[str, str]],
+    output: str,
+    outformat: str,
+    direction: str,
+) -> None:
+    """
+    Generate a Diagrams architecture diagram.
+    """
+    grouped = group_by_directory(items, root)
 
-
-def _strip_quotes(s):
-    """Strip surrounding quote characters that some python-hcl2 versions retain."""
-    if not isinstance(s, str):
-        return s
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
-        inner = s[1:-1]
-        # Only strip if there's no unescaped quote of the same kind inside
-        if s[0] not in inner.replace('\\' + s[0], ''):
-            return inner.replace('\\' + s[0], s[0])
-    return s
-
-
-def _clean_value(val):
-    """Recursively clean parser output: strip quote wrapping, drop __is_block__."""
-    if isinstance(val, str):
-        return _strip_quotes(val)
-    if isinstance(val, list):
-        return [_clean_value(v) for v in val]
-    if isinstance(val, dict):
-        return {_strip_quotes(k): _clean_value(v)
-                for k, v in val.items()
-                if k != '__is_block__'}
-    return val
-
-
-# Sentinel to distinguish "no default" from default=null
-_REQUIRED = object()
-
-
-def parse_module(module_dir: Path):
-    """Parse all .tf files in a directory and return an aggregated summary."""
-    summary = {
-        'path': module_dir,
-        'files': [],
-        'variables': {},        # name -> {type, description, default, sensitive, nullable}
-        'outputs': {},          # name -> {description, value, sensitive}
-        'resources': [],        # [{type, name}]
-        'data_sources': [],     # [{type, name}]
-        'sub_modules': [],      # [{name, source, version}]
-        'providers': [],        # [{name, alias}]
-        'required_providers': {},
-        'terraform_version': None,
-        'locals': [],
-        'parse_errors': [],
+    graph_attr = {
+        "fontsize": "18",
+        "pad": "0.5",
+        "splines": "ortho",
     }
 
-    for tf_path in sorted(module_dir.glob('*.tf')):
-        summary['files'].append(tf_path.name)
-        try:
-            with open(tf_path, 'r', encoding='utf-8') as f:
-                parsed = hcl2.load(f)
-            parsed = _clean_value(parsed)
-        except Exception as e:
-            summary['parse_errors'].append(f"{tf_path.name}: {e}")
-            continue
+    with Diagram(
+        name=output,
+        filename=output,
+        outformat=outformat,
+        show=False,
+        direction=direction,
+        graph_attr=graph_attr,
+    ):
+        for directory, dir_items in sorted(grouped.items()):
+            with Cluster(directory):
+                previous_node = None
 
-        for blk in parsed.get('variable', []):
-            for name, attrs in blk.items():
-                summary['variables'][name] = {
-                    'type': _stringify(_unwrap(attrs.get('type', 'any'))) or 'any',
-                    'description': _stringify(attrs.get('description')),
-                    'default': attrs.get('default', _REQUIRED),
-                    'sensitive': bool(attrs.get('sensitive', False)),
-                    'nullable': attrs.get('nullable', True),
-                }
+                for item in sorted(dir_items, key=lambda x: (x["kind"], x["type"], x["name"])):
+                    node_cls = node_class_for_item(item)
+                    node = node_cls(label_for_item(item))
 
-        for blk in parsed.get('output', []):
-            for name, attrs in blk.items():
-                summary['outputs'][name] = {
-                    'description': _stringify(attrs.get('description')),
-                    'sensitive': bool(attrs.get('sensitive', False)),
-                    'value': _unwrap(attrs.get('value')),
-                }
+                    # Basic visual grouping chain.
+                    # This does not infer true Terraform dependencies yet.
+                    if previous_node:
+                        previous_node - node
 
-        for blk in parsed.get('resource', []):
-            for r_type, instances in blk.items():
-                for inst_name in instances:
-                    summary['resources'].append({'type': r_type, 'name': inst_name})
-
-        for blk in parsed.get('data', []):
-            for d_type, instances in blk.items():
-                for inst_name in instances:
-                    summary['data_sources'].append({'type': d_type, 'name': inst_name})
-
-        for blk in parsed.get('module', []):
-            for name, attrs in blk.items():
-                summary['sub_modules'].append({
-                    'name': name,
-                    'source': _stringify(attrs.get('source', 'unknown')) or 'unknown',
-                    'version': _stringify(attrs.get('version')) or None,
-                })
-
-        for blk in parsed.get('provider', []):
-            for name, attrs in blk.items():
-                summary['providers'].append({
-                    'name': name,
-                    'alias': _stringify(attrs.get('alias')) or None,
-                })
-
-        for blk in parsed.get('terraform', []):
-            if 'required_version' in blk:
-                summary['terraform_version'] = _stringify(blk['required_version'])
-            if 'required_providers' in blk:
-                rp = blk['required_providers']
-                if isinstance(rp, list):
-                    for item in rp:
-                        if isinstance(item, dict):
-                            summary['required_providers'].update(item)
-                elif isinstance(rp, dict):
-                    summary['required_providers'].update(rp)
-
-        for blk in parsed.get('locals', []):
-            if isinstance(blk, dict):
-                for name in blk:
-                    if name not in summary['locals']:
-                        summary['locals'].append(name)
-
-    return summary
+                    previous_node = node
 
 
-# ---------- description / readme ----------
+def print_summary(items: List[Dict[str, str]]) -> None:
+    resources = [i for i in items if i["kind"] == "resource"]
+    modules = [i for i in items if i["kind"] == "module"]
 
-def read_description(module_dir: Path):
-    """Return the contents of a README in the module directory, if any."""
-    for candidate in ['README.md', 'readme.md', 'README.MD', 'README.txt', 'README']:
-        p = module_dir / candidate
-        if p.exists():
-            try:
-                return p.read_text(encoding='utf-8').strip()
-            except Exception:
-                continue
-    return None
+    print()
+    print("Terraform scan summary")
+    print("----------------------")
+    print(f"Resources found: {len(resources)}")
+    print(f"Modules found:   {len(modules)}")
+    print()
 
+    by_type: Dict[str, int] = {}
+    for item in resources:
+        by_type[item["type"]] = by_type.get(item["type"], 0) + 1
 
-def extract_top_comment(module_dir: Path):
-    """Pull leading # / // comments from main.tf as a fallback description."""
-    candidates = [module_dir / 'main.tf'] + sorted(module_dir.glob('*.tf'))
-    seen = set()
-    for f in candidates:
-        if f in seen or not f.exists():
-            continue
-        seen.add(f)
-        try:
-            lines = f.read_text(encoding='utf-8').splitlines()
-        except Exception:
-            continue
-        comment_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if not stripped:
-                if comment_lines:
-                    break
-                continue
-            if stripped.startswith('#') or stripped.startswith('//'):
-                comment_lines.append(re.sub(r'^[#/]+\s?', '', stripped))
+    if by_type:
+        print("Resource types:")
+        for resource_type, count in sorted(by_type.items()):
+            print(f"  {resource_type}: {count}")
+
+    if modules:
+        print()
+        print("Modules:")
+        for module in modules:
+            source = module.get("source", "")
+            if source:
+                print(f'  module.{module["name"]} -> {source}')
             else:
-                break
-        if comment_lines:
-            return '\n'.join(comment_lines)
-    return None
+                print(f'  module.{module["name"]}')
 
 
-# ---------- usage example generation ----------
-
-def format_default_value(val):
-    """Render a default value as a Terraform literal."""
-    if val is _REQUIRED:
-        return ''
-    if val is None:
-        return 'null'
-    if isinstance(val, bool):
-        return 'true' if val else 'false'
-    if isinstance(val, (int, float)):
-        return str(val)
-    if isinstance(val, str):
-        unwrapped = _unwrap(val)
-        if unwrapped != val:
-            return unwrapped  # interpolated expression
-        return json.dumps(val)
-    if isinstance(val, (list, dict)):
-        try:
-            return json.dumps(val)
-        except (TypeError, ValueError):
-            return str(val)
-    return str(val)
-
-
-def placeholder_for_type(t):
-    """Best-guess placeholder value for a given type expression."""
-    s = (t or 'any').lower()
-    if 'string' in s:
-        return '"..."'
-    if 'number' in s:
-        return '0'
-    if 'bool' in s:
-        return 'false'
-    if 'list' in s or 'set' in s or 'tuple' in s:
-        return '[]'
-    if 'map' in s or 'object' in s:
-        return '{}'
-    return '""'
-
-
-def generate_usage(module_name: str, summary: dict):
-    """Produce a Terraform module-block example, required vars first."""
-    required = [(n, v) for n, v in summary['variables'].items() if v['default'] is _REQUIRED]
-    optional = [(n, v) for n, v in summary['variables'].items() if v['default'] is not _REQUIRED]
-
-    # Use just the leaf directory name for the source path — the user can adjust.
-    source = f'./{summary["path"].name}'
-    safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', module_name)
-
-    lines = [f'module "{safe_name}" {{', f'  source = "{source}"', '']
-
-    if required:
-        lines.append('  # Required')
-        max_len = max(len(n) for n, _ in required)
-        for name, var in required:
-            lines.append(f'  {name.ljust(max_len)} = {placeholder_for_type(var["type"])}')
-
-    if optional:
-        if required:
-            lines.append('')
-        lines.append('  # Optional (showing defaults — override as needed)')
-        max_len = max(len(n) for n, _ in optional)
-        for name, var in optional:
-            rendered = format_default_value(var['default']) or '""'
-            # Long defaults get truncated for readability
-            if len(rendered) > 60:
-                rendered = rendered[:57] + '...'
-            lines.append(f'  {name.ljust(max_len)} = {rendered}')
-
-    lines.append('}')
-    return '\n'.join(lines)
-
-
-# ---------- mermaid diagram ----------
-
-def safe_id(s: str, prefix: str = 'n') -> str:
-    return prefix + re.sub(r'[^a-zA-Z0-9]', '_', str(s))
-
-
-def generate_mermaid(module_name: str, summary: dict) -> str:
-    """Render a Mermaid graph describing the module structure."""
-    lines = ['graph LR']
-    root = safe_id(module_name, 'M_')
-    lines.append(f'    {root}["📦 {module_name}"]')
-    lines.append(f'    style {root} fill:#0052cc,stroke:#003884,color:#ffffff')
-
-    # Group resources by type so the diagram doesn't explode
-    by_type = {}
-    for r in summary['resources']:
-        by_type.setdefault(r['type'], []).append(r['name'])
-
-    for r_type, names in sorted(by_type.items()):
-        tid = safe_id(r_type, 'T_')
-        if len(names) == 1:
-            label = f"{r_type}.{names[0]}"
-        else:
-            label = f"{r_type}<br/>(×{len(names)})"
-        lines.append(f'    {tid}["{label}"]')
-        lines.append(f'    {root} --> {tid}')
-        lines.append(f'    style {tid} fill:#deebff,stroke:#0052cc')
-
-    for sub in summary['sub_modules']:
-        sid = safe_id('mod_' + sub['name'], 'S_')
-        lines.append(f'    {sid}(["module: {sub["name"]}"])')
-        lines.append(f'    {root} --> {sid}')
-        lines.append(f'    style {sid} fill:#fff0b3,stroke:#974f0c')
-
-    if summary['data_sources']:
-        did = safe_id('data', 'D_')
-        ds_preview = '<br/>'.join(f"{d['type']}.{d['name']}" for d in summary['data_sources'][:4])
-        if len(summary['data_sources']) > 4:
-            ds_preview += f"<br/>... +{len(summary['data_sources']) - 4} more"
-        lines.append(f'    {did}[("data sources<br/>{ds_preview}")]')
-        lines.append(f'    {root} -.-> {did}')
-        lines.append(f'    style {did} fill:#e3fcef,stroke:#006644')
-
-    return '\n'.join(lines)
-
-
-# ---------- HTML rendering ----------
-
-CSS = """
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  color: #172b4d;
-  max-width: 1100px;
-  margin: 2em auto;
-  padding: 0 1.2em;
-  line-height: 1.55;
-}
-h1 { border-bottom: 3px solid #0052cc; padding-bottom: .3em; }
-h2 { border-bottom: 1px solid #dfe1e6; padding-bottom: .25em; margin-top: 2.6em; color: #0052cc; }
-h3 { margin-top: 1.8em; color: #253858; font-size: 1.05em; }
-table { border-collapse: collapse; width: 100%; margin: .9em 0 1.4em; font-size: 0.93em; }
-th, td { border: 1px solid #dfe1e6; padding: 8px 12px; text-align: left; vertical-align: top; }
-th { background: #f4f5f7; font-weight: 600; }
-tr:nth-child(even) td { background: #fafbfc; }
-code, pre { font-family: "SF Mono", Monaco, Consolas, "Liberation Mono", monospace; }
-code { background: #f4f5f7; padding: 1px 6px; border-radius: 3px; font-size: 0.9em; }
-pre { background: #1f2937; color: #e5e7eb; padding: 14px 16px; border-radius: 4px;
-      overflow-x: auto; font-size: 0.85em; line-height: 1.45; }
-pre code { background: transparent; color: inherit; padding: 0; }
-.tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.78em;
-       font-weight: 600; white-space: nowrap; }
-.tag-required  { background: #ffebe6; color: #bf2600; }
-.tag-optional  { background: #e3fcef; color: #006644; }
-.tag-sensitive { background: #fff0b3; color: #974f0c; }
-.toc { background: #f4f5f7; padding: 1em 1.5em; border-radius: 4px; }
-.toc ul { margin: .3em 0; padding-left: 1.2em; }
-.toc li { margin: .15em 0; }
-.meta { color: #6b778c; font-size: 0.9em; }
-.empty { color: #6b778c; font-style: italic; }
-.module-section { padding: 1em 0; }
-.module-path { font-family: monospace; background: #f4f5f7; padding: 2px 8px;
-               border-radius: 3px; font-size: 0.9em; }
-.mermaid { background: #fafbfc; padding: 1em; border: 1px solid #dfe1e6;
-           border-radius: 4px; text-align: center; }
-details > summary { cursor: pointer; color: #0052cc; margin: .5em 0; font-size: 0.9em; }
-"""
-
-
-MERMAID_SCRIPT = """
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script>
-  if (window.mermaid) {
-    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
-  }
-</script>
-"""
-
-
-def render_default_cell(val):
-    if val is _REQUIRED:
-        return '<span class="tag tag-required">required</span>'
-    rendered = format_default_value(val)
-    if len(rendered) > 80:
-        rendered = rendered[:77] + '...'
-    return f'<code>{escape(rendered)}</code>'
-
-
-def _markdownish(text: str) -> str:
-    """Very light Markdown-ish rendering for README text — paragraphs + code fences."""
-    out = []
-    in_code = False
-    code_buf = []
-    for line in text.splitlines():
-        if line.strip().startswith('```'):
-            if in_code:
-                out.append('<pre><code>' + escape('\n'.join(code_buf)) + '</code></pre>')
-                code_buf = []
-                in_code = False
-            else:
-                in_code = True
-            continue
-        if in_code:
-            code_buf.append(line)
-            continue
-        out.append(line)
-    if in_code and code_buf:
-        out.append('<pre><code>' + escape('\n'.join(code_buf)) + '</code></pre>')
-
-    # paragraph-split the non-code chunks
-    html_parts = []
-    para = []
-    for line in out:
-        if line.startswith('<pre>'):
-            if para:
-                html_parts.append('<p>' + '<br/>'.join(escape(p) for p in para) + '</p>')
-                para = []
-            html_parts.append(line)
-        elif line.strip() == '':
-            if para:
-                html_parts.append('<p>' + '<br/>'.join(escape(p) for p in para) + '</p>')
-                para = []
-        else:
-            para.append(line)
-    if para:
-        html_parts.append('<p>' + '<br/>'.join(escape(p) for p in para) + '</p>')
-    return '\n'.join(html_parts)
-
-
-def render_module_section(name: str, summary: dict, root_path: Path) -> str:
-    parts = []
-    rel = summary['path'].relative_to(root_path) if summary['path'] != root_path else Path('.')
-    rel_str = './' + str(rel) if str(rel) != '.' else '(repo root)'
-    anchor = safe_id(name, 'mod-')
-
-    parts.append(f'<section class="module-section" id="{escape(anchor)}">')
-    parts.append(f'<h2>{escape(name)}</h2>')
-    parts.append(f'<p class="meta">Path: <span class="module-path">{escape(rel_str)}</span></p>')
-
-    # ---- Description
-    parts.append('<h3>Description</h3>')
-    desc = read_description(summary['path']) or extract_top_comment(summary['path'])
-    if desc:
-        parts.append(_markdownish(desc))
-    else:
-        parts.append(
-            '<p class="empty">No README.md or top-of-file comment found. '
-            'Add one to populate this section automatically next time.</p>'
-        )
-
-    # ---- Usage
-    parts.append('<h3>Usage</h3>')
-    parts.append(f'<pre><code>{escape(generate_usage(name, summary))}</code></pre>')
-
-    # ---- Inputs
-    parts.append('<h3>Inputs</h3>')
-    if summary['variables']:
-        parts.append(
-            '<table><thead><tr>'
-            '<th>Name</th><th>Type</th><th>Description</th>'
-            '<th>Default</th><th>Flags</th>'
-            '</tr></thead><tbody>'
-        )
-        for vname in sorted(summary['variables'].keys()):
-            v = summary['variables'][vname]
-            flags = []
-            if v['sensitive']:
-                flags.append('<span class="tag tag-sensitive">sensitive</span>')
-            parts.append(
-                '<tr>'
-                f'<td><code>{escape(vname)}</code></td>'
-                f'<td><code>{escape(v["type"])}</code></td>'
-                f'<td>{escape(v["description"]) if v["description"] else "—"}</td>'
-                f'<td>{render_default_cell(v["default"])}</td>'
-                f'<td>{" ".join(flags) if flags else ""}</td>'
-                '</tr>'
-            )
-        parts.append('</tbody></table>')
-    else:
-        parts.append('<p class="empty">No input variables defined.</p>')
-
-    # ---- Outputs
-    parts.append('<h3>Outputs</h3>')
-    if summary['outputs']:
-        parts.append(
-            '<table><thead><tr>'
-            '<th>Name</th><th>Description</th><th>Flags</th>'
-            '</tr></thead><tbody>'
-        )
-        for oname in sorted(summary['outputs'].keys()):
-            o = summary['outputs'][oname]
-            flags = '<span class="tag tag-sensitive">sensitive</span>' if o['sensitive'] else ''
-            parts.append(
-                '<tr>'
-                f'<td><code>{escape(oname)}</code></td>'
-                f'<td>{escape(o["description"]) if o["description"] else "—"}</td>'
-                f'<td>{flags}</td>'
-                '</tr>'
-            )
-        parts.append('</tbody></table>')
-    else:
-        parts.append('<p class="empty">No outputs defined.</p>')
-
-    # ---- Managed resources
-    parts.append('<h3>Managed resources</h3>')
-    if summary['resources']:
-        parts.append('<table><thead><tr><th>Type</th><th>Name</th></tr></thead><tbody>')
-        for r in sorted(summary['resources'], key=lambda r: (r['type'], r['name'])):
-            parts.append(
-                f'<tr><td><code>{escape(r["type"])}</code></td>'
-                f'<td><code>{escape(r["name"])}</code></td></tr>'
-            )
-        parts.append('</tbody></table>')
-    else:
-        parts.append('<p class="empty">No managed resources.</p>')
-
-    # ---- Data sources
-    if summary['data_sources']:
-        parts.append('<h3>Data sources</h3>')
-        parts.append('<table><thead><tr><th>Type</th><th>Name</th></tr></thead><tbody>')
-        for d in sorted(summary['data_sources'], key=lambda d: (d['type'], d['name'])):
-            parts.append(
-                f'<tr><td><code>{escape(d["type"])}</code></td>'
-                f'<td><code>{escape(d["name"])}</code></td></tr>'
-            )
-        parts.append('</tbody></table>')
-
-    # ---- Sub-modules
-    if summary['sub_modules']:
-        parts.append('<h3>Sub-modules used</h3>')
-        parts.append(
-            '<table><thead><tr><th>Name</th><th>Source</th><th>Version</th></tr></thead><tbody>'
-        )
-        for m in summary['sub_modules']:
-            parts.append(
-                '<tr>'
-                f'<td><code>{escape(m["name"])}</code></td>'
-                f'<td><code>{escape(m["source"])}</code></td>'
-                f'<td>{escape(m["version"]) if m["version"] else "—"}</td>'
-                '</tr>'
-            )
-        parts.append('</tbody></table>')
-
-    # ---- Required providers
-    if summary['required_providers']:
-        parts.append('<h3>Required providers</h3>')
-        parts.append(
-            '<table><thead><tr><th>Name</th><th>Source</th><th>Version</th></tr></thead><tbody>'
-        )
-        for pname, pinfo in summary['required_providers'].items():
-            if isinstance(pinfo, dict):
-                src = _stringify(pinfo.get('source')) or '—'
-                ver = _stringify(pinfo.get('version')) or '—'
-            else:
-                src, ver = '—', _stringify(pinfo) or '—'
-            parts.append(
-                '<tr>'
-                f'<td><code>{escape(pname)}</code></td>'
-                f'<td><code>{escape(src)}</code></td>'
-                f'<td><code>{escape(ver)}</code></td>'
-                '</tr>'
-            )
-        parts.append('</tbody></table>')
-
-    if summary['terraform_version']:
-        parts.append(
-            f'<p class="meta">Required Terraform version: '
-            f'<code>{escape(summary["terraform_version"])}</code></p>'
-        )
-
-    # ---- Diagram
-    parts.append('<h3>Diagram</h3>')
-    mermaid_code = generate_mermaid(name, summary)
-    parts.append(f'<div class="mermaid">\n{mermaid_code}\n</div>')
-    parts.append(
-        '<details><summary>Mermaid source — copy into a Confluence Mermaid macro</summary>'
-        f'<pre><code>{escape(mermaid_code)}</code></pre></details>'
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Generate an AWS architecture diagram from Terraform .tf files."
     )
 
-    # ---- Parse warnings
-    if summary['parse_errors']:
-        parts.append('<h3>Parse warnings</h3><ul>')
-        for err in summary['parse_errors']:
-            parts.append(f'<li><code>{escape(err)}</code></li>')
-        parts.append('</ul>')
-
-    # ---- File listing
-    if summary['files']:
-        files_html = ', '.join(f'<code>{escape(f)}</code>' for f in summary['files'])
-        parts.append(f'<p class="meta">Source files: {files_html}</p>')
-
-    parts.append('</section>')
-    return '\n'.join(parts)
-
-
-def render_html(modules, root_path: Path, title: str) -> str:
-    parts = [
-        '<!DOCTYPE html>', '<html lang="en">', '<head>',
-        '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f'<title>{escape(title)}</title>',
-        f'<style>{CSS}</style>',
-        '</head><body>',
-    ]
-    parts.append(f'<h1>{escape(title)}</h1>')
-    parts.append(
-        f'<p class="meta">Generated {datetime.now().strftime("%Y-%m-%d %H:%M")} '
-        f'from <code>{escape(str(root_path))}</code> · '
-        f'{len(modules)} module(s)</p>'
+    parser.add_argument(
+        "repo",
+        help="Path to the Terraform repo root.",
     )
 
-    parts.append('<div class="toc"><strong>Modules</strong><ul>')
-    for name, summary in modules:
-        anchor = safe_id(name, 'mod-')
-        counts = (
-            f'{len(summary["variables"])} inputs · '
-            f'{len(summary["outputs"])} outputs · '
-            f'{len(summary["resources"])} resources'
-        )
-        parts.append(
-            f'<li><a href="#{escape(anchor)}">{escape(name)}</a> '
-            f'<span class="meta">— {counts}</span></li>'
-        )
-    parts.append('</ul></div>')
-
-    for name, summary in modules:
-        parts.append(render_module_section(name, summary, root_path))
-
-    parts.append(MERMAID_SCRIPT)
-    parts.append('</body></html>')
-    return '\n'.join(parts)
-
-
-# ---------- main ----------
-
-def derive_module_name(module_dir: Path, root_path: Path) -> str:
-    if module_dir == root_path:
-        return root_path.name or 'root'
-    rel = module_dir.relative_to(root_path)
-    return str(rel).replace(os.sep, '/')
-
-
-def main():
-    ap = argparse.ArgumentParser(
-        description='Generate HTML documentation from Terraform module directories.',
+    parser.add_argument(
+        "--include",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional list of subdirectories to scan. "
+            "Example: --include eks eks-pod-identity eks-addons"
+        ),
     )
-    ap.add_argument('path', nargs='?', default='.',
-                    help='Directory to scan (default: current directory).')
-    ap.add_argument('-o', '--output', default='terraform-docs.html',
-                    help='Output HTML file (default: terraform-docs.html).')
-    ap.add_argument('--title', help='Report title (default: derived from directory name).')
-    args = ap.parse_args()
 
-    root = Path(args.path).resolve()
-    if not root.exists():
-        sys.exit(f'Path does not exist: {root}')
+    parser.add_argument(
+        "--output",
+        default="terraform-aws-architecture",
+        help="Output filename without extension.",
+    )
 
-    title = args.title or f'Terraform modules — {root.name}'
+    parser.add_argument(
+        "--format",
+        default="png",
+        choices=["png", "svg", "pdf", "jpg"],
+        help="Diagram output format.",
+    )
 
-    print(f'Scanning {root}…')
-    module_dirs = find_module_dirs(root)
-    if not module_dirs:
-        sys.exit('No directories with .tf files found.')
+    parser.add_argument(
+        "--direction",
+        default="LR",
+        choices=["LR", "RL", "TB", "BT"],
+        help="Diagram direction: LR, RL, TB, or BT.",
+    )
 
-    modules = []
-    for d in module_dirs:
-        name = derive_module_name(d, root)
-        print(f'  · parsing {name}')
-        summary = parse_module(d)
-        modules.append((name, summary))
+    args = parser.parse_args()
 
-    html = render_html(modules, root, title)
-    out = Path(args.output)
-    out.write_text(html, encoding='utf-8')
-    print(f'\nWrote {out.resolve()}  ({len(modules)} module(s))')
+    root = Path(args.repo).resolve()
+
+    items = load_terraform_inventory(
+        root=root,
+        include_dirs=args.include,
+    )
+
+    if not items:
+        print("No Terraform resources or modules found.")
+        return
+
+    print_summary(items)
+
+    generate_diagram(
+        root=root,
+        items=items,
+        output=args.output,
+        outformat=args.format,
+        direction=args.direction,
+    )
+
+    print()
+    print(f"Diagram written to: {args.output}.{args.format}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
