@@ -1,15 +1,23 @@
-parser.add_argument(
-    "--ignore-dir",
-    nargs="*",
-    default=["examples", ".terraform", ".git"],
-    help="Directory names to ignore. '_shared' is always ignored by pattern.",
-)
+import textwrap
 
+def wrap_label(text: str, width: int = 16) -> str:
+    return "\n".join(textwrap.wrap(text, width=width)) if text else ""
 
-ignored_dirs = set(args.ignore_dir)
+def label_for_item(item: Dict[str, str], short: bool = True) -> str:
+    """
+    Shorter labels reduce overlap a lot.
+    """
+    if item["kind"] == "resource":
+        if short:
+            # just show resource name, and type on next line
+            return wrap_label(f'{item["name"]}\n({item["type"].replace("aws_", "")})', 18)
+        return wrap_label(f'{item["type"]}.{item["name"]}', 22)
 
-items = load_terraform_inventory(
-    root=root,
-    include_dirs=args.include,
-    ignored_dirs=ignored_dirs,
-)
+    # module
+    if short:
+        return wrap_label(f'module.{item["name"]}', 18)
+
+    source = item.get("source", "")
+    if source:
+        return wrap_label(f'module.{item["name"]}\n{source}', 22)
+    return wrap_label(f'module.{item["name"]}', 22)
