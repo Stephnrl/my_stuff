@@ -1,129 +1,58 @@
-defaults:
-  node: GenericAwsService
+repo_profiles:
+  security:
+    match_dirs:
+      - guardduty
+      - aws_config
+      - iam_access_analyzer
+      - cw_oam_sink
+      - cw_oam_link
 
-hidden_resource_types:
-  - aws_iam_policy_document
-  - aws_iam_policy_attachment
-  - aws_iam_role_policy_attachment
-  - random_id
-  - null_resource
-  - time_sleep
+  eks:
+    match_resources:
+      - aws_eks_cluster
+      - aws_eks_node_group
+      - aws_eks_addon
 
-resource_mappings:
-  # Common AWS
-  aws_vpc:
-    label: VPC
-    group: networking
-    icon: diagrams.aws.network.VPC
+account_scopes:
+  security_account:
+    match_dirs:
+      - guardduty
+      - aws_config
+      - iam_access_analyzer
+      - cw_oam_sink
+      - securityhub
+      - detective
+      - macie
 
-  aws_subnet:
-    label: Subnet
-    group: networking
-    icon: diagrams.aws.network.PrivateSubnet
+  member_account:
+    match_dirs:
+      - cw_oam_link
+      - member
+      - account-baseline
 
-  aws_route_table:
-    label: Route Table
-    group: networking
-    icon: diagrams.aws.network.RouteTable
+  eks_account:
+    match_resources:
+      - aws_eks_cluster
+      - aws_eks_node_group
+      - aws_eks_addon
 
-  aws_internet_gateway:
-    label: Internet Gateway
-    group: networking
-    icon: diagrams.aws.network.InternetGateway
+relationships:
+  - name: cloudwatch_oam
+    from_resource_type: aws_oam_link
+    to_resource_type: aws_oam_sink
+    label: shares telemetry
 
-  aws_nat_gateway:
-    label: NAT Gateway
-    group: networking
-    icon: diagrams.aws.network.NATGateway
+  - name: eks_nodes_to_cluster
+    from_resource_type: aws_eks_node_group
+    to_resource_type: aws_eks_cluster
+    label: joins
 
-  aws_security_group:
-    label: Security Group
-    group: networking
-    icon: diagrams.aws.network.SecurityGroup
+  - name: eks_addons_to_cluster
+    from_resource_type: aws_eks_addon
+    to_resource_type: aws_eks_cluster
+    label: installed on
 
-  aws_kms_key:
-    label: KMS Key
-    group: security
-    icon: diagrams.aws.security.KMS
-
-  aws_iam_role:
-    label: IAM Role
-    group: iam
-    icon: diagrams.aws.security.IAMRole
-
-  # Security account
-  aws_guardduty_detector:
-    label: GuardDuty Detector
-    group: security
-    icon: diagrams.aws.security.Guardduty
-
-  aws_guardduty_organization_admin_account:
-    label: GuardDuty Delegated Admin
-    group: security
-    icon: diagrams.aws.security.Guardduty
-
-  aws_config_configuration_recorder:
-    label: AWS Config Recorder
-    group: config
-    icon: diagrams.aws.management.Config
-
-  aws_config_organization_managed_rule:
-    label: AWS Config Org Rule
-    group: config
-    icon: diagrams.aws.management.Config
-
-  aws_config_configuration_aggregator:
-    label: AWS Config Aggregator
-    group: config
-    icon: diagrams.aws.management.Config
-
-  aws_iam_access_analyzer_analyzer:
-    label: IAM Access Analyzer
-    group: security
-    icon: diagrams.aws.security.IdentityAndAccessManagementIam
-
-  aws_oam_sink:
-    label: CloudWatch OAM Sink
-    group: observability
-    icon: diagrams.aws.management.Cloudwatch
-
-  aws_oam_link:
-    label: CloudWatch OAM Link
-    group: observability
-    icon: diagrams.aws.management.Cloudwatch
-
-  # EKS
-  aws_eks_cluster:
-    label: EKS Cluster
-    group: eks
-    icon: diagrams.aws.compute.EKS
-
-  aws_eks_node_group:
-    label: EKS Node Group
-    group: eks
-    icon: diagrams.aws.compute.EKS
-
-  aws_eks_addon:
-    label: EKS Add-on
-    group: eks
-    icon: diagrams.aws.compute.EKS
-
-  aws_launch_template:
-    label: Launch Template
-    group: compute
-    icon: diagrams.aws.compute.EC2
-
-  aws_autoscaling_group:
-    label: Auto Scaling Group
-    group: compute
-    icon: diagrams.aws.compute.AutoScaling
-
-  aws_lb:
-    label: Load Balancer
-    group: networking
-    icon: diagrams.aws.network.ELB
-
-  aws_lb_target_group:
-    label: Target Group
-    group: networking
-    icon: diagrams.aws.network.ELB
+  - name: config_aggregator
+    from_resource_type: aws_config_configuration_recorder
+    to_resource_type: aws_config_configuration_aggregator
+    label: reports to
