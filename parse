@@ -1,58 +1,158 @@
-repo_profiles:
-  security:
-    match_dirs:
-      - guardduty
-      - aws_config
-      - iam_access_analyzer
-      - cw_oam_sink
-      - cw_oam_link
+from __future__ import annotations
 
-  eks:
-    match_resources:
-      - aws_eks_cluster
-      - aws_eks_node_group
-      - aws_eks_addon
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
 
-account_scopes:
-  security_account:
-    match_dirs:
-      - guardduty
-      - aws_config
-      - iam_access_analyzer
-      - cw_oam_sink
-      - securityhub
-      - detective
-      - macie
+import yaml
+from diagrams import Cluster, Diagram, Edge
+from diagrams.aws.general import General
+from diagrams.aws.compute import EKS, EC2, AutoScaling
+from diagrams.aws.management import Cloudwatch, Config
+from diagrams.aws.network import VPC, PrivateSubnet, ELB, SecurityGroup
+from diagrams.aws.security import IAMRole, KMS, Guardduty
 
-  member_account:
-    match_dirs:
-      - cw_oam_link
-      - member
-      - account-baseline
 
-  eks_account:
-    match_resources:
-      - aws_eks_cluster
-      - aws_eks_node_group
-      - aws_eks_addon
+NODE_REGISTRY = {
+    "diagrams.aws.general.General": General,
+    "diagrams.aws.compute.EKS": EKS,
+    "diagrams.aws.compute.EC2": EC2,
+    "diagrams.aws.compute.AutoScaling": AutoScaling,
+    "diagrams.aws.management.Cloudwatch": Cloudwatch,
+    "diagrams.aws.management.Config": Config,
+    "diagrams.aws.network.VPC": VPC,
+    "diagrams.aws.network.PrivateSubnet": PrivateSubnet,
+    "diagrams.aws.network.ELB": ELB,
+    "diagrams.aws.network.SecurityGroup": SecurityGroup,
+    "diagrams.aws.security.IAMRole": IAMRole,
+    "diagrams.aws.security.KMS": KMS,
+    "diagrams.aws.security.Guardduty": Guardduty,
+}
 
-relationships:
-  - name: cloudwatch_oam
-    from_resource_type: aws_oam_link
-    to_resource_type: aws_oam_sink
-    label: shares telemetry
 
-  - name: eks_nodes_to_cluster
-    from_resource_type: aws_eks_node_group
-    to_resource_type: aws_eks_cluster
-    label: joins
+def load_yaml(path: str | Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
-  - name: eks_addons_to_cluster
-    from_resource_type: aws_eks_addon
-    to_resource_type: aws_eks_cluster
-    label: installed on
 
-  - name: config_aggregator
-    from_resource_type: aws_config_configuration_recorder
-    to_resource_type: aws_config_configuration_aggregator
-    label: reports to
+def get_mapping(item: dict[str, Any], mappings: dict[str, Any]) -> dict[str, Any]:
+    resource_type = item["type"]
+    return mappings.get("resource_mappings", {}).get(
+        resource_type,
+        {
+            "label": resource_type.replace("aws_", "").replace("_", " ").title(),
+            "group": "other",
+            "icon": "diagrams.aws.general.General",
+        },
+    )
+
+
+def is_hidden(item: dict[str, Any], mappings: dict[str, Any]) -> bool:
+    hidden = set(mappings.get("hidden_resource_types", []))
+    return item["type"] in hidden
+
+
+def group_items_by_module(items: list[dict[str, Any]], mappings: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    grouped = defaultdict(list)
+
+    for item in items:
+        if item["kind"] != "resource":
+            continue
+
+        if is_hidden(item, mappings):
+            continue
+
+        grouped[str(item["module_dir"])].append(item)
+
+    return dict(grouped)
+
+
+def write_overview_diagram(
+    model: dict[str, Any],
+    mappings_path: str | Path,
+    out_dir: str | Path,
+    diagram_name: str,
+) -> None:
+    mappings = load_yaml(mappings_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped = group_items_by_module(model["items"], mappings)
+
+    graph_attr = {
+        "fontsize": "20",
+        "splines": "ortho",
+        "nodesep": "0.80",
+        "ranksep": "1.00",
+    }
+
+    with Diagram(
+        diagram_name,
+        filename=str(out_dir / diagram_name.lower().replace(" ", "_")),
+        show=False,
+        direction="LR",
+        graph_attr=graph_attr,
+        outformat=["png", "svg"],
+    ):
+        for module_dir, items in sorted(grouped.items()):
+            with Cluster(module_dir):
+                seen_types = set()
+
+                for item in items:
+                    mapping = get_mapping(item, mappings)
+                    resource_type = item["type"]
+
+                    # Collapse repeated resources by type to avoid unreadable diagrams.
+                    if resource_type in seen_types:
+                        continue
+
+                    seen_types.add(resource_type)
+
+                    icon_path = mapping.get("icon", "diagrams.aws.general.General")
+                    node_class = NODE_REGISTRY.get(icon_path, General)
+
+                    label = mapping.get("label", resource_type)
+                    node_class(label)
+
+
+def write_service_diagram(
+    model: dict[str, Any],
+    mappings_path: str | Path,
+    out_dir: str | Path,
+    diagram_name: str,
+) -> None:
+    mappings = load_yaml(mappings_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped_by_service = defaultdict(list)
+
+    for item in model["items"]:
+        if item["kind"] != "resource" or is_hidden(item, mappings):
+            continue
+
+        mapping = get_mapping(item, mappings)
+        grouped_by_service[mapping.get("group", "other")].append(item)
+
+    with Diagram(
+        diagram_name,
+        filename=str(out_dir / diagram_name.lower().replace(" ", "_")),
+        show=False,
+        direction="TB",
+        outformat=["png", "svg"],
+    ):
+        for service_group, items in sorted(grouped_by_service.items()):
+            with Cluster(service_group):
+                seen_types = set()
+
+                for item in items:
+                    resource_type = item["type"]
+
+                    if resource_type in seen_types:
+                        continue
+
+                    seen_types.add(resource_type)
+
+                    mapping = get_mapping(item, mappings)
+                    node_class = NODE_REGISTRY.get(mapping.get("icon"), General)
+                    node_class(mapping.get("label", resource_type))
