@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import hcl2
+
+
+DEFAULT_IGNORES = {
+    ".terraform",
+    ".git",
+    "examples",
+    "test",
+    "tests",
+    ".terragrunt-cache",
+}
+
+
+def should_ignore(path: Path, ignore_dirs: set[str]) -> bool:
+    return any(part in ignore_dirs for part in path.parts)
+
+
+def load_tf_file(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return hcl2.load(f)
+    except Exception as exc:
+        return {
+            "__parse_error__": str(exc),
+            "__file__": str(path),
+        }
+
+
+def normalize_resource_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
+    results = []
+
+    for resource_type, resource_defs in block.items():
+        for resource_name, body in resource_defs.items():
+            results.append(
+                {
+                    "kind": "resource",
+                    "type": resource_type,
+                    "name": resource_name,
+                    "file": str(file_path),
+                    "module_dir": str(module_path),
+                    "body": body,
+                }
+            )
+
+    return results
+
+
+def normalize_data_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
+    results = []
+
+    for data_type, data_defs in block.items():
+        for data_name, body in data_defs.items():
+            results.append(
+                {
+                    "kind": "data",
+                    "type": data_type,
+                    "name": data_name,
+                    "file": str(file_path),
+                    "module_dir": str(module_path),
+                    "body": body,
+                }
+            )
+
+    return results
+
+
+def normalize_module_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
+    results = []
+
+    for module_name, body in block.items():
+        results.append(
+            {
+                "kind": "module",
+                "type": "module",
+                "name": module_name,
+                "file": str(file_path),
+                "module_dir": str(module_path),
+                "source": body.get("source"),
+                "body": body,
+            }
+        )
+
+    return results
+
+
+def normalize_variable_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
+    results = []
+
+    for variable_name, body in block.items():
+        results.append(
+            {
+                "kind": "variable",
+                "type": "variable",
+                "name": variable_name,
+                "file": str(file_path),
+                "module_dir": str(module_path),
+                "default": body.get("default"),
+                "description": body.get("description"),
+                "body": body,
+            }
+        )
+
+    return results
+
+
+def infer_module_dir(repo_root: Path, tf_file: Path) -> Path:
+    relative_parent = tf_file.parent.relative_to(repo_root)
+
+    # Root module
+    if str(relative_parent) == ".":
+        return Path(".")
+
+    # Use the first path component as the module grouping.
+    # Example:
+    # guardduty/main.tf -> guardduty
+    # modules/node_group/main.tf -> modules
+    return Path(relative_parent.parts[0])
+
+
+def parse_repo(repo_root: str | Path, ignore_dirs: set[str] | None = None) -> dict[str, Any]:
+    repo_root = Path(repo_root).resolve()
+    ignore_dirs = ignore_dirs or DEFAULT_IGNORES
+
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    for tf_file in repo_root.rglob("*.tf"):
+        relative_file = tf_file.relative_to(repo_root)
+
+        if should_ignore(relative_file, ignore_dirs):
+            continue
+
+        parsed = load_tf_file(tf_file)
+
+        if "__parse_error__" in parsed:
+            errors.append(
+                {
+                    "file": str(relative_file),
+                    "error": parsed["__parse_error__"],
+                }
+            )
+            continue
+
+        module_dir = infer_module_dir(repo_root, tf_file)
+
+        for resource_block in parsed.get("resource", []):
+            items.extend(normalize_resource_block(resource_block, relative_file, module_dir))
+
+        for data_block in parsed.get("data", []):
+            items.extend(normalize_data_block(data_block, relative_file, module_dir))
+
+        for module_block in parsed.get("module", []):
+            items.extend(normalize_module_block(module_block, relative_file, module_dir))
+
+        for variable_block in parsed.get("variable", []):
+            items.extend(normalize_variable_block(variable_block, relative_file, module_dir))
+
+    return {
+        "repo_root": str(repo_root),
+        "items": items,
+        "errors": errors,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--out", default="diagram-model.json")
+    args = parser.parse_args()
+
+    model = parse_repo(args.repo)
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(model, f, indent=2, default=str)
+
+    print(f"Wrote {args.out}")
