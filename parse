@@ -1,65 +1,279 @@
 from __future__ import annotations
 
-import argparse
-import json
+import base64
+import mimetypes
+import re
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
-from tf_parser import parse_repo
-from diagrams_writer import write_overview_diagram, write_service_diagram
+import yaml
+from diagrams import Cluster, Diagram, Edge
+from diagrams.aws.general import General
+from diagrams.aws.compute import EKS, EC2, AutoScaling
+from diagrams.aws.management import Cloudwatch, Config
+from diagrams.aws.network import VPC, PrivateSubnet, ELB, SecurityGroup
+from diagrams.aws.security import IAMRole, KMS, Guardduty
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate architecture diagrams from Terraform.")
-    parser.add_argument("--repo", required=True, help="Path to Terraform repository")
-    parser.add_argument("--name", required=True, help="Diagram/repo name")
-    parser.add_argument("--out", required=True, help="Output directory")
-    parser.add_argument(
-        "--mappings",
-        default="tools/diagrammer/mappings.yaml",
-        help="Path to mappings.yaml",
-    )
-    parser.add_argument(
-        "--write-model",
-        action="store_true",
-        help="Write parsed diagram model JSON",
-    )
+NODE_REGISTRY = {
+    "diagrams.aws.general.General": General,
+    "diagrams.aws.compute.EKS": EKS,
+    "diagrams.aws.compute.EC2": EC2,
+    "diagrams.aws.compute.AutoScaling": AutoScaling,
+    "diagrams.aws.management.Cloudwatch": Cloudwatch,
+    "diagrams.aws.management.Config": Config,
+    "diagrams.aws.network.VPC": VPC,
+    "diagrams.aws.network.PrivateSubnet": PrivateSubnet,
+    "diagrams.aws.network.ELB": ELB,
+    "diagrams.aws.network.SecurityGroup": SecurityGroup,
+    "diagrams.aws.security.IAMRole": IAMRole,
+    "diagrams.aws.security.KMS": KMS,
+    "diagrams.aws.security.Guardduty": Guardduty,
+}
 
-    args = parser.parse_args()
 
-    repo = Path(args.repo).resolve()
-    out = Path(args.out).resolve()
-    mappings = Path(args.mappings).resolve()
+def load_yaml(path: str | Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
 
-    model = parse_repo(repo)
 
-    out.mkdir(parents=True, exist_ok=True)
+def get_mapping(item: dict[str, Any], mappings: dict[str, Any]) -> dict[str, Any]:
+    resource_type = item["type"]
 
-    if args.write_model:
-        model_path = out / "diagram-model.json"
-        with model_path.open("w", encoding="utf-8") as f:
-            json.dump(model, f, indent=2, default=str)
-
-    write_overview_diagram(
-        model=model,
-        mappings_path=mappings,
-        out_dir=out,
-        diagram_name=f"{args.name} Module Overview",
-    )
-
-    write_service_diagram(
-        model=model,
-        mappings_path=mappings,
-        out_dir=out,
-        diagram_name=f"{args.name} Service Overview",
+    return mappings.get("resource_mappings", {}).get(
+        resource_type,
+        {
+            "label": resource_type.replace("aws_", "").replace("_", " ").title(),
+            "group": "other",
+            "icon": "diagrams.aws.general.General",
+        },
     )
 
-    if model["errors"]:
-        print("Some Terraform files could not be parsed:")
-        for error in model["errors"]:
-            print(f"- {error['file']}: {error['error']}")
 
-    print(f"Wrote diagrams to {out}")
+def is_hidden(item: dict[str, Any], mappings: dict[str, Any]) -> bool:
+    hidden = set(mappings.get("hidden_resource_types", []))
+    return item["type"] in hidden
 
 
-if __name__ == "__main__":
-    main()
+def group_items_by_module(
+    items: list[dict[str, Any]],
+    mappings: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped = defaultdict(list)
+
+    for item in items:
+        if item["kind"] != "resource":
+            continue
+
+        if is_hidden(item, mappings):
+            continue
+
+        grouped[str(item["module_dir"])].append(item)
+
+    return dict(grouped)
+
+
+def embed_svg_images(svg_path: Path) -> None:
+    """
+    Graphviz SVGs can reference icon PNGs using local file paths.
+    That works on the machine that generated the diagram, but breaks when
+    the SVG is moved, uploaded, or viewed from another location.
+
+    This function replaces local image hrefs with base64 embedded data URIs.
+    """
+    if not svg_path.exists():
+        return
+
+    svg = svg_path.read_text(encoding="utf-8")
+
+    href_pattern = re.compile(r'(xlink:href|href)="([^"]+)"')
+
+    def replace_href(match: re.Match) -> str:
+        attr = match.group(1)
+        href = match.group(2)
+
+        if href.startswith("data:"):
+            return match.group(0)
+
+        image_path = Path(href)
+
+        if not image_path.exists():
+            return match.group(0)
+
+        mime_type, _ = mimetypes.guess_type(str(image_path))
+        mime_type = mime_type or "image/png"
+
+        encoded = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+        return f'{attr}="data:{mime_type};base64,{encoded}"'
+
+    svg = href_pattern.sub(replace_href, svg)
+    svg_path.write_text(svg, encoding="utf-8")
+
+
+def horizontal_graph_attr() -> dict[str, str]:
+    return {
+        "rankdir": "LR",
+        "fontsize": "20",
+        "splines": "ortho",
+        "nodesep": "0.85",
+        "ranksep": "1.20",
+        "pad": "0.5",
+        "margin": "0.2",
+    }
+
+
+def node_attr() -> dict[str, str]:
+    return {
+        "fontsize": "12",
+    }
+
+
+def edge_attr() -> dict[str, str]:
+    return {
+        "fontsize": "10",
+    }
+
+
+def make_node(item: dict[str, Any], mappings: dict[str, Any]):
+    mapping = get_mapping(item, mappings)
+    node_class = NODE_REGISTRY.get(mapping.get("icon"), General)
+
+    resource_type = item["type"]
+    resource_name = item["name"]
+
+    label = mapping.get("label", resource_type)
+
+    # Include Terraform name so repeated resources are easier to understand.
+    return node_class(f"{label}\n{resource_name}")
+
+
+def chain_nodes_horizontally(nodes: list[Any]) -> None:
+    """
+    Graphviz may stack unconnected nodes vertically, even with rankdir=LR.
+    Invisible edges encourage a horizontal layout without showing arrows.
+    """
+    for left, right in zip(nodes, nodes[1:]):
+        left >> Edge(style="invis", weight="10") >> right
+
+
+def output_base_path(out_dir: Path, diagram_name: str) -> Path:
+    return out_dir / diagram_name.lower().replace(" ", "_")
+
+
+def post_process_outputs(base_path: Path) -> None:
+    embed_svg_images(base_path.with_suffix(".svg"))
+
+
+def write_overview_diagram(
+    model: dict[str, Any],
+    mappings_path: str | Path,
+    out_dir: str | Path,
+    diagram_name: str,
+) -> None:
+    mappings = load_yaml(mappings_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped = group_items_by_module(model["items"], mappings)
+    base_path = output_base_path(out_dir, diagram_name)
+
+    with Diagram(
+        diagram_name,
+        filename=str(base_path),
+        show=False,
+        direction="LR",
+        graph_attr=horizontal_graph_attr(),
+        node_attr=node_attr(),
+        edge_attr=edge_attr(),
+        outformat=["png", "svg"],
+    ):
+        module_nodes = []
+
+        for module_dir, items in sorted(grouped.items()):
+            with Cluster(module_dir):
+                seen_types = set()
+                nodes = []
+
+                for item in items:
+                    resource_type = item["type"]
+
+                    # Collapse repeated resources by type.
+                    # This avoids huge unreadable diagrams in big EKS repos.
+                    if resource_type in seen_types:
+                        continue
+
+                    seen_types.add(resource_type)
+
+                    node = make_node(item, mappings)
+                    nodes.append(node)
+
+                chain_nodes_horizontally(nodes)
+
+                if nodes:
+                    module_nodes.append(nodes[0])
+
+        # Encourage module clusters themselves to flow horizontally.
+        chain_nodes_horizontally(module_nodes)
+
+    post_process_outputs(base_path)
+
+
+def write_service_diagram(
+    model: dict[str, Any],
+    mappings_path: str | Path,
+    out_dir: str | Path,
+    diagram_name: str,
+) -> None:
+    mappings = load_yaml(mappings_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    grouped_by_service = defaultdict(list)
+
+    for item in model["items"]:
+        if item["kind"] != "resource" or is_hidden(item, mappings):
+            continue
+
+        mapping = get_mapping(item, mappings)
+        grouped_by_service[mapping.get("group", "other")].append(item)
+
+    base_path = output_base_path(out_dir, diagram_name)
+
+    with Diagram(
+        diagram_name,
+        filename=str(base_path),
+        show=False,
+        direction="LR",
+        graph_attr=horizontal_graph_attr(),
+        node_attr=node_attr(),
+        edge_attr=edge_attr(),
+        outformat=["png", "svg"],
+    ):
+        service_nodes = []
+
+        for service_group, items in sorted(grouped_by_service.items()):
+            with Cluster(service_group):
+                seen_types = set()
+                nodes = []
+
+                for item in items:
+                    resource_type = item["type"]
+
+                    if resource_type in seen_types:
+                        continue
+
+                    seen_types.add(resource_type)
+
+                    node = make_node(item, mappings)
+                    nodes.append(node)
+
+                chain_nodes_horizontally(nodes)
+
+                if nodes:
+                    service_nodes.append(nodes[0])
+
+        # Encourage service clusters to flow horizontally.
+        chain_nodes_horizontally(service_nodes)
+
+    post_process_outputs(base_path)
