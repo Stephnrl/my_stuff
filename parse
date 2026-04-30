@@ -1,158 +1,65 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import argparse
+import json
 from pathlib import Path
-from typing import Any
 
-import yaml
-from diagrams import Cluster, Diagram, Edge
-from diagrams.aws.general import General
-from diagrams.aws.compute import EKS, EC2, AutoScaling
-from diagrams.aws.management import Cloudwatch, Config
-from diagrams.aws.network import VPC, PrivateSubnet, ELB, SecurityGroup
-from diagrams.aws.security import IAMRole, KMS, Guardduty
+from tf_parser import parse_repo
+from diagrams_writer import write_overview_diagram, write_service_diagram
 
 
-NODE_REGISTRY = {
-    "diagrams.aws.general.General": General,
-    "diagrams.aws.compute.EKS": EKS,
-    "diagrams.aws.compute.EC2": EC2,
-    "diagrams.aws.compute.AutoScaling": AutoScaling,
-    "diagrams.aws.management.Cloudwatch": Cloudwatch,
-    "diagrams.aws.management.Config": Config,
-    "diagrams.aws.network.VPC": VPC,
-    "diagrams.aws.network.PrivateSubnet": PrivateSubnet,
-    "diagrams.aws.network.ELB": ELB,
-    "diagrams.aws.network.SecurityGroup": SecurityGroup,
-    "diagrams.aws.security.IAMRole": IAMRole,
-    "diagrams.aws.security.KMS": KMS,
-    "diagrams.aws.security.Guardduty": Guardduty,
-}
-
-
-def load_yaml(path: str | Path) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
-
-
-def get_mapping(item: dict[str, Any], mappings: dict[str, Any]) -> dict[str, Any]:
-    resource_type = item["type"]
-    return mappings.get("resource_mappings", {}).get(
-        resource_type,
-        {
-            "label": resource_type.replace("aws_", "").replace("_", " ").title(),
-            "group": "other",
-            "icon": "diagrams.aws.general.General",
-        },
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate architecture diagrams from Terraform.")
+    parser.add_argument("--repo", required=True, help="Path to Terraform repository")
+    parser.add_argument("--name", required=True, help="Diagram/repo name")
+    parser.add_argument("--out", required=True, help="Output directory")
+    parser.add_argument(
+        "--mappings",
+        default="tools/diagrammer/mappings.yaml",
+        help="Path to mappings.yaml",
+    )
+    parser.add_argument(
+        "--write-model",
+        action="store_true",
+        help="Write parsed diagram model JSON",
     )
 
+    args = parser.parse_args()
 
-def is_hidden(item: dict[str, Any], mappings: dict[str, Any]) -> bool:
-    hidden = set(mappings.get("hidden_resource_types", []))
-    return item["type"] in hidden
+    repo = Path(args.repo).resolve()
+    out = Path(args.out).resolve()
+    mappings = Path(args.mappings).resolve()
 
+    model = parse_repo(repo)
 
-def group_items_by_module(items: list[dict[str, Any]], mappings: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    grouped = defaultdict(list)
+    out.mkdir(parents=True, exist_ok=True)
 
-    for item in items:
-        if item["kind"] != "resource":
-            continue
+    if args.write_model:
+        model_path = out / "diagram-model.json"
+        with model_path.open("w", encoding="utf-8") as f:
+            json.dump(model, f, indent=2, default=str)
 
-        if is_hidden(item, mappings):
-            continue
+    write_overview_diagram(
+        model=model,
+        mappings_path=mappings,
+        out_dir=out,
+        diagram_name=f"{args.name} Module Overview",
+    )
 
-        grouped[str(item["module_dir"])].append(item)
+    write_service_diagram(
+        model=model,
+        mappings_path=mappings,
+        out_dir=out,
+        diagram_name=f"{args.name} Service Overview",
+    )
 
-    return dict(grouped)
+    if model["errors"]:
+        print("Some Terraform files could not be parsed:")
+        for error in model["errors"]:
+            print(f"- {error['file']}: {error['error']}")
 
-
-def write_overview_diagram(
-    model: dict[str, Any],
-    mappings_path: str | Path,
-    out_dir: str | Path,
-    diagram_name: str,
-) -> None:
-    mappings = load_yaml(mappings_path)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    grouped = group_items_by_module(model["items"], mappings)
-
-    graph_attr = {
-        "fontsize": "20",
-        "splines": "ortho",
-        "nodesep": "0.80",
-        "ranksep": "1.00",
-    }
-
-    with Diagram(
-        diagram_name,
-        filename=str(out_dir / diagram_name.lower().replace(" ", "_")),
-        show=False,
-        direction="LR",
-        graph_attr=graph_attr,
-        outformat=["png", "svg"],
-    ):
-        for module_dir, items in sorted(grouped.items()):
-            with Cluster(module_dir):
-                seen_types = set()
-
-                for item in items:
-                    mapping = get_mapping(item, mappings)
-                    resource_type = item["type"]
-
-                    # Collapse repeated resources by type to avoid unreadable diagrams.
-                    if resource_type in seen_types:
-                        continue
-
-                    seen_types.add(resource_type)
-
-                    icon_path = mapping.get("icon", "diagrams.aws.general.General")
-                    node_class = NODE_REGISTRY.get(icon_path, General)
-
-                    label = mapping.get("label", resource_type)
-                    node_class(label)
+    print(f"Wrote diagrams to {out}")
 
 
-def write_service_diagram(
-    model: dict[str, Any],
-    mappings_path: str | Path,
-    out_dir: str | Path,
-    diagram_name: str,
-) -> None:
-    mappings = load_yaml(mappings_path)
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    grouped_by_service = defaultdict(list)
-
-    for item in model["items"]:
-        if item["kind"] != "resource" or is_hidden(item, mappings):
-            continue
-
-        mapping = get_mapping(item, mappings)
-        grouped_by_service[mapping.get("group", "other")].append(item)
-
-    with Diagram(
-        diagram_name,
-        filename=str(out_dir / diagram_name.lower().replace(" ", "_")),
-        show=False,
-        direction="TB",
-        outformat=["png", "svg"],
-    ):
-        for service_group, items in sorted(grouped_by_service.items()):
-            with Cluster(service_group):
-                seen_types = set()
-
-                for item in items:
-                    resource_type = item["type"]
-
-                    if resource_type in seen_types:
-                        continue
-
-                    seen_types.add(resource_type)
-
-                    mapping = get_mapping(item, mappings)
-                    node_class = NODE_REGISTRY.get(mapping.get("icon"), General)
-                    node_class(mapping.get("label", resource_type))
+if __name__ == "__main__":
+    main()
