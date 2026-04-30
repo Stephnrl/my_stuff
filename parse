@@ -1,184 +1,129 @@
-from __future__ import annotations
+defaults:
+  node: GenericAwsService
 
-import json
-from pathlib import Path
-from typing import Any
+hidden_resource_types:
+  - aws_iam_policy_document
+  - aws_iam_policy_attachment
+  - aws_iam_role_policy_attachment
+  - random_id
+  - null_resource
+  - time_sleep
 
-import hcl2
+resource_mappings:
+  # Common AWS
+  aws_vpc:
+    label: VPC
+    group: networking
+    icon: diagrams.aws.network.VPC
 
+  aws_subnet:
+    label: Subnet
+    group: networking
+    icon: diagrams.aws.network.PrivateSubnet
 
-DEFAULT_IGNORES = {
-    ".terraform",
-    ".git",
-    "examples",
-    "test",
-    "tests",
-    ".terragrunt-cache",
-}
+  aws_route_table:
+    label: Route Table
+    group: networking
+    icon: diagrams.aws.network.RouteTable
 
+  aws_internet_gateway:
+    label: Internet Gateway
+    group: networking
+    icon: diagrams.aws.network.InternetGateway
 
-def should_ignore(path: Path, ignore_dirs: set[str]) -> bool:
-    return any(part in ignore_dirs for part in path.parts)
+  aws_nat_gateway:
+    label: NAT Gateway
+    group: networking
+    icon: diagrams.aws.network.NATGateway
 
+  aws_security_group:
+    label: Security Group
+    group: networking
+    icon: diagrams.aws.network.SecurityGroup
 
-def load_tf_file(path: Path) -> dict[str, Any]:
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            return hcl2.load(f)
-    except Exception as exc:
-        return {
-            "__parse_error__": str(exc),
-            "__file__": str(path),
-        }
+  aws_kms_key:
+    label: KMS Key
+    group: security
+    icon: diagrams.aws.security.KMS
 
+  aws_iam_role:
+    label: IAM Role
+    group: iam
+    icon: diagrams.aws.security.IAMRole
 
-def normalize_resource_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
-    results = []
+  # Security account
+  aws_guardduty_detector:
+    label: GuardDuty Detector
+    group: security
+    icon: diagrams.aws.security.Guardduty
 
-    for resource_type, resource_defs in block.items():
-        for resource_name, body in resource_defs.items():
-            results.append(
-                {
-                    "kind": "resource",
-                    "type": resource_type,
-                    "name": resource_name,
-                    "file": str(file_path),
-                    "module_dir": str(module_path),
-                    "body": body,
-                }
-            )
+  aws_guardduty_organization_admin_account:
+    label: GuardDuty Delegated Admin
+    group: security
+    icon: diagrams.aws.security.Guardduty
 
-    return results
+  aws_config_configuration_recorder:
+    label: AWS Config Recorder
+    group: config
+    icon: diagrams.aws.management.Config
 
+  aws_config_organization_managed_rule:
+    label: AWS Config Org Rule
+    group: config
+    icon: diagrams.aws.management.Config
 
-def normalize_data_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
-    results = []
+  aws_config_configuration_aggregator:
+    label: AWS Config Aggregator
+    group: config
+    icon: diagrams.aws.management.Config
 
-    for data_type, data_defs in block.items():
-        for data_name, body in data_defs.items():
-            results.append(
-                {
-                    "kind": "data",
-                    "type": data_type,
-                    "name": data_name,
-                    "file": str(file_path),
-                    "module_dir": str(module_path),
-                    "body": body,
-                }
-            )
+  aws_iam_access_analyzer_analyzer:
+    label: IAM Access Analyzer
+    group: security
+    icon: diagrams.aws.security.IdentityAndAccessManagementIam
 
-    return results
+  aws_oam_sink:
+    label: CloudWatch OAM Sink
+    group: observability
+    icon: diagrams.aws.management.Cloudwatch
 
+  aws_oam_link:
+    label: CloudWatch OAM Link
+    group: observability
+    icon: diagrams.aws.management.Cloudwatch
 
-def normalize_module_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
-    results = []
+  # EKS
+  aws_eks_cluster:
+    label: EKS Cluster
+    group: eks
+    icon: diagrams.aws.compute.EKS
 
-    for module_name, body in block.items():
-        results.append(
-            {
-                "kind": "module",
-                "type": "module",
-                "name": module_name,
-                "file": str(file_path),
-                "module_dir": str(module_path),
-                "source": body.get("source"),
-                "body": body,
-            }
-        )
+  aws_eks_node_group:
+    label: EKS Node Group
+    group: eks
+    icon: diagrams.aws.compute.EKS
 
-    return results
+  aws_eks_addon:
+    label: EKS Add-on
+    group: eks
+    icon: diagrams.aws.compute.EKS
 
+  aws_launch_template:
+    label: Launch Template
+    group: compute
+    icon: diagrams.aws.compute.EC2
 
-def normalize_variable_block(block: dict[str, Any], file_path: Path, module_path: Path) -> list[dict[str, Any]]:
-    results = []
+  aws_autoscaling_group:
+    label: Auto Scaling Group
+    group: compute
+    icon: diagrams.aws.compute.AutoScaling
 
-    for variable_name, body in block.items():
-        results.append(
-            {
-                "kind": "variable",
-                "type": "variable",
-                "name": variable_name,
-                "file": str(file_path),
-                "module_dir": str(module_path),
-                "default": body.get("default"),
-                "description": body.get("description"),
-                "body": body,
-            }
-        )
+  aws_lb:
+    label: Load Balancer
+    group: networking
+    icon: diagrams.aws.network.ELB
 
-    return results
-
-
-def infer_module_dir(repo_root: Path, tf_file: Path) -> Path:
-    relative_parent = tf_file.parent.relative_to(repo_root)
-
-    # Root module
-    if str(relative_parent) == ".":
-        return Path(".")
-
-    # Use the first path component as the module grouping.
-    # Example:
-    # guardduty/main.tf -> guardduty
-    # modules/node_group/main.tf -> modules
-    return Path(relative_parent.parts[0])
-
-
-def parse_repo(repo_root: str | Path, ignore_dirs: set[str] | None = None) -> dict[str, Any]:
-    repo_root = Path(repo_root).resolve()
-    ignore_dirs = ignore_dirs or DEFAULT_IGNORES
-
-    items: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-
-    for tf_file in repo_root.rglob("*.tf"):
-        relative_file = tf_file.relative_to(repo_root)
-
-        if should_ignore(relative_file, ignore_dirs):
-            continue
-
-        parsed = load_tf_file(tf_file)
-
-        if "__parse_error__" in parsed:
-            errors.append(
-                {
-                    "file": str(relative_file),
-                    "error": parsed["__parse_error__"],
-                }
-            )
-            continue
-
-        module_dir = infer_module_dir(repo_root, tf_file)
-
-        for resource_block in parsed.get("resource", []):
-            items.extend(normalize_resource_block(resource_block, relative_file, module_dir))
-
-        for data_block in parsed.get("data", []):
-            items.extend(normalize_data_block(data_block, relative_file, module_dir))
-
-        for module_block in parsed.get("module", []):
-            items.extend(normalize_module_block(module_block, relative_file, module_dir))
-
-        for variable_block in parsed.get("variable", []):
-            items.extend(normalize_variable_block(variable_block, relative_file, module_dir))
-
-    return {
-        "repo_root": str(repo_root),
-        "items": items,
-        "errors": errors,
-    }
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", required=True)
-    parser.add_argument("--out", default="diagram-model.json")
-    args = parser.parse_args()
-
-    model = parse_repo(args.repo)
-
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(model, f, indent=2, default=str)
-
-    print(f"Wrote {args.out}")
+  aws_lb_target_group:
+    label: Target Group
+    group: networking
+    icon: diagrams.aws.network.ELB
