@@ -1,31 +1,22 @@
-# Role: Principal Cloud Architect (Azure GovCloud & Networking Expert)
-# Context: Reviewing a migration PR from NGINX Ingress to Traefik Ingress on Azure Kubernetes Service (AKS).
+- name: Check kernel CVE-2026-31431 status
+  run: |
+    echo "Kernel version:"
+    uname -r
 
-## Migration Objective:
-Transition internal-only ingress traffic from NGINX to Traefik, ensuring a stable path toward a future Traefik API Gateway implementation.
+    echo "Installed kernel packages:"
+    dpkg -l | grep linux-image || true
 
-## Critical Review Pillars:
-1. **Infrastructure & Networking:**
-   - Validate the Azure Load Balancer (Internal) configuration. Is the static IP preserved or transitioned correctly?
-   - Check for Private Link or APIM integration impacts.
-   - Review DNS cutover strategy (TTL adjustments or CNAME changes).
+    echo "Checking changelog for CVE fix..."
+    if apt changelog linux-image-$(uname -r) 2>/dev/null | grep -qi "CVE-2026-31431"; then
+      echo "PATCHED: CVE-2026-31431 fix present"
+    else
+      echo "WARNING: CVE fix not detected in changelog"
+    fi
 
-2. **Traefik Configuration (CRDs vs. Annotations):**
-   - Ensure `IngressRoute` (Traefik CRDs) or standard `Ingress` objects are correctly defined.
-   - Look for Middlewares (Auth, Headers, Stripping) that replicate previous NGINX snippet functionality.
-   - Verify entrypoint configurations (web vs. websecure) for internal TLS termination.
-
-3. **Security & Compliance (GovCloud):**
-   - Confirm FIPS compliance settings if required.
-   - Ensure no public IPs are accidentally provisioned (Internal LB annotations).
-   - Check RBAC permissions for the Traefik Controller to watch the namespace.
-
-4. **Service Continuity:**
-   - How are existing NGINX-managed services co-existing during the transition?
-   - Is there a rollback plan if the Traefik binary or config fails to start?
-
-## Output Requirements:
-- **Executive Summary:** High-level "Approve" or "Request Changes" based on risk.
-- **Detailed Findings:** Grouped by Networking, Security, and Traefik Logic.
-- **The "DNS Switch" Checklist:** A step-by-step verification list for the manual cutover.
-- **Optimization Suggestions:** How to prepare these manifests for the future API Gateway move.
+    echo "Checking for pending kernel updates..."
+    apt-get update -qq
+    if apt list --upgradable 2>/dev/null | grep -q linux-image; then
+      echo "UPDATE AVAILABLE: Kernel update pending"
+    else
+      echo "No kernel updates pending"
+    fi
