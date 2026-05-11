@@ -1,22 +1,11 @@
-- name: Check kernel CVE-2026-31431 status
-  run: |
-    echo "Kernel version:"
-    uname -r
-
-    echo "Installed kernel packages:"
-    dpkg -l | grep linux-image || true
-
-    echo "Checking changelog for CVE fix..."
-    if apt changelog linux-image-$(uname -r) 2>/dev/null | grep -qi "CVE-2026-31431"; then
-      echo "PATCHED: CVE-2026-31431 fix present"
-    else
-      echo "WARNING: CVE fix not detected in changelog"
-    fi
-
-    echo "Checking for pending kernel updates..."
-    apt-get update -qq
-    if apt list --upgradable 2>/dev/null | grep -q linux-image; then
-      echo "UPDATE AVAILABLE: Kernel update pending"
-    else
-      echo "No kernel updates pending"
-    fi
+-- You can press `g?` for help in this menu.
+local ensure_installed = vim.tbl_keys(servers or {})
+vim.list_extend(ensure_installed, {
+  'stylua',        -- Lua formatter (kickstart's default)
+  'tflint',        -- Terraform linter
+  -- Optional DevOps extras — uncomment as you need them:
+  -- 'hadolint',   -- Dockerfile linter
+  -- 'yamlfmt',    -- YAML formatter
+  -- 'shfmt',      -- shell script formatter
+  -- 'shellcheck', -- shell script linter
+})
