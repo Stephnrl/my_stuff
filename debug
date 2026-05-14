@@ -1,9 +1,14 @@
-AKS FIPS node pools run Ubuntu Pro with Canonical's FIPS-validated kernel and FIPS-validated openssl/libssl. The kernel flag /proc/sys/crypto/fips_enabled=1 is set on the host, and that flag is exposed into every container that runs on the node (it's a read-only /proc entry the kernel exposes globally). So even though your actions-runner container ships its own libssl.so.3, when that libssl initializes it sees fips_enabled=1 and switches itself into FIPS mode — loading only the FIPS provider, refusing non-approved algorithms, taking a different init path than normal.
-Then the runner: 2.331.0 rolled forward the bundled .NET runtime (the runner is a .NET app — Runner.Listener is dotnet, the "TP Worker" in your dmesg is the .NET ThreadPool). The new .NET build's first TLS call out — Location.GetConnectionData, the very first HTTPS handshake to actions.githubusercontent.com — hits a code path inside SslStream / SocketsHttpHandler that, under FIPS-mode OpenSSL 3, dereferences something that was either never allocated or was zeroed out because the FIPS provider rejected its creation. That's your segfault at 20 in libssl.so.3 — 0x20 is a null-deref offset into a struct field. 2.330.0's older .NET build didn't make that exact call, so it didn't trip the bug. Rocky 9.7 is reporting the same thing in #4197 because RHEL 9 FIPS userspace works the same way as Ubuntu Pro FIPS — same root cause, different distro.
-So the runtime symptom on Ubuntu 24.04 / AKS FIPS is "container fine on its own, crashes the moment it's scheduled on a FIPS node," which matches what you saw.
-On the env var — I want to make sure I tell you the right thing about which knob you turned. The likely candidates given this scenario, with what each one actually does:
-
-DOTNET_SYSTEM_NET_SECURITY_NOREVOCATIONCHECKBYDEFAULT=true — disables OCSP/CRL revocation lookups in .NET's X509Chain validation. This is the most common FIPS-related .NET TLS workaround; the revocation path is what crashes most often.
-OPENSSL_FORCE_FIPS_MODE=0 or unsetting OPENSSL_CONF — overrides FIPS init inside the container's libssl, effectively making the container ignore the host's FIPS flag. This trades FIPS compliance for stability.
-DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 — unrelated to TLS; only fixes ICU/locale crashes.
-An ACTIONS_RUNNER_* var on the scale set — the runner itself doesn't expose a FIPS toggle that I know of; if you set one of these, it's probably indirectly affecting the listener's startup behavior.
+template:
+  spec:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: agentpool
+                  operator: In
+                  values:
+                    - nplinuxfips
+                    - nplinuxfips2
+    # Only needed if your FIPS pools have taints. Check with:
+    #   kubectl describe node <one-of-the-fips-nodes> | grep Taints
