@@ -12,3 +12,8 @@ template:
                     - nplinuxfips2
     # Only needed if your FIPS pools have taints. Check with:
     #   kubectl describe node <one-of-the-fips-nodes> | grep Taints
+    tolerations:
+      - key: fips
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
