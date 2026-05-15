@@ -6,3 +6,10 @@ ghe-aqueduct status | jq '
   | select(($p | join(".") | test("queue|depth|active|failed|retry|dead|size|count"; "i")))
   | "\($p | join(".")) = \(getpath($p))"
 '
+
+ghe-aqueduct status | jq -r '
+  .. | objects
+  | to_entries[]
+  | select(.key | test("queue|depth|size|count|active|failed|retry|dead"; "i"))
+  | "\(.key): \(.value)"
+' | sort
