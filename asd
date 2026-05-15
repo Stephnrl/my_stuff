@@ -9,7 +9,8 @@ ghe-aqueduct status | jq '
 
 ghe-aqueduct status | jq -r '
   .. | objects
-  | to_entries[]
-  | select(.key | test("queue|depth|size|count|active|failed|retry|dead"; "i"))
-  | "\(.key): \(.value)"
-' | sort
+  | select(has("name") or has("queue"))
+  | [.name, .queue] 
+  | map(select(. != null)) 
+  | .[]
+' | sort -u
