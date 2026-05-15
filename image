@@ -1,0 +1,445 @@
+Recommended model
+
+Use three concepts:
+
+Build tag        = every image build gets a unique tag
+Release version  = human-friendly version you promote
+Deployment var   = Helm value points to the promoted immutable tag
+
+Example tags:
+
+acr.azurecr.us/gh-runners/ubuntu-runner:2026.05.15-1432
+acr.azurecr.us/gh-runners/ubuntu-runner:1.8.0
+acr.azurecr.us/gh-runners/ubuntu-runner:1.8.0-20260515.1432
+acr.azurecr.us/gh-runners/ubuntu-runner:sha-a1b2c3d
+
+For your use case, I’d use something like:
+
+1.8.0-20260515.1432
+
+or
+
+1.8.0-build.1432
+
+That gives you both a release version and traceability back to the workflow run.
+
+The workflow I’d implement
+1. Runner image repo builds the image
+
+On merge to main, schedule, or manual dispatch:
+
+Build image
+Scan image
+Test image
+Push to ACR with unique tag
+Generate SBOM/provenance if required
+Create GitHub release notes/changelog
+
+Push tags like:
+
+runner-base:1.8.0-build.1432
+runner-base:sha-a1b2c3d
+
+Do not overwrite latest for anything deployed.
+
+You can still publish latest for humans/testing, but the Helm deployment should never consume it.
+
+2. Create a release artifact
+
+The release should document:
+
+Runner image: acr.../runner-base:1.8.0-build.1432
+Digest: sha256:...
+Base image version
+GitHub runner version
+Installed tools and versions
+OS patches applied
+Security fixes / CVEs addressed
+Breaking changes
+Rollback version
+
+This can be a GitHub Release, a CHANGELOG.md entry, or both.
+
+
+Yes — automate the Helm deployment repo so it dynamically discovers the newest approved image version, but only deploys when the version changes.
+
+The pattern I’d use:
+
+Runner image repo
+  builds image
+  pushes versioned tag to ACR
+  creates release metadata
+
+Helm / ARC deployment repo
+  scheduled workflow runs Sunday night
+  checks latest approved image version
+  compares it to current values.yaml
+  if same version: do nothing
+  if newer version: update values.yaml
+  create PR or deploy automatically
+Best practice: scheduled PR, not direct deploy
+
+I would not have the Sunday workflow immediately deploy to prod unless your team is comfortable with that.
+
+Better:
+
+Sunday 2 AM:
+  Check latest runner image
+  If newer than deployed:
+    Open PR updating runnerImage.tag
+  If no new version:
+    exit cleanly
+
+Then your normal GitOps / Helm deployment workflow runs when the PR is merged.
+
+This gives you automation without surprise deployments.
+
+Option 1 — use GitHub Releases as the promotion source
+
+This is my preferred approach.
+
+Your runner image repo creates a release like:
+
+v1.8.0-build.1432
+
+The release notes contain:
+
+Image: myacr.azurecr.us/gh-runners/ubuntu-runner:1.8.0-build.1432
+Digest: sha256:abc123...
+
+Then the Helm deployment repo has a scheduled workflow that checks the latest release tag.
+
+Example:
+
+name: Check runner image version
+
+on:
+  schedule:
+    # GitHub cron is UTC.
+    # This is 7 AM UTC, roughly 2 AM ET standard time / 3 AM ET daylight time.
+    - cron: "0 7 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-runner-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout deployment repo
+        uses: actions/checkout@v4
+
+      - name: Get latest approved runner image release
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh release view \
+            --repo your-org/runner-images \
+            --json tagName \
+            --jq '.tagName')
+
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Read currently deployed version
+        id: current
+        run: |
+          CURRENT_TAG=$(yq '.runnerImage.tag' environments/prod/values.yaml)
+          echo "current_tag=${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if already current
+        if: steps.latest.outputs.latest_tag == steps.current.outputs.current_tag
+        run: |
+          echo "Already deployed: ${{ steps.current.outputs.current_tag }}"
+          exit 0
+
+      - name: Update Helm values
+        if: steps.latest.outputs.latest_tag != steps.current.outputs.current_tag
+        run: |
+          yq -i '.runnerImage.tag = "${{ steps.latest.outputs.latest_tag }}"' environments/prod/values.yaml
+
+      - name: Create pull request
+        if: steps.latest.outputs.latest_tag != steps.current.outputs.current_tag
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: update-runner-image-${{ steps.latest.outputs.latest_tag }}
+          title: "Update runner image to ${{ steps.latest.outputs.latest_tag }}"
+          commit-message: "Update runner image to ${{ steps.latest.outputs.latest_tag }}"
+          body: |
+            Updates the GitHub runner image version.
+
+            Previous version: `${{ steps.current.outputs.current_tag }}`
+            New version: `${{ steps.latest.outputs.latest_tag }}`
+
+            Please review the runner image release notes before merging.
+
+Your values.yaml would have:
+
+runnerImage:
+  repository: myacr.azurecr.us/gh-runners/ubuntu-runner
+  tag: v1.8.0-build.1432
+  pullPolicy: IfNotPresent
+
+Then your Helm template or ARC values use:
+
+template:
+  spec:
+    containers:
+      - name: runner
+        image: "{{ .Values.runnerImage.repository }}:{{ .Values.runnerImage.tag }}"
+        imagePullPolicy: "{{ .Values.runnerImage.pullPolicy }}"
+Option 2 — query ACR directly for the latest approved tag
+
+You can also have the deployment workflow query ACR.
+
+Example:
+
+name: Check ACR runner image version
+
+on:
+  schedule:
+    - cron: "0 7 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  check-acr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get latest ACR tag
+        id: latest
+        run: |
+          LATEST_TAG=$(az acr repository show-tags \
+            --name myacr \
+            --repository gh-runners/ubuntu-runner \
+            --orderby time_desc \
+            --top 1 \
+            --output tsv)
+
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Read current Helm version
+        id: current
+        run: |
+          CURRENT_TAG=$(yq '.runnerImage.tag' environments/prod/values.yaml)
+          echo "current_tag=${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if no change
+        if: steps.latest.outputs.latest_tag == steps.current.outputs.current_tag
+        run: |
+          echo "No new runner image version found."
+          exit 0
+
+      - name: Update Helm values
+        if: steps.latest.outputs.latest_tag != steps.current.outputs.current_tag
+        run: |
+          yq -i '.runnerImage.tag = "${{ steps.latest.outputs.latest_tag }}"' environments/prod/values.yaml
+
+      - name: Create pull request
+        if: steps.latest.outputs.latest_tag != steps.current.outputs.current_tag
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: update-runner-image-${{ steps.latest.outputs.latest_tag }}
+          title: "Update runner image to ${{ steps.latest.outputs.latest_tag }}"
+          commit-message: "Update runner image to ${{ steps.latest.outputs.latest_tag }}"
+          body: |
+            Automated runner image update.
+
+            Current: `${{ steps.current.outputs.current_tag }}`
+            New: `${{ steps.latest.outputs.latest_tag }}`
+
+However, I like this less unless you are very strict with tags.
+
+Why?
+
+Because “latest tag in ACR” does not always mean “approved for production.”
+
+I would rather promote a tag to GitHub Release or write it to a known metadata file.
+
+Better ACR tagging pattern
+
+Use build tags and promotion tags.
+
+Example image build creates:
+
+ubuntu-runner:1.8.0-build.1432
+ubuntu-runner:sha-a1b2c3d
+
+After tests pass, promote by adding:
+
+ubuntu-runner:prod-candidate
+
+But I would not deploy prod-candidate directly.
+
+Instead, the Sunday job resolves what prod-candidate currently points to, extracts the immutable version tag or digest, and updates Helm to that version.
+
+Deployment should still use:
+
+tag: 1.8.0-build.1432
+
+not:
+
+tag: prod-candidate
+Option 3 — fully automatic Sunday deployment
+
+This is the more aggressive version.
+
+Sunday 2 AM:
+  Check latest approved release
+  If different from current:
+    update values.yaml
+    commit directly to main
+    run helm upgrade
+
+I only recommend this for dev or non-prod.
+
+Example flow:
+
+name: Scheduled runner image deployment
+
+on:
+  schedule:
+    - cron: "0 7 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get latest approved version
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST_TAG=$(gh release view \
+            --repo your-org/runner-images \
+            --json tagName \
+            --jq '.tagName')
+
+          echo "latest_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Read current version
+        id: current
+        run: |
+          CURRENT_TAG=$(yq '.runnerImage.tag' environments/dev/values.yaml)
+          echo "current_tag=${CURRENT_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Exit if no update
+        if: steps.latest.outputs.latest_tag == steps.current.outputs.current_tag
+        run: |
+          echo "No deployment needed."
+          exit 0
+
+      - name: Update values
+        run: |
+          yq -i '.runnerImage.tag = "${{ steps.latest.outputs.latest_tag }}"' environments/dev/values.yaml
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add environments/dev/values.yaml
+          git commit -m "Update runner image to ${{ steps.latest.outputs.latest_tag }}"
+          git push
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Helm
+        run: |
+          az aks get-credentials \
+            --resource-group my-rg \
+            --name my-aks \
+            --overwrite-existing
+
+          helm upgrade --install github-runner-scale-set \
+            oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+            --namespace arc-runners \
+            --values environments/dev/values.yaml
+
+Again, I’d keep this for dev/stage, not prod.
+
+My recommended production setup
+
+For prod, I’d do this:
+
+Sunday outside business hours:
+  scheduled workflow checks latest approved runner image release
+  compares to deployed Helm value
+  if new:
+    opens PR
+  if same:
+    exits
+
+Then:
+
+PR merge:
+  normal deployment pipeline runs helm upgrade
+
+That gives you:
+
+No latest tag
+No surprise redeploys
+No deployment if there is no new version
+Audit trail through PRs
+Easy rollback by reverting the PR
+Important detail: “don’t deploy every Sunday”
+
+The workflow should not blindly run helm upgrade every Sunday.
+
+Add a version comparison gate:
+
+if [ "$LATEST_TAG" = "$CURRENT_TAG" ]; then
+  echo "No new image version. Skipping deployment."
+  exit 0
+fi
+
+That is the key piece.
+
+The scheduled job can run every Sunday, but the deployment only happens when the image version has changed.
+
+Best final architecture
+runner-images repo
+  build image
+  push immutable tag
+  scan/test
+  create approved release
+
+runner-scale-set repo
+  scheduled Sunday workflow
+  read latest approved release
+  compare to current values.yaml
+  open PR if different
+
+merge PR
+  helm upgrade deploys new image version
+
+This is the cleanest and safest way to mature the process.
