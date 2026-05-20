@@ -1,0 +1,38 @@
+risk:
+  fail_on:
+    - actively_exploited
+    - critical_fix_available
+    - expired_exception
+  sla_days:
+    CRITICAL: 15
+    HIGH: 30
+    MEDIUM: 90
+    LOW: 180
+
+runner_context:
+  network_exposure: internal_only
+  public_inbound: false
+  repo_scope: private_internal_only
+  uses_oidc: true
+  ephemeral_runner: false
+
+package_usage:
+  dotnet-sdk: build_time
+  azure-cli: build_time
+  terraform: build_time
+  kubectl: build_time
+  openssl: runtime
+
+known_exploited:
+  - CVE-2023-1234
+
+kev:
+  - CVE-2023-1234
+
+exceptions:
+  - vulnerability_id: CVE-2024-12345
+    package: openssl
+    decision: temporary_exception
+    owner: security@example.com
+    expires: 2026-08-31
+    justification: Vendor fix not available in base image channel.
