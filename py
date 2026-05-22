@@ -1,62 +1,43 @@
-        deviation_type = classify_deviation_type(vuln)
-        business_justification = business_justification_for_package(vuln)
+Add this to parse_args():
 
-        item = PoamItem(
-            poam_id=poam_id,
-            status="Open",
-            source_tool="Trivy",
-            scan_date=scan_date,
-            review_cycle=review_cycle,
+    parser.add_argument(
+        "--image-digest",
+        default="",
+        help="Optional image digest or immutable image reference.",
+    )
 
-            image=image,
-            image_digest=image_digest,
-            target=target,
-            target_type=target_type,
+Then update the create_poam_items() function signature:
 
-            vulnerability_id=vuln_id,
-            pkg_name=pkg_name,
-            installed_version=installed_version,
-            fixed_version=fixed_version,
-            severity=severity,
-            severity_source=severity_source,
-            cvss_score=cvss_score,
+def create_poam_items(
+    trivy: Dict[str, Any],
+    image: str,
+    image_digest_arg: str,
+    owner: str,
+    min_severity: str,
+    review_cycle: str,
+    days_critical: int,
+    days_high: int,
+    days_medium: int,
+) -> List[PoamItem]:
 
-            title=title,
-            description=description,
-            primary_url=first_url(vuln),
+Inside create_poam_items(), set:
 
-            weakness_description=build_weakness_description(image, target, vuln),
-            deviation_type=deviation_type,
-            business_justification=business_justification,
-            environment_context=environment_context(),
-            compensating_controls=compensating_controls_text(),
-            exploitability_assessment=exploitability_assessment_text(vuln),
-            remediation_constraint=remediation_constraint_text(vuln),
-            remediation_plan=default_remediation_plan(vuln),
-            milestones=default_milestones(vuln),
-            scheduled_completion_date=remediation_due_date(
-                severity,
-                scan_dt,
-                days_critical,
-                days_high,
-                days_medium,
-            ),
-            risk_acceptance_expiration=risk_acceptance_expiration_date(scan_dt, severity),
-            review_frequency=review_cycle,
-            closure_criteria=closure_criteria_text(vuln),
+    image_digest = image_digest_arg or safe_str(trivy.get("Metadata", {}).get("ImageID"))
 
-            owner=owner,
-            vendor_dependency=default_vendor_dependency(vuln),
-            false_positive="No",
-            operational_requirement=(
-                "Yes" if "Operational Requirement" in deviation_type else "TBD"
-            ),
-            risk_adjustment="TBD",
-            justification=business_justification,
-            deviation_rationale=deviation_rationale_text(image, target, vuln),
-            evidence_required=evidence_required_text(),
-            comments=(
-                "Generated from Trivy scan. Requires Cyber/system owner review. Validate package usage, "
-                "exploitability, fixed version availability, operational requirement, and compensating controls."
-            ),
-        )
+Remove this from inside the loop if you added it there:
+
+        image_digest = safe_str(trivy.get("Metadata", {}).get("ImageID"))
+
+Then update the call in main():
+
+    items = create_poam_items(
+        trivy=trivy,
+        image=args.image,
+        image_digest_arg=args.image_digest,
+        owner=args.owner,
+        min_severity=args.min_severity,
+        review_cycle=args.review_cycle,
+        days_critical=args.days_critical,
+        days_high=args.days_high,
+        days_medium=args.days_medium,
+    )
