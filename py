@@ -1,4 +1,5 @@
-        image_digest = safe_str(trivy.get("Metadata", {}).get("ImageID"))
+        deviation_type = classify_deviation_type(vuln)
+        business_justification = business_justification_for_package(vuln)
 
         item = PoamItem(
             poam_id=poam_id,
@@ -25,8 +26,8 @@
             primary_url=first_url(vuln),
 
             weakness_description=build_weakness_description(image, target, vuln),
-            deviation_type=classify_deviation_type(vuln),
-            business_justification=business_justification_for_package(vuln),
+            deviation_type=deviation_type,
+            business_justification=business_justification,
             environment_context=environment_context(),
             compensating_controls=compensating_controls_text(),
             exploitability_assessment=exploitability_assessment_text(vuln),
@@ -48,10 +49,10 @@
             vendor_dependency=default_vendor_dependency(vuln),
             false_positive="No",
             operational_requirement=(
-                "Yes" if "Operational Requirement" in classify_deviation_type(vuln) else "TBD"
+                "Yes" if "Operational Requirement" in deviation_type else "TBD"
             ),
             risk_adjustment="TBD",
-            justification=business_justification_for_package(vuln),
+            justification=business_justification,
             deviation_rationale=deviation_rationale_text(image, target, vuln),
             evidence_required=evidence_required_text(),
             comments=(
