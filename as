@@ -1,13 +1,19 @@
-        python "${{ github.action_path }}/poam_from_trivy.py" \
-          --input "${{ inputs.trivy_json }}" \
-          --image "${{ inputs.image }}" \
-          --image-digest "${{ inputs.image_digest }}" \
-          --output-csv "${{ inputs.output_csv }}" \
-          --output-json "${{ inputs.output_json }}" \
-          --owner "${{ inputs.owner }}" \
-          --min-severity "${{ inputs.min_severity }}" \
-          --review-cycle "${{ inputs.review_cycle }}" \
-          --baseline-json "${{ inputs.baseline_json }}" \
-          --gate-mode "${{ inputs.gate_mode }}" \
-          --delta-json "${{ inputs.delta_json }}" \
-          --delta-csv "${{ inputs.delta_csv }}"
+  baseline_json:
+    description: "Approved POA&M baseline JSON to compare against"
+    required: false
+    default: ""
+
+  gate_mode:
+    description: "Gate mode: off, warn, fail-on-new, fail-on-new-critical, fail-on-new-fixable"
+    required: false
+    default: "warn"
+
+  delta_json:
+    description: "Output delta JSON path"
+    required: false
+    default: "poam-delta.json"
+
+  delta_csv:
+    description: "Output delta CSV path"
+    required: false
+    default: "poam-delta.csv"
