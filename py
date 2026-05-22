@@ -1,51 +1,48 @@
-name: "Generate POA&M from Trivy"
-description: "Parse Trivy JSON results and generate POA&M CSV/JSON artifacts"
+@dataclass
+class PoamItem:
+    poam_id: str
+    status: str
+    source_tool: str
+    scan_date: str
+    review_cycle: str
 
-inputs:
-  trivy_json:
-    description: "Path to Trivy JSON output"
-    required: true
+    image: str
+    image_digest: str
+    target: str
+    target_type: str
 
-  image:
-    description: "Image name/tag scanned"
-    required: true
+    vulnerability_id: str
+    pkg_name: str
+    installed_version: str
+    fixed_version: str
+    severity: str
+    severity_source: str
+    cvss_score: str
 
-  output_csv:
-    description: "Output POA&M CSV path"
-    required: false
-    default: "poam.csv"
+    title: str
+    description: str
+    primary_url: str
 
-  output_json:
-    description: "Output normalized POA&M JSON path"
-    required: false
-    default: "poam.json"
+    weakness_description: str
+    deviation_type: str
+    business_justification: str
+    environment_context: str
+    compensating_controls: str
+    exploitability_assessment: str
+    remediation_constraint: str
+    remediation_plan: str
+    milestones: str
+    scheduled_completion_date: str
+    risk_acceptance_expiration: str
+    review_frequency: str
+    closure_criteria: str
 
-  owner:
-    description: "Default owning team"
-    required: false
-    default: "DevSecOps"
-
-  min_severity:
-    description: "Minimum severity to include: UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL"
-    required: false
-    default: "HIGH"
-
-  review_cycle:
-    description: "Review cadence"
-    required: false
-    default: "monthly"
-
-runs:
-  using: "composite"
-  steps:
-    - name: Generate POA&M
-      shell: bash
-      run: |
-        python "${{ github.action_path }}/poam_from_trivy.py" \
-          --input "${{ inputs.trivy_json }}" \
-          --image "${{ inputs.image }}" \
-          --output-csv "${{ inputs.output_csv }}" \
-          --output-json "${{ inputs.output_json }}" \
-          --owner "${{ inputs.owner }}" \
-          --min-severity "${{ inputs.min_severity }}" \
-          --review-cycle "${{ inputs.review_cycle }}"
+    owner: str
+    vendor_dependency: str
+    false_positive: str
+    operational_requirement: str
+    risk_adjustment: str
+    justification: str
+    deviation_rationale: str
+    evidence_required: str
+    comments: str
