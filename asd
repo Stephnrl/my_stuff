@@ -1,7 +1,23 @@
-Today, our GitHub custom runner image process is manual, environment-specific, and operationally inefficient. We build images separately per environment instead of following a controlled build once, validate, promote model. This creates inconsistent images across non-production and production, increases manual effort, and makes it harder to prove that the same tested artifact is what ultimately runs in production.
+We propose implementing a controlled GitHub custom runner image pipeline that follows a nonprod-to-prod promotion cycle.
 
-Routine image maintenance also requires unnecessary operational overhead. Even for basic updates, such as patching, tool updates, or runner image refreshes, the team must go through a security review board approval process. After approval, someone still needs to manually log in during an off-hours maintenance window and click a workflow. This creates avoidable after-hours work, delays routine security maintenance, and introduces manual execution risk.
+The new process builds a bootstrap image, scans and validates it, generates security evidence, builds internalized runner image variants, deploys those variants to non-production, validates them against runner groups, and only then promotes the approved image to production.
 
-There is also a security gap in the current image validation process. JFrog Xray scanning provides value, but we do not believe it is sufficient as the only control. In the current flow, if a base image is pulled and a build starts, the build may continue even if Xray later blocks that image. Xray may block a subsequent pull, but the pipeline does not have a direct CI/CD enforcement gate that deterministically stops the image from progressing. If enough time passes and a newer image version is pulled, the original block can effectively be bypassed by process timing. This creates uncertainty around whether vulnerable or non-compliant images can continue through the build process.
+At a high level, the solution introduces:
 
-The business impact is that image maintenance is slower, less repeatable, more dependent on manual human action, and harder to audit. The current process increases operational burden, delays security patching, and does not provide a strong artifact promotion model from non-production to production.
+Scheduled GitHub workflow
+→ Self-hosted enterprise runner on private AKS
+→ Azure Gov OIDC federated access
+→ ACR Task bootstrap build
+→ Trivy security gate, SBOM, POA&M output
+→ Dedicated private ACR agent pool for internal image builds
+→ dotnet6 / dotnet8 / dotnet10 runner variants
+→ Smoke and functional testing
+→ Nonprod deployment and validation
+→ Promotion gate
+→ Prod ACR promotion
+→ Production deployment and validation
+→ GitHub release
+
+This fixes the current problem by replacing manual, per-environment builds with a controlled, auditable promotion workflow. Instead of rebuilding images separately for each environment, the pipeline produces a validated image version and promotes that same version forward. This improves consistency, traceability, and confidence that production is using the same image that was tested in non-production.
+
+The new CI/CD security gate also gives us a stronger enforcement point than relying on repository scanning alone. Trivy scan results, SBOM output, and POA&M tracking become part of the pipeline evidence. The build is evaluated before promotion, and findings are either remediated, documented, risk-managed, or blocked based on policy.
