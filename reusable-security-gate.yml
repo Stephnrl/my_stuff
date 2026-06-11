@@ -1,0 +1,192 @@
+# Reusable Security Gate
+# ----------------------
+# Generic, team-agnostic gate that any image pipeline can call between its
+# build phase (Zone A) and hardening phase (Zone B):
+#
+#   1. Pull the candidate image
+#   2. Trivy vulnerability scan (JSON) + CycloneDX SBOM
+#   3. POA&M generate/validate (initial run vs. monthly diff)
+#   4. Persist POA&M state to a dedicated git branch (survives artifact expiry)
+#   5. Upload trivy results, SBOM, poam.json, poam.xlsx as run artifacts
+#   6. Fail the job if new/reopened findings breach the fail-on threshold
+#
+# Caller requirements:
+#   permissions: contents: write   (to push the POA&M state branch)
+#   concurrency at the caller level if multiple pipelines share one repo,
+#   so two runs don't race on the state branch.
+
+name: Reusable Security Gate
+
+on:
+  workflow_call:
+    inputs:
+      image-ref:
+        description: 'Fully qualified image to scan, e.g. myacr.azurecr.io/runner-bootstrap:1.2.3'
+        required: true
+        type: string
+      system-name:
+        description: 'Logical name for the POA&M (one POA&M per image family)'
+        required: true
+        type: string
+      registry:
+        description: 'Registry hostname for docker login (empty to skip login)'
+        required: false
+        type: string
+        default: ''
+      fail-on:
+        description: 'CRITICAL | HIGH | MEDIUM | LOW | NONE'
+        required: false
+        type: string
+        default: 'CRITICAL'
+      trivy-severity:
+        description: 'Severities Trivy reports (gate logic is decided by the POA&M action)'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH,MEDIUM,LOW'
+      poam-branch:
+        description: 'Git branch used to persist POA&M state between runs'
+        required: false
+        type: string
+        default: 'poam-state'
+      waivers-file:
+        description: 'Optional path (in the calling repo) to a waivers JSON file'
+        required: false
+        type: string
+        default: ''
+      runs-on:
+        description: 'Runner label'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      registry-username:
+        required: false
+      registry-password:
+        required: false
+    outputs:
+      gate-result:
+        description: 'pass or fail'
+        value: ${{ jobs.security-gate.outputs.gate-result }}
+      open-count:
+        value: ${{ jobs.security-gate.outputs.open-count }}
+      new-count:
+        value: ${{ jobs.security-gate.outputs.new-count }}
+
+jobs:
+  security-gate:
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: write
+    outputs:
+      gate-result: ${{ steps.poam.outputs.gate-result }}
+      open-count: ${{ steps.poam.outputs.open-count }}
+      new-count: ${{ steps.poam.outputs.new-count }}
+    env:
+      POAM_BRANCH: ${{ inputs.poam-branch }}
+    steps:
+      - name: Checkout calling repository
+        uses: actions/checkout@v4
+
+      - name: Registry login
+        if: inputs.registry != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.registry-username }}
+          password: ${{ secrets.registry-password }}
+
+      # ----------------------------------------------------------------
+      # Restore previous POA&M state (if the state branch exists yet).
+      # First run ever -> no branch -> POA&M action runs in "initial" mode.
+      # ----------------------------------------------------------------
+      - name: Restore POA&M state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p poam-state
+          if git ls-remote --exit-code --heads origin "$POAM_BRANCH" >/dev/null 2>&1; then
+            git fetch -q origin "$POAM_BRANCH"
+            git show "FETCH_HEAD:poam.json" > poam-state/poam.json 2>/dev/null \
+              && echo "Restored poam.json from branch '$POAM_BRANCH'" \
+              || echo "Branch exists but has no poam.json yet (initial mode)"
+          else
+            echo "No state branch yet (initial mode)"
+          fi
+
+      # ----------------------------------------------------------------
+      # Scan + SBOM
+      # ----------------------------------------------------------------
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ inputs.image-ref }}
+          format: json
+          output: trivy-results.json
+          severity: ${{ inputs.trivy-severity }}
+          ignore-unfixed: false
+          exit-code: '0'   # gate decision belongs to the POA&M action, not trivy
+
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ inputs.image-ref }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          scan-type: image
+
+      # ----------------------------------------------------------------
+      # POA&M: initial creation or monthly validation diff
+      # ----------------------------------------------------------------
+      - name: POA&M gate
+        id: poam
+        # If these templates live in a central repo, reference it instead:
+        #   uses: your-org/ci-templates/actions/poam@v1
+        uses: ./actions/poam
+        with:
+          trivy-results: trivy-results.json
+          poam-file: poam-state/poam.json
+          system-name: ${{ inputs.system-name }}
+          image-ref: ${{ inputs.image-ref }}
+          fail-on: ${{ inputs.fail-on }}
+          waivers-file: ${{ inputs.waivers-file }}
+          output-dir: poam-out
+
+      # ----------------------------------------------------------------
+      # Persist state + artifacts even when the gate fails, so the POA&M
+      # still records the new findings and auditors can pull the report.
+      # ----------------------------------------------------------------
+      - name: Persist POA&M state branch
+        if: always() && hashFiles('poam-out/poam.json') != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .state-publish && cd .state-publish
+          git init -q
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git fetch -q origin "$POAM_BRANCH" 2>/dev/null; then
+            git checkout -q -b "$POAM_BRANCH" FETCH_HEAD
+          else
+            git checkout -q --orphan "$POAM_BRANCH"
+          fi
+          cp ../poam-out/poam.json ./poam.json
+          cp ../poam-out/poam.xlsx ./poam.xlsx
+          git add poam.json poam.xlsx
+          git -c user.name="poam-bot" -c user.email="poam-bot@users.noreply.github.com" \
+            commit -q -m "POA&M update: ${GITHUB_WORKFLOW} run ${GITHUB_RUN_ID}" \
+            || { echo "No POA&M changes to commit"; exit 0; }
+          git push -q origin "$POAM_BRANCH"
+
+      - name: Upload security artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-gate-${{ github.run_id }}
+          retention-days: 90
+          path: |
+            trivy-results.json
+            sbom.cdx.json
+            poam-out/poam.json
+            poam-out/poam.xlsx

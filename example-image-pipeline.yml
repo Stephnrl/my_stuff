@@ -1,0 +1,184 @@
+# Example: Templatized Image Pipeline (Zone A -> Gate -> Zone B -> Zone C)
+# ------------------------------------------------------------------------
+# This is the CALLER workflow a team copies into their repo. Everything
+# marked TEAM-SPECIFIC is theirs to own; everything `uses:` from
+# your-org/ci-templates is the shared, versioned platform layer.
+#
+# Adoption model:
+#   - your-org/ci-templates  -> reusable workflows + composite actions, tagged v1
+#   - team repo              -> this thin orchestrator + Dockerfiles/ACR task defs
+#                               + a pipeline-config (inputs) section below
+
+name: Image Pipeline
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'        # monthly rebuild
+  workflow_dispatch:
+
+# One pipeline at a time per image family — protects the POA&M state branch
+concurrency:
+  group: image-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # ---- pipeline config (the only thing most teams should need to edit) ----
+  SYSTEM_NAME: github-runner-image
+  ACR_NAME: myacr
+  REGISTRY: myacr.azurecr.io
+  BOOTSTRAP_REPO: runner/bootstrap
+  PROD_REGISTRY: myprodacr.azurecr.io
+
+jobs:
+  # ========================================================================
+  # ZONE A — bootstrap build (TEAM-SPECIFIC)
+  # Public agent pool, no company data/metadata. Teams replace this job
+  # with whatever produces their candidate image (ACR Task, docker/build-push,
+  # packer, etc.). The only contract: emit `image-ref` as a job output.
+  # ========================================================================
+  zone-a-bootstrap:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image-ref: ${{ steps.meta.outputs.image-ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          TAG="$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}"
+          echo "image-ref=${REGISTRY}/${BOOTSTRAP_REPO}:${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run ACR Task (public agent pool)
+        run: |
+          az acr task run \
+            --registry "$ACR_NAME" \
+            --name bootstrap-build \
+            --set TAG="${{ steps.meta.outputs.image-ref }}"
+
+  # ========================================================================
+  # SECURITY GATE — fully generic (PLATFORM-OWNED)
+  # Trivy scan -> SBOM -> POA&M initial/validate -> fail on new criticals.
+  # ========================================================================
+  security-gate:
+    needs: zone-a-bootstrap
+    permissions:
+      contents: write          # POA&M state branch
+    uses: your-org/ci-templates/.github/workflows/reusable-security-gate.yml@v1
+    with:
+      image-ref: ${{ needs.zone-a-bootstrap.outputs.image-ref }}
+      system-name: github-runner-image
+      registry: myacr.azurecr.io
+      fail-on: CRITICAL
+      waivers-file: .security/waivers.json   # optional, omit if unused
+    secrets:
+      registry-username: ${{ secrets.ACR_USERNAME }}
+      registry-password: ${{ secrets.ACR_PASSWORD }}
+
+  # ========================================================================
+  # ZONE B — hardening / company configuration (TEAM-SPECIFIC build,
+  # PLATFORM-SHAPED contract)
+  # Private agent pool: derived images, JFrog mirrors, CA bundle, certs.
+  # Teams own the Dockerfiles and the sanity-test script; the pipeline only
+  # requires that `./ci/sanity-test.sh <image>` exits non-zero on failure.
+  # ========================================================================
+  zone-b-harden:
+    needs: security-gate
+    runs-on: [self-hosted, private-pool]     # TEAM-SPECIFIC runner
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image-ref: ${{ steps.meta.outputs.image-ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build hardened image(s) from bootstrap  # TEAM-SPECIFIC
+        id: meta
+        run: |
+          # az acr task run --registry "$ACR_NAME" --name harden-build \
+          #   --set BASE="${{ needs.zone-a-bootstrap.outputs.image-ref }}" ...
+          echo "image-ref=${REGISTRY}/runner/hardened:$(date -u +%Y.%m.%d)-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Sanity tests (npm/dotnet/python/terraform via JFrog, TLS checks)
+        run: ./ci/sanity-test.sh "${{ steps.meta.outputs.image-ref }}"   # TEAM-SPECIFIC script
+
+  # ========================================================================
+  # ZONE C — deploy + promote (PLATFORM-OWNED pattern, parameterized)
+  # ========================================================================
+  deploy-nonprod:
+    needs: zone-b-harden
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch downstream deploy (terraform + helm -> AKS)
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          repository: your-org/aks-deployments
+          event-type: deploy-nonprod
+          client-payload: >-
+            {"image": "${{ needs.zone-b-harden.outputs.image-ref }}",
+             "system": "${{ env.SYSTEM_NAME }}",
+             "run_id": "${{ github.run_id }}"}
+      # Validation pattern: poll the downstream repo's run conclusion via
+      # `gh run list/watch`, or have the downstream repo dispatch back a
+      # `deploy-result` event. Keep the contract in the README.
+
+  promote-prod:
+    needs: [zone-b-harden, deploy-nonprod]
+    runs-on: ubuntu-latest
+    environment: production            # manual approval gate lives here
+    permissions:
+      id-token: write
+      contents: write                  # for the GitHub release
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID_PROD }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_PROD }}
+
+      - name: Promote image to prod ACR
+        run: |
+          SRC="${{ needs.zone-b-harden.outputs.image-ref }}"
+          az acr import --name "${PROD_REGISTRY%%.*}" \
+            --source "$SRC" \
+            --image "${SRC#*/}"
+
+      - name: Dispatch prod deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          repository: your-org/aks-deployments
+          event-type: deploy-prod
+          client-payload: >-
+            {"image": "${{ needs.zone-b-harden.outputs.image-ref }}",
+             "system": "${{ env.SYSTEM_NAME }}"}
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ needs.zone-b-harden.outputs.image-ref }}"
+          VERSION="${TAG##*:}"
+          gh release create "v${VERSION}" \
+            --title "Image ${VERSION}" \
+            --notes "Promoted ${TAG} to prod. Security gate: see run ${GITHUB_RUN_ID} artifacts (SBOM + POA&M)."
