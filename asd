@@ -1,9 +1,11 @@
-Is the current API Gateway → SQS → Lambda → Step Functions → ECS → RDS/S3 flow the desired future-state architecture?
+Is there any current plan or roadmap item to move this workload, or parts of it, to EKS?
 
-Is this already considered production-ready, or is it still evolving?
+Is EKS being considered because of a technical need, or because it is becoming an enterprise platform standard?
 
-Are there pain points with the current architecture?
+Are any components expected to become long-running services or web applications?
 
-Are you looking for us to review, improve, or simply understand the current pattern?
+Do you need Kubernetes features such as namespaces, GitOps, operators, KEDA, service mesh, or shared cluster tenancy?
 
-Are there services in this flow you already know you want to replace?
+Would ECS/Fargate continue to satisfy the container workload needs?
+
+Is the current ECS usage working well?
