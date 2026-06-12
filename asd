@@ -1,11 +1,19 @@
-Is there any current plan or roadmap item to move this workload, or parts of it, to EKS?
+1. Is the current event-driven architecture the intended future state?
 
-Is EKS being considered because of a technical need, or because it is becoming an enterprise platform standard?
+2. Are you looking to keep API Gateway, SQS, Lambda, Step Functions, ECS, RDS, and S3 as the core pattern?
 
-Are any components expected to become long-running services or web applications?
+3. Are there known issues with the current workflow: reliability, scaling, cost, security, observability, deployment, or operations?
 
-Do you need Kubernetes features such as namespaces, GitOps, operators, KEDA, service mesh, or shared cluster tenancy?
+4. Is EKS on your roadmap for this workload?
 
-Would ECS/Fargate continue to satisfy the container workload needs?
+5. If EKS is being considered, what requirement is driving it?
 
-Is the current ECS usage working well?
+6. Is ECS currently meeting the container runtime needs?
+
+7. Do any parts of the workload need to become always-on services?
+
+8. Is this workload expected to support web applications, internal APIs only, batch jobs, or async processing?
+
+9. What does “landing zone” mean for this effort: account placement, network integration, security controls, logging, CI/CD, or all of the above?
+
+10. What do you need from our team: design review, implementation help, security account integration, EKS guidance, or operational handoff?
