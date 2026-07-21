@@ -31,21 +31,24 @@ options:
 stack:
   name: ${{ inputs.stack_name }}-${{ inputs.env }}
   space: root
-  description: 'Ansible stack running ${{ inputs.playbook }} against ${{ inputs.env }}.'
+  description: 'Ansible (Azure Gov) running ${{ inputs.playbook }} in ${{ inputs.env }}.'
   labels:
     - Environment/${{ inputs.env }}
     - Vendor/Ansible
+    - Cloud/AzureUSGov
     - Owner/${{ context.user.login }}
 
-  runner_image: public.ecr.aws/spacelift/runner-ansible-aws:latest
-  # worker_pool: 01GQ...   # uncomment + set if you use a private worker pool
+  # Use a runner image that includes azure.azcollection + its pip deps,
+  # or install them via requirements.yml at runtime (see note below).
+  runner_image: my-registry.example.com/spacelift-ansible-azure:latest
+  # worker_pool: 01GQ...   # strongly recommended for gov: a private worker inside your gov subscription
 
   vcs:
     branch: main
     repository: my-ansible-repo
-    namespace: my-org        # GitHub org / GitLab group / Bitbucket project
+    namespace: my-org
     provider: GITHUB
-    # project_root: ansible  # set if your playbooks live in a subfolder of the repo
+    # project_root: ansible
 
   vendor:
     ansible:
@@ -53,18 +56,15 @@ stack:
 
   environment:
     variables:
+      - name: AZURE_CLOUD_ENVIRONMENT
+        value: AzureUSGovernment          # <-- the gov cloud switch
+        description: Targets Azure US Government ARM endpoints
       - name: ANSIBLE_PRIVATE_KEY_FILE
         value: /mnt/workspace/id_rsa
         description: SSH key path for connecting to hosts
-      - name: SPACELIFT_ANSIBLE_CLI_ARGS
-        value: -e target_env=${{ inputs.env }}
-        description: Passes the environment through as an extra-var
 
   attachments:
     contexts:
-      - id: my-ansible-context   # holds shared env vars / mounted SSH key, etc.
-    clouds:
-      aws:
-        id: 01GQ29K8SYXKZVHPZ4HG00BK2E   # your AWS integration ID
-        read: true
-        write: true
+      # Put the service principal creds in a shared Context, attach it here.
+      # Keeps secrets out of the blueprint YAML and reusable across stacks.
+      - id: azure-gov-sp-credentials
