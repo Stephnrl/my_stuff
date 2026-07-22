@@ -1,25 +1,19 @@
 {
-  "extraKnownMarketplaces": {
-    "approved-internal": {
-      "source": {
-        "source": "github",
-        "repo": "YOUR-ORG/copilot-approved-marketplace"
-      }
-    }
+  "name": "approved-internal",
+  "owner": {
+    "name": "ABCorp Platform Engineering",
+    "email": "platform@abcorp.com"
   },
-  "strictKnownMarketplaces": [
+  "metadata": {
+    "description": "Vetted Copilot CLI plugins approved for ABCorp use",
+    "version": "1.0.0"
+  },
+  "plugins": [
     {
-      "source": "github",
-      "repo": "YOUR-ORG/copilot-approved-marketplace"
+      "name": "security-hooks",
+      "description": "Baseline guardrails: blocks destructive commands, logs tool use",
+      "version": "1.0.0",
+      "source": "./plugins/security-hooks"
     }
-  ],
-  "enabledPlugins": {
-    "security-hooks@approved-internal": true
-  },
-  "permissions": {
-    "disableBypassPermissionsMode": "disable"
-  },
-  "model": {
-    "default": "YOUR-APPROVED-DEFAULT-MODEL"
-  }
+  ]
 }
