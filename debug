@@ -24,3 +24,7 @@ Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Worker_*.log |
 Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Worker_*.log |
   Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
   Get-Content -Tail 80
+
+
+Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner%'" |
+  Select-Object Name, State, ProcessId, PathName | Format-Table -Wrap
