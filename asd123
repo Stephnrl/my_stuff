@@ -1,0 +1,25 @@
+{
+  "extraKnownMarketplaces": {
+    "approved-internal": {
+      "source": {
+        "source": "github",
+        "repo": "YOUR-ORG/copilot-approved-marketplace"
+      }
+    }
+  },
+  "strictKnownMarketplaces": [
+    {
+      "source": "github",
+      "repo": "YOUR-ORG/copilot-approved-marketplace"
+    }
+  ],
+  "enabledPlugins": {
+    "security-hooks@approved-internal": true
+  },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable"
+  },
+  "model": {
+    "default": "YOUR-APPROVED-DEFAULT-MODEL"
+  }
+}
