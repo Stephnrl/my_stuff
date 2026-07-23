@@ -21,3 +21,16 @@ Get-ChildItem D:\enterprise-cloud-runners\4\_diag\Worker_*.log |
     "--- tail ---"
     Get-Content $_ -Tail 40
   }
+
+
+Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
+  Group-Object { $_.FullName.Split('\')[2] } | ForEach-Object {
+    $n = $_.Group | Sort-Object LastWriteTime -Desc | Select-Object -First 1
+    [pscustomobject]@{
+      Runner = $_.Name
+      Last   = $n.LastWriteTime
+      State  = if ((Get-Content $n.FullName -Tail 20) -match 'renew job') {'BUSY'}
+               elseif ((Get-Content $n.FullName -Tail 20) -match 'Listening for Jobs') {'IDLE'}
+               else {'UNKNOWN'}
+    }
+  } | Format-Table -AutoSize
