@@ -71,3 +71,7 @@ Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
   Select-String -Pattern 'BrokerServer|995|TaskCanceledException' |
   ForEach-Object { $_.Line.Substring(0, [Math]::Min(30, $_.Line.Length)) } |
   Select-Object -Last 40
+
+
+'api.github.com','broker.actions.githubusercontent.com','pipelines.actions.githubusercontent.com' |
+  ForEach-Object { Test-NetConnection $_ -Port 443 | Select-Object ComputerName, TcpTestSucceeded }
