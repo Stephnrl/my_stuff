@@ -1,5 +1,5 @@
 Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner%'" |
-  Select-Object Name, StartName, State, StartMode
+  Select-Object Name, State, StartMode, ProcessId, StartName | Format-Table -AutoSize
 
 
 'OLDDOMAIN\svc-gh-runner','NEWDOMAIN\svc-gh-runner' | ForEach-Object {
