@@ -41,3 +41,7 @@ Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
 Restart-Service "actions.runner.*4*"
+
+
+Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
+  Select-Object ProcessId, CreationDate, ExecutablePath | Format-Table -AutoSize
