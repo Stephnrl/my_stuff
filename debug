@@ -62,3 +62,12 @@ Get-Service actions.runner.* | ForEach-Object {
   $_.WaitForStatus('Running','00:00:30')
   "{0} -> {1}" -f $_.Name, (Get-Service $_.Name).Status
 }
+
+
+
+
+
+Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
+  Select-String -Pattern 'BrokerServer|995|TaskCanceledException' |
+  ForEach-Object { $_.Line.Substring(0, [Math]::Min(30, $_.Line.Length)) } |
+  Select-Object -Last 40
