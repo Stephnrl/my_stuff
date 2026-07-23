@@ -34,3 +34,10 @@ Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
                else {'UNKNOWN'}
     }
   } | Format-Table -AutoSize
+
+
+Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
+  Where-Object ExecutablePath -like 'D:\enterprise-cloud-runners\4\*' |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+
+Restart-Service "actions.runner.*4*"
