@@ -13,12 +13,11 @@ Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner%'" |
 }
 
 
-Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
-  Group-Object { $_.FullName.Split('\')[2] } | ForEach-Object {
-    $newest = $_.Group | Sort-Object LastWriteTime -Desc | Select-Object -First 1
-    [pscustomobject]@{
-      Runner    = $_.Name
-      LastWrite = $newest.LastWriteTime
-      LastLine  = (Get-Content $newest.FullName -Tail 1)
-    }
-  } | Format-Table -Wrap
+Get-ChildItem D:\enterprise-cloud-runners\4\_diag\Worker_*.log |
+  Sort-Object LastWriteTime -Desc | Select-Object -First 1 |
+  ForEach-Object {
+    "=== $($_.FullName)  (last write: $($_.LastWriteTime)) ==="
+    Get-Content $_ -TotalCount 40 
+    "--- tail ---"
+    Get-Content $_ -Tail 40
+  }
