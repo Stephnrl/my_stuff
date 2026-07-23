@@ -5,6 +5,11 @@ Get-Service actions.runner.* | Select-Object Name, Status
 Get-Process Runner.Listener -ErrorAction SilentlyContinue |
   Select-Object Id, StartTime, @{n='Dir';e={Split-Path $_.Path -Parent}}
 
+
+Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
+  Select-Object ProcessId, CreationDate, ExecutablePath
+
+
 'OLDDOMAIN\svc-gh-runner','NEWDOMAIN\svc-gh-runner' | ForEach-Object {
   try {
     $sid = (New-Object System.Security.Principal.NTAccount($_)).Translate(
