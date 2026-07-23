@@ -78,7 +78,6 @@ Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
 
 
 
-Get-ChildItem D:\enterprise-cloud-runners\*\.runner | ForEach-Object {
-  $j = Get-Content $_ -Raw | ConvertFrom-Json
-  [pscustomobject]@{ Agent=$j.agentName; Url=$j.gitHubUrl; Group=$j.poolName }
-} | Format-Table -AutoSize
+Get-Service actions.runner.* | Select-Object Name, Status
+Get-Process Runner.Listener -ErrorAction SilentlyContinue |
+  Select-Object Id, StartTime, @{n='Dir';e={Split-Path $_.Path -Parent}}
