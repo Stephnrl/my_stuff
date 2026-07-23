@@ -45,3 +45,12 @@ Restart-Service "actions.runner.*4*"
 
 Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
   Select-Object ProcessId, CreationDate, ExecutablePath | Format-Table -AutoSize
+
+
+
+Get-Service actions.runner.* | ForEach-Object {
+  Write-Host "Restarting $($_.Name)..."
+  Restart-Service $_.Name -Force
+  $_.WaitForStatus('Running','00:00:30')
+  "{0} -> {1}" -f $_.Name, (Get-Service $_.Name).Status
+}
