@@ -10,79 +10,139 @@ Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
   Select-Object ProcessId, CreationDate, ExecutablePath
 
 
-'OLDDOMAIN\svc-gh-runner','NEWDOMAIN\svc-gh-runner' | ForEach-Object {
-  try {
-    $sid = (New-Object System.Security.Principal.NTAccount($_)).Translate(
-             [System.Security.Principal.SecurityIdentifier]).Value
-    [pscustomobject]@{ Account=$_; Resolves=$true; SID=$sid }
-  } catch {
-    [pscustomobject]@{ Account=$_; Resolves=$false; SID=$null }
-  }
-}
+Step 0 — capture current state (run this first, keep the output)
+powershell
+$RunnerRoot = 'D:\enterprise-cloud-runners'
+$Backup     = "$env:USERPROFILE\runner-inventory-$(Get-Date -f yyyyMMdd-HHmmss).json"
 
-
-Get-ChildItem D:\enterprise-cloud-runners\4\_diag\Worker_*.log |
-  Sort-Object LastWriteTime -Desc | Select-Object -First 1 |
-  ForEach-Object {
-    "=== $($_.FullName)  (last write: $($_.LastWriteTime)) ==="
-    Get-Content $_ -TotalCount 40 
-    "--- tail ---"
-    Get-Content $_ -Tail 40
-  }
-
-
-Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
-  Group-Object { $_.FullName.Split('\')[2] } | ForEach-Object {
-    $n = $_.Group | Sort-Object LastWriteTime -Desc | Select-Object -First 1
+$inv = Get-ChildItem $RunnerRoot -Directory | ForEach-Object {
+  $cfgPath = Join-Path $_.FullName '.runner'
+  if (Test-Path $cfgPath) {
+    $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+    $svc = Get-CimInstance Win32_Service -Filter "PathName LIKE '%$($_.Name)%' AND Name LIKE 'actions.runner%'"
     [pscustomobject]@{
-      Runner = $_.Name
-      Last   = $n.LastWriteTime
-      State  = if ((Get-Content $n.FullName -Tail 20) -match 'renew job') {'BUSY'}
-               elseif ((Get-Content $n.FullName -Tail 20) -match 'Listening for Jobs') {'IDLE'}
-               else {'UNKNOWN'}
+      Dir         = $_.FullName
+      AgentName   = $cfg.agentName
+      AgentId     = $cfg.agentId
+      GitHubUrl   = $cfg.gitHubUrl
+      Group       = $cfg.poolName
+      WorkFolder  = $cfg.workFolder
+      ServiceName = $svc.Name
+      ServiceAcct = $svc.StartName
+      ServiceState= $svc.State
     }
-  } | Format-Table -AutoSize
-
-
-Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
-  Where-Object ExecutablePath -like 'D:\enterprise-cloud-runners\4\*' |
-  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-
-Restart-Service "actions.runner.*4*"
-
-
-Get-CimInstance Win32_Process -Filter "Name='Runner.Worker.exe'" |
-  Select-Object ProcessId, CreationDate, ExecutablePath | Format-Table -AutoSize
-
-
-
-Get-Service actions.runner.* | ForEach-Object {
-  Write-Host "Restarting $($_.Name)..."
-  Restart-Service $_.Name -Force
-  $_.WaitForStatus('Running','00:00:30')
-  "{0} -> {1}" -f $_.Name, (Get-Service $_.Name).Status
+  }
 }
+$inv | Format-Table -AutoSize
+$inv | ConvertTo-Json -Depth 4 | Set-Content $Backup
+"Saved to $Backup"
 
+Get labels from the API, not .runner — I steered you wrong on that earlier; labels aren't reliably stored in that file. This is authoritative:
 
+powershell
+gh api /enterprises/YOUR-ENTERPRISE/actions/runners `
+  --jq '.runners[] | {id, name, status, busy, group: .runner_group_id, labels: [.labels[] | select(.type=="custom") | .name]}'
 
+Save that output. type=="custom" filters out self-hosted, Windows, X64, which are applied automatically and must not be passed to --labels.
 
+Step 1 — tokens and credentials
+powershell
+$Enterprise = 'YOUR-ENTERPRISE'
+$Url        = "https://github.com/enterprises/$Enterprise"
 
-Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
-  Select-String -Pattern 'BrokerServer|995|TaskCanceledException' |
-  ForEach-Object { $_.Line.Substring(0, [Math]::Min(30, $_.Line.Length)) } |
-  Select-Object -Last 40
+$RegToken = (gh api -X POST "/enterprises/$Enterprise/actions/runners/registration-token" --jq .token)
+$RmToken  = (gh api -X POST "/enterprises/$Enterprise/actions/runners/remove-token" --jq .token)
 
+if (-not $RegToken -or -not $RmToken) { throw "Token fetch failed — check gh auth and enterprise scope." }
+"Tokens acquired (valid ~1 hour)"
 
-'api.github.com','broker.actions.githubusercontent.com','pipelines.actions.githubusercontent.com' |
-  ForEach-Object { Test-NetConnection $_ -Port 443 | Select-Object ComputerName, TcpTestSucceeded }
+# service account
+$SvcAcct = 'DOMAIN\svc-gh-runner'
+$SvcCred = Get-Credential -UserName $SvcAcct -Message 'Service account password'
+Step 2 — the re-register function
+powershell
+function Reset-GhRunner {
+  param(
+    [Parameter(Mandatory)][string]$Dir,
+    [Parameter(Mandatory)][string]$Name,
+    [Parameter(Mandatory)][string]$Labels,     # comma-separated, custom only
+    [string]$Group = 'Default',
+    [Parameter(Mandatory)][string]$Url,
+    [Parameter(Mandatory)][string]$RegToken,
+    [Parameter(Mandatory)][string]$RmToken,
+    [Parameter(Mandatory)][pscredential]$Cred
+  )
 
+  Write-Host "`n=== $Name ($Dir) ===" -ForegroundColor Cyan
+  Push-Location $Dir
 
+  try {
+    $svc = Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner%'" |
+             Where-Object { $_.PathName -like "*$Dir*" }
+    if ($svc) {
+      Write-Host "Stopping $($svc.Name)..."
+      Stop-Service $svc.Name -Force -ErrorAction SilentlyContinue
+      (Get-Service $svc.Name).WaitForStatus('Stopped','00:00:60')
+    }
 
-Get-Service actions.runner.* | Select-Object Name, Status
-Get-Process Runner.Listener -ErrorAction SilentlyContinue |
-  Select-Object Id, StartTime, @{n='Dir';e={Split-Path $_.Path -Parent}}
+    if (Get-Process Runner.Worker -ErrorAction SilentlyContinue |
+          Where-Object { $_.Path -like "$Dir*" }) {
+      Write-Warning "Live worker in $Dir — job may be running. Aborting."
+      return
+    }
 
+    Write-Host "Removing registration..."
+    & .\config.cmd remove --token $RmToken
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning "config remove exited $LASTEXITCODE — clearing local state."
+      Remove-Item .runner,.credentials,.credentials_rsaparams -Force -ErrorAction SilentlyContinue
+    }
 
-Get-ChildItem D:\enterprise-cloud-runners\1\_diag\Runner_*.log |
+    Write-Host "Registering..."
+    & .\config.cmd `
+        --unattended `
+        --replace `
+        --url  $Url `
+        --token $RegToken `
+        --name $Name `
+        --labels $Labels `
+        --runnergroup $Group `
+        --work '_work' `
+        --runasservice `
+        --windowslogonaccount $Cred.UserName `
+        --windowslogonpassword $Cred.GetNetworkCredential().Password
+
+    if ($LASTEXITCODE -ne 0) { throw "config.cmd failed with exit code $LASTEXITCODE" }
+
+    $newSvc = Get-CimInstance Win32_Service -Filter "Name LIKE 'actions.runner%'" |
+                Where-Object { $_.PathName -like "*$Dir*" }
+    Start-Service $newSvc.Name
+    (Get-Service $newSvc.Name).WaitForStatus('Running','00:00:60')
+    Write-Host "$($newSvc.Name): $((Get-Service $newSvc.Name).Status)" -ForegroundColor Green
+  }
+  finally { Pop-Location }
+}
+Step 3 — do one runner
+powershell
+Reset-GhRunner -Dir "$RunnerRoot\1" `
+               -Name 'TFP-Agent-1' `
+               -Labels 'ABC' `
+               -Group 'YOUR-RUNNER-GROUP' `
+               -Url $Url -RegToken $RegToken -RmToken $RmToken -Cred $SvcCred
+Step 4 — verify before touching the others
+powershell
+Get-ChildItem "$RunnerRoot\1\_diag\Runner_*.log" |
   Sort-Object LastWriteTime -Desc | Select-Object -First 1 |
-  Get-Content -Tail 60
+  Get-Content -Tail 25
+
+gh api /enterprises/YOUR-ENTERPRISE/actions/runners --jq '.runners[] | {name, status, busy}'
+
+Want Listening for Jobs in the log and online / busy: false from the API. Then queue a test job targeting TFP-Agent-1's labels and confirm it dispatches before repeating for 2, 3, 4.
+
+Three things worth knowing:
+
+--replace lets you reuse the name if the server still has the old registration — without it you'd get a name conflict.
+
+The password appears briefly in the config.cmd process command line, visible to anyone who can read Win32_Process on that box. If that's a concern, drop --unattended and --windowslogonpassword and let it prompt interactively instead.
+
+Don't add --disableupdate. Given the version enforcement you're already contending with, you want auto-update on.
