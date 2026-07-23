@@ -81,3 +81,8 @@ Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
 Get-Service actions.runner.* | Select-Object Name, Status
 Get-Process Runner.Listener -ErrorAction SilentlyContinue |
   Select-Object Id, StartTime, @{n='Dir';e={Split-Path $_.Path -Parent}}
+
+
+Get-ChildItem D:\enterprise-cloud-runners\1\_diag\Runner_*.log |
+  Sort-Object LastWriteTime -Desc | Select-Object -First 1 |
+  Get-Content -Tail 60
