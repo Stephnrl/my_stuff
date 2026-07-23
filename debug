@@ -75,3 +75,10 @@ Get-ChildItem D:\enterprise-cloud-runners\*\_diag\Runner_*.log |
 
 'api.github.com','broker.actions.githubusercontent.com','pipelines.actions.githubusercontent.com' |
   ForEach-Object { Test-NetConnection $_ -Port 443 | Select-Object ComputerName, TcpTestSucceeded }
+
+
+
+Get-ChildItem D:\enterprise-cloud-runners\*\.runner | ForEach-Object {
+  $j = Get-Content $_ -Raw | ConvertFrom-Json
+  [pscustomobject]@{ Agent=$j.agentName; Url=$j.gitHubUrl; Group=$j.poolName }
+} | Format-Table -AutoSize
