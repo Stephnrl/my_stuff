@@ -1,34 +1,21 @@
-plugin: azure.azcollection.azure_rm
+[defaults]
+inventory = inventory/gov.azure_rm.yml
 
-cloud_environment: AzureUSGovernment
-auth_source: env
+# Required. The playbook lives in playbooks/random/, so Ansible's default
+# role search path is playbooks/random/roles -- it will NOT find the repo-root
+# roles/ directory without this line.
+roles_path = roles
 
-include_vm_resource_groups:
-  - rg-w
+host_key_checking = False
+stdout_callback = yaml
+display_skipped_hosts = False
+retry_files_enabled = False
+interpreter_python = auto_silent
 
-exclude_host_filters:
-  - "os_profile.system != 'windows'"
+[inventory]
+enable_plugins = azure.azcollection.azure_rm, constructed, ini
+# Surface plugin failures instead of quietly returning an empty inventory.
+unparsed_is_failed = True
 
-conditional_groups:
-  winrm_targets: "name in ['apple']"
-
-hostnames:
-  - name
-  - default
-
-hostvar_expressions:
-  ansible_host: >-
-    (name ~ '.corp.example.us')
-    if resource_type == 'Microsoft.HybridCompute/machines'
-    else (private_ipv4_addresses | first)
-  ansible_connection: "'winrm'"
-  ansible_port: 5985
-  ansible_winrm_scheme: "'http'"
-  ansible_winrm_transport: "'ntlm'"
-  ansible_winrm_message_encryption: "'auto'"
-  ansible_user: lookup('env', 'WIN_USER')
-  ansible_password: lookup('env', 'WIN_PASSWORD')
-
-keyed_groups:
-  - prefix: rg
-    key: resource_group
+[winrm]
+# Nothing here by default; connection settings come from the dynamic inventory.
