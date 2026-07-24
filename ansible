@@ -1,21 +1,44 @@
-[defaults]
-inventory = inventory/gov.azure_rm.yml
+---
+# Play 1 runs on the controller. Its only job is to turn "the dynamic inventory
+# returned nothing" from a silently-green run into a hard failure. Without it,
+# a typo in conditional_groups produces "skipping: no hosts matched" and
+# Spacelift reports success.
+- name: Guard against an empty target group
+  hosts: localhost
+  connection: local
+  gather_facts: false
 
-# Required. The playbook lives in playbooks/random/, so Ansible's default
-# role search path is playbooks/random/roles -- it will NOT find the repo-root
-# roles/ directory without this line.
-roles_path = roles
+  tasks:
+    - name: Fail if winrm_targets resolved to zero hosts
+      ansible.builtin.assert:
+        that:
+          - groups['winrm_targets'] | default([]) | length > 0
+        fail_msg: >-
+          Group 'winrm_targets' is empty. The playbook would report success
+          without contacting anything. Check, in order:
+          (1) conditional_groups expression in inventory/gov.azure_rm.yml
+          (2) the VM is powerstate=running and provisioning_state=succeeded,
+              since default_host_filters drops anything else
+          (3) include_vm_resource_groups / include_arc_resource_groups cover
+              the resource group the machine actually lives in
+          (4) the SPN can read that resource group in the Gov tenant
+          Diagnose with:
+          ansible-inventory -i inventory/gov.azure_rm.yml --graph
+        success_msg: >-
+          Resolved {{ groups['winrm_targets'] | length }} target(s):
+          {{ groups['winrm_targets'] | join(', ') }}
+        quiet: true
+      check_mode: false
 
-host_key_checking = False
-stdout_callback = yaml
-display_skipped_hosts = False
-retry_files_enabled = False
-interpreter_python = auto_silent
 
-[inventory]
-enable_plugins = azure.azcollection.azure_rm, constructed, ini
-# Surface plugin failures instead of quietly returning an empty inventory.
-unparsed_is_failed = True
+- name: Verify WinRM connectivity
+  hosts: winrm_targets
+  gather_facts: false
+  # One unreachable host should fail the whole run, not just get skipped.
+  any_errors_fatal: true
 
-[winrm]
-# Nothing here by default; connection settings come from the dynamic inventory.
+  roles:
+    - role: win_connectivity_check
+      win_conn_check_expected_domain: corp.example.us
+      win_conn_check_verify_transport: true
+      win_conn_check_gather_facts: true
