@@ -1,0 +1,31 @@
+plugin: azure.azcollection.azure_rm
+
+cloud_environment: AzureUSGovernment
+auth_source: env
+
+include_vm_resource_groups:
+  - rg-w
+
+exclude_host_filters:
+  - "os_profile.system != 'windows'"
+
+conditional_groups:
+  winrm_targets: "name in ['apple']"
+
+hostnames:
+  - name
+  - default
+
+hostvar_expressions:
+  ansible_host: private_ipv4_addresses | first
+  ansible_connection: "'winrm'"
+  ansible_port: 5985
+  ansible_winrm_scheme: "'http'"
+  ansible_winrm_transport: "'ntlm'"
+  ansible_winrm_message_encryption: "'auto'"
+  ansible_user: lookup('env', 'WIN_USER')
+  ansible_password: lookup('env', 'WIN_PASSWORD')
+
+keyed_groups:
+  - prefix: rg
+    key: resource_group
