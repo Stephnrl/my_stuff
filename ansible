@@ -1,15 +1,110 @@
 ---
-# Expected AD domain, lowercase (e.g. "corp.example.us").
-# Leave empty to skip the domain-membership assertion.
-win_conn_check_expected_domain: ""
+# Runs on the controller, so it fails fast with a useful message before
+# Ansible ever opens a socket. Without this you get an opaque WinRM error.
+- name: Assert connection variables resolved from inventory
+  ansible.builtin.assert:
+    that:
+      - ansible_connection | default('') == 'winrm'
+      - ansible_host is defined
+      - ansible_host | default('') | length > 0
+      - ansible_user is defined
+      - ansible_user | default('') | length > 0
+      - ansible_password is defined
+      - ansible_password | default('') | length > 0
+    fail_msg: >-
+      Connection variables did not resolve for {{ inventory_hostname }}.
+      The dynamic inventory returned this host but hostvar_expressions did not
+      populate the WinRM settings. Run:
+      ansible-inventory -i inventory/gov.azure_rm.yml --host {{ inventory_hostname }}
+      Common cause: static strings in hostvar_expressions need double quoting,
+      e.g. ansible_connection: "'winrm'" not ansible_connection: winrm
+    success_msg: "Connection variables present for {{ inventory_hostname }}"
+    quiet: true
+  check_mode: false
 
-# Assert that the authentication package Windows actually used matches
-# ansible_winrm_transport. Catches silent fallback from Kerberos to NTLM.
-win_conn_check_verify_transport: true
+- name: Assert Kerberos targets use a resolvable name rather than an IP
+  ansible.builtin.assert:
+    that:
+      - not (ansible_host | ansible.utils.ipaddr)
+    fail_msg: >-
+      ansible_host for {{ inventory_hostname }} is an IP address
+      ({{ ansible_host }}) but transport is kerberos. Kerberos cannot build an
+      SPN from an IP. Either set ansible_host to the FQDN, or set
+      ansible_winrm_kerberos_hostname_override to the FQDN in your inventory.
+    quiet: true
+  when: ansible_winrm_transport | default('ntlm') == 'kerberos'
+  check_mode: false
+  ignore_errors: "{{ not win_conn_check_verify_transport }}"
 
-# Gather a minimal set of Windows facts for the report.
-# Set false if the service account lacks WMI read rights.
-win_conn_check_gather_facts: true
+# check_mode: false makes this execute during Spacelift's plan phase, so the
+# --check run is a genuine connectivity test rather than a no-op.
+- name: Test WinRM connectivity
+  ansible.windows.win_ping:
+  register: win_conn_check_ping
+  check_mode: false
+  timeout: "{{ win_conn_check_timeout }}"
 
-# Seconds to allow for the initial win_ping before giving up.
-win_conn_check_timeout: 30
+- name: Determine authenticated identity and auth package
+  ansible.windows.win_whoami:
+  register: win_conn_check_whoami
+  check_mode: false
+
+- name: Gather minimal Windows facts
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+  register: win_conn_check_facts
+  check_mode: false
+  when: win_conn_check_gather_facts
+  failed_when: false
+
+# Windows reports what it actually negotiated. If you configured kerberos and
+# this says NTLM, something silently fell back and you want to know now.
+- name: Assert negotiated auth package matches configured transport
+  ansible.builtin.assert:
+    that:
+      - win_conn_check_whoami.authentication_package | lower
+        == (ansible_winrm_transport | default('ntlm') | lower)
+    fail_msg: >-
+      Configured transport is
+      '{{ ansible_winrm_transport | default('ntlm') }}' but Windows negotiated
+      '{{ win_conn_check_whoami.authentication_package }}'. For a
+      kerberos -> NTLM fallback, check that ansible_user is UPN form with an
+      uppercase realm and that the worker can reach a KDC on 88/tcp+udp.
+    success_msg: >-
+      Negotiated {{ win_conn_check_whoami.authentication_package }} as expected
+    quiet: true
+  when:
+    - win_conn_check_verify_transport
+    - win_conn_check_whoami.authentication_package is defined
+  check_mode: false
+
+- name: Assert host is joined to the expected domain
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.windows_domain | default('') | lower
+        == win_conn_check_expected_domain | lower
+    fail_msg: >-
+      {{ inventory_hostname }} reports domain
+      '{{ ansible_facts.windows_domain | default('none') }}',
+      expected '{{ win_conn_check_expected_domain }}'.
+    quiet: true
+  when:
+    - win_conn_check_expected_domain | length > 0
+    - win_conn_check_gather_facts
+    - ansible_facts.windows_domain is defined
+  check_mode: false
+
+- name: Connectivity report
+  ansible.builtin.debug:
+    msg:
+      - "host              : {{ inventory_hostname }}"
+      - "address           : {{ ansible_host }}"
+      - "transport         : {{ ansible_winrm_transport | default('ntlm') }} over {{ ansible_winrm_scheme | default('http') }}:{{ ansible_port | default(5985) }}"
+      - "negotiated auth   : {{ win_conn_check_whoami.authentication_package | default('unknown') }}"
+      - "authenticated as  : {{ win_conn_check_whoami.upn | default(win_conn_check_whoami.account.account_name | default('unknown')) }}"
+      - "login type        : {{ win_conn_check_whoami.login_type | default('unknown') }}"
+      - "os                : {{ ansible_facts.os_name | default('not gathered') }}"
+      - "domain            : {{ ansible_facts.windows_domain | default('not gathered') }}"
+      - "azure resource    : {{ resource_type | default('static inventory') }}"
+  check_mode: false
