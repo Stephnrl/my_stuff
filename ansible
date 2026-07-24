@@ -17,7 +17,10 @@ hostnames:
   - default
 
 hostvar_expressions:
-  ansible_host: private_ipv4_addresses | first
+  ansible_host: >-
+    (name ~ '.corp.example.us')
+    if resource_type == 'Microsoft.HybridCompute/machines'
+    else (private_ipv4_addresses | first)
   ansible_connection: "'winrm'"
   ansible_port: 5985
   ansible_winrm_scheme: "'http'"
