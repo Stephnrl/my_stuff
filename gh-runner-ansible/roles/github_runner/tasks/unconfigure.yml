@@ -1,0 +1,64 @@
+---
+# Unregisters ONE instance. Requires: runner (loop var).
+# Uses _ghr_remove_token when available; otherwise falls back to a local-only
+# removal, which leaves an offline entry in GitHub that the next registration
+# reclaims via --replace.
+
+- name: "[{{ runner.name }}] Resolve the instance directory"
+  ansible.builtin.set_fact:
+    _ghr_dir: "{{ github_runner_base_dir }}\\{{ runner.id }}"
+
+- name: "[{{ runner.name }}] Look for the service marker file"
+  ansible.windows.win_stat:
+    path: "{{ _ghr_dir }}\\.service"
+  register: _ghr_service_file
+
+- name: "[{{ runner.name }}] Read the Windows service name"
+  ansible.windows.win_shell: Get-Content -Raw -LiteralPath '.service'
+  args:
+    chdir: "{{ _ghr_dir }}"
+  register: _ghr_service_raw
+  changed_when: false
+  when: _ghr_service_file.stat.exists
+
+- name: "[{{ runner.name }}] Set the service name fact"
+  ansible.builtin.set_fact:
+    _ghr_service_name: "{{ _ghr_service_raw.stdout | default('') | trim | regex_replace('\\.service$', '') }}"
+
+- name: "[{{ runner.name }}] Stop the runner service"
+  ansible.windows.win_service:
+    name: "{{ _ghr_service_name }}"
+    state: stopped
+  when: _ghr_service_name | length > 0
+  failed_when: false
+
+- name: "[{{ runner.name }}] Unregister from GitHub"
+  ansible.windows.win_shell: .\config.cmd remove --token '{{ _ghr_remove_token | replace("'", "''") }}'
+  args:
+    chdir: "{{ _ghr_dir }}"
+  register: _ghr_remove_result
+  changed_when: _ghr_remove_result.rc == 0
+  failed_when: false
+  no_log: "{{ not (github_runner_debug_commands | bool) }}"
+  when: _ghr_remove_token is defined and (_ghr_remove_token | length > 0)
+
+- name: "[{{ runner.name }}] Fall back to a local-only removal"
+  ansible.windows.win_shell: .\config.cmd remove --local
+  args:
+    chdir: "{{ _ghr_dir }}"
+  register: _ghr_remove_local
+  changed_when: _ghr_remove_local.rc == 0
+  when: >-
+    (_ghr_remove_token is not defined)
+    or (_ghr_remove_token | length == 0)
+    or (_ghr_remove_result.rc | default(1) != 0)
+
+- name: "[{{ runner.name }}] Confirm the local configuration is gone"
+  ansible.windows.win_stat:
+    path: "{{ _ghr_dir }}\\.runner"
+  register: _ghr_post_remove
+
+- name: "[{{ runner.name }}] Fail if .runner survived removal"
+  ansible.builtin.fail:
+    msg: "Could not unconfigure '{{ runner.name }}'; {{ _ghr_dir }}\\.runner still exists."
+  when: _ghr_post_remove.stat.exists

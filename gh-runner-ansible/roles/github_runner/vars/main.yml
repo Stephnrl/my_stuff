@@ -1,0 +1,22 @@
+---
+_ghr_api_scope_path:
+  enterprise: "enterprises/{{ github_runner_enterprise }}"
+  organization: "orgs/{{ github_runner_org }}"
+  repository: "repos/{{ github_runner_repo }}"
+
+_ghr_config_url_map:
+  enterprise: "{{ github_runner_server_url }}/enterprises/{{ github_runner_enterprise }}"
+  organization: "{{ github_runner_server_url }}/{{ github_runner_org }}"
+  repository: "{{ github_runner_server_url }}/{{ github_runner_repo }}"
+
+_ghr_config_url: "{{ _ghr_config_url_map[github_runner_scope] }}"
+_ghr_api_base: "{{ github_runner_api_url }}/{{ _ghr_api_scope_path[github_runner_scope] }}/actions/runners"
+_ghr_registration_token_url: "{{ _ghr_api_base }}/registration-token"
+_ghr_remove_token_url: "{{ _ghr_api_base }}/remove-token"
+
+_ghr_api_headers:
+  Accept: "application/vnd.github+json"
+  Authorization: "Bearer {{ github_runner_api_token }}"
+  X-GitHub-Api-Version: "2022-11-28"
+
+_ghr_valid_actions: ['install', 'reregister', 'remove', 'upgrade']

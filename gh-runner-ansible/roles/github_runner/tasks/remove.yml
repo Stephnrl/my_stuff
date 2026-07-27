@@ -1,0 +1,21 @@
+---
+- name: Obtain a removal token
+  ansible.builtin.include_tasks: token.yml
+  vars:
+    _ghr_want_remove: true
+
+- name: Unregister each instance
+  ansible.builtin.include_tasks: unconfigure.yml
+  loop: "{{ github_runner_instances }}"
+  loop_control:
+    loop_var: runner
+    label: "{{ runner.id }} -> {{ runner.name }}"
+
+- name: Delete the instance directories
+  ansible.windows.win_file:
+    path: "{{ github_runner_base_dir }}\\{{ item.id }}"
+    state: absent
+  loop: "{{ github_runner_instances }}"
+  loop_control:
+    label: "{{ item.id }}"
+  when: github_runner_purge_dir_on_remove | bool

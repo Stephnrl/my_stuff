@@ -1,0 +1,47 @@
+---
+- name: "[{{ runner.name }}] Resolve the instance directory"
+  ansible.builtin.set_fact:
+    _ghr_dir: "{{ github_runner_base_dir }}\\{{ runner.id }}"
+
+- name: "[{{ runner.name }}] Read the installed version"
+  ansible.windows.win_shell: |
+    $p = Join-Path (Get-Location) 'bin\Runner.Listener.exe'
+    if (Test-Path -LiteralPath $p) {
+      (Get-Item -LiteralPath $p).VersionInfo.ProductVersion
+    } else { '' }
+  args:
+    chdir: "{{ _ghr_dir }}"
+  register: _ghr_installed_version
+  changed_when: false
+
+- name: "[{{ runner.name }}] Upgrade to {{ _ghr_version }}"
+  # Runner.Listener.exe reports ProductVersion as 2.328.0.0; compare on major.minor.patch.
+  when: ((_ghr_installed_version.stdout | trim).split('.')[0:3] | join('.')) != _ghr_version
+  block:
+    - name: "[{{ runner.name }}] Read the Windows service name"
+      ansible.windows.win_shell: Get-Content -Raw -LiteralPath '.service'
+      args:
+        chdir: "{{ _ghr_dir }}"
+      register: _ghr_up_svc_raw
+      changed_when: false
+
+    - name: "[{{ runner.name }}] Set the service name fact"
+      ansible.builtin.set_fact:
+        _ghr_service_name: "{{ _ghr_up_svc_raw.stdout | trim | regex_replace('\\.service$', '') }}"
+
+    - name: "[{{ runner.name }}] Stop the runner service"
+      ansible.windows.win_service:
+        name: "{{ _ghr_service_name }}"
+        state: stopped
+
+    - name: "[{{ runner.name }}] Overlay the new runner package"
+      community.windows.win_unzip:
+        src: "{{ _ghr_zip_path }}"
+        dest: "{{ _ghr_dir }}"
+  always:
+    - name: "[{{ runner.name }}] Start the runner service"
+      ansible.windows.win_service:
+        name: "{{ _ghr_service_name }}"
+        state: started
+        start_mode: auto
+      when: _ghr_service_name is defined and (_ghr_service_name | length > 0)

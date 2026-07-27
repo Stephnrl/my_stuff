@@ -1,0 +1,11 @@
+---
+# Rolling upgrade for fleets pinned with --disableupdate.
+#
+#   ansible-playbook playbooks/github_runner/upgrade.yml -e github_runner_version=2.328.0
+- name: Upgrade GitHub Actions runner binaries
+  hosts: "{{ target | default('gh_runners') }}"
+  gather_facts: true
+  serial: "{{ batch | default(1) }}"
+  roles:
+    - role: github_runner
+      github_runner_action: upgrade

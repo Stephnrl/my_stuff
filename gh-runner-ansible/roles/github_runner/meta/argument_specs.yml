@@ -1,0 +1,93 @@
+---
+argument_specs:
+  main:
+    short_description: Manage GitHub Actions self-hosted runners on Windows
+    description:
+      - Single entry point. Set github_runner_action to choose the operation.
+    options:
+      github_runner_action:
+        type: str
+        default: install
+        choices: [install, reregister, remove, upgrade]
+        description: Operation to perform.
+      github_runner_scope:
+        type: str
+        default: enterprise
+        choices: [enterprise, organization, repository]
+      github_runner_enterprise:
+        type: str
+        description: Enterprise slug. Required when scope is enterprise.
+      github_runner_org:
+        type: str
+        description: Organization login. Required when scope is organization.
+      github_runner_repo:
+        type: str
+        description: owner/repo. Required when scope is repository.
+      github_runner_api_token:
+        type: str
+        description:
+          - Token used to mint registration and removal tokens.
+          - At enterprise scope this must be a classic PAT with manage_runners:enterprise.
+      github_runner_registration_token:
+        type: str
+        description: Pre-minted registration token. Skips the API call.
+      github_runner_remove_token:
+        type: str
+        description: Pre-minted removal token. Skips the API call.
+      github_runner_api_delegate:
+        type: str
+        default: control_node
+        choices: [control_node, target]
+      github_runner_base_dir:
+        type: str
+        default: 'D:\enterprise-cloud-runners'
+      github_runner_work_dir:
+        type: str
+        default: '_work'
+      github_runner_instances:
+        type: list
+        elements: dict
+        required: true
+        description: One entry per runner directory under github_runner_base_dir.
+        options:
+          id:
+            type: str
+            required: true
+            description: Directory name under the base dir, e.g. '1'.
+          name:
+            type: str
+            required: true
+            description: Runner name as it appears in GitHub. Must be unique in the scope.
+          labels:
+            type: list
+            elements: str
+          runner_group:
+            type: str
+      github_runner_service_account:
+        type: str
+        description: 'DOMAIN\svc-acct or .\localuser. Empty means NETWORK SERVICE.'
+      github_runner_service_password:
+        type: str
+      github_runner_service_credentials_method:
+        type: str
+        default: win_service
+        choices: [win_service, config_cmd]
+      github_runner_version:
+        type: str
+        default: latest
+      github_runner_arch:
+        type: str
+        default: x64
+        choices: [x64, arm64]
+      github_runner_disable_update:
+        type: bool
+        default: true
+      github_runner_force_reconfigure:
+        type: bool
+        default: false
+      github_runner_purge_dir_on_remove:
+        type: bool
+        default: false
+      github_runner_debug_commands:
+        type: bool
+        default: false

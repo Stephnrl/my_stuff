@@ -1,0 +1,64 @@
+---
+# Registers ONE instance. Requires: runner (loop var), _ghr_registration_token.
+# Safe to call against an already-configured directory: it unconfigures first,
+# because config.cmd refuses to run when .runner is present.
+
+- name: "[{{ runner.name }}] Resolve the instance directory"
+  ansible.builtin.set_fact:
+    _ghr_dir: "{{ github_runner_base_dir }}\\{{ runner.id }}"
+
+- name: "[{{ runner.name }}] Check for an existing registration"
+  ansible.windows.win_stat:
+    path: "{{ _ghr_dir }}\\.runner"
+  register: _ghr_existing
+
+- name: "[{{ runner.name }}] Unconfigure before re-registering"
+  ansible.builtin.include_tasks: unconfigure.yml
+  when: _ghr_existing.stat.exists
+
+- name: "[{{ runner.name }}] Assemble config.cmd arguments"
+  ansible.builtin.set_fact:
+    _ghr_cfg_args: >-
+      {{
+        ['--unattended', '--replace']
+        + ['--url',   ("'" ~ (_ghr_config_url          | replace("'", "''")) ~ "'")]
+        + ['--token', ("'" ~ (_ghr_registration_token  | replace("'", "''")) ~ "'")]
+        + ['--name',  ("'" ~ (runner.name              | replace("'", "''")) ~ "'")]
+        + ['--work',  ("'" ~ (github_runner_work_dir   | replace("'", "''")) ~ "'")]
+        + (['--labels', ("'" ~ ((runner.labels | default(github_runner_default_labels)) | join(',') | replace("'", "''")) ~ "'")]
+           if ((runner.labels | default(github_runner_default_labels)) | length > 0) else [])
+        + (['--runnergroup', ("'" ~ ((runner.runner_group | default(github_runner_default_group)) | replace("'", "''")) ~ "'")]
+           if (github_runner_scope != 'repository') else [])
+        + (['--disableupdate']     if (github_runner_disable_update    | bool) else [])
+        + (['--no-default-labels'] if (github_runner_no_default_labels | bool) else [])
+        + (['--ephemeral']         if (github_runner_ephemeral         | bool) else [])
+        + (['--runasservice']      if (github_runner_run_as_service    | bool) else [])
+        + (['--windowslogonaccount',  ("'" ~ (github_runner_service_account  | replace("'", "''")) ~ "'"),
+            '--windowslogonpassword', ("'" ~ (github_runner_service_password | replace("'", "''")) ~ "'")]
+           if ((github_runner_run_as_service | bool)
+               and (github_runner_service_account | length > 0)
+               and (github_runner_service_credentials_method == 'config_cmd')) else [])
+      }}
+  no_log: "{{ not (github_runner_debug_commands | bool) }}"
+
+- name: "[{{ runner.name }}] Run config.cmd"
+  block:
+    - name: "[{{ runner.name }}] Register the runner with GitHub"
+      ansible.windows.win_shell: .\config.cmd {{ _ghr_cfg_args | join(' ') }}
+      args:
+        chdir: "{{ _ghr_dir }}"
+      register: _ghr_config_result
+      changed_when: true
+      no_log: "{{ not (github_runner_debug_commands | bool) }}"
+  rescue:
+    - name: "[{{ runner.name }}] Report a sanitised failure"
+      ansible.builtin.fail:
+        msg: >-
+          config.cmd failed for '{{ runner.name }}' in {{ _ghr_dir }}.
+          Output is suppressed because the command line carries secrets.
+          Inspect {{ _ghr_dir }}\_diag on the host, or re-run this play with
+          -e github_runner_debug_commands=true from a workstation (never CI).
+
+- name: "[{{ runner.name }}] Apply the service identity and start the service"
+  ansible.builtin.include_tasks: service.yml
+  when: github_runner_run_as_service | bool
