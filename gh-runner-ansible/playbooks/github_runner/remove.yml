@@ -1,0 +1,29 @@
+---
+# DESTRUCTIVE. Unregisters runners from GitHub.
+#
+# Fails during the plan phase unless GH_RUNNER_CONFIRM_REMOVE=yes is set for
+# that specific run, so a stray trigger costs nothing.
+#
+# Required:
+#   GH_RUNNER_CONFIRM_REMOVE  must be "yes"
+# Optional:
+#   GH_RUNNER_ONLY            comma-separated instance ids - scope it down
+#   GH_RUNNER_PURGE_DIR       "true" to also delete the directory on disk
+- name: Remove GitHub Actions self-hosted runners
+  hosts: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_TARGET') | default('gh_runners', true) }}"
+  gather_facts: true
+  pre_tasks:
+    - name: Require an explicit confirmation for this run
+      ansible.builtin.assert:
+        that: (github_runner_confirm_remove | default('') | string | lower) == 'yes'
+        fail_msg: >-
+          Refusing to unregister runners. Trigger this stack with a custom
+          runtime config setting GH_RUNNER_CONFIRM_REMOVE=yes, and consider
+          scoping the blast radius with GH_RUNNER_ONLY.
+        quiet: true
+      check_mode: false
+  roles:
+    - role: github_runner
+      github_runner_action: remove
+      github_runner_purge_dir_on_remove: >-
+        {{ (lookup('ansible.builtin.env', 'GH_RUNNER_PURGE_DIR') | default('false', true)) | bool }}

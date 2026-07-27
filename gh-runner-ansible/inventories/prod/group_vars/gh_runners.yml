@@ -1,0 +1,57 @@
+---
+# ---------------------------------------------------------------------------
+# Connection
+# ---------------------------------------------------------------------------
+ansible_connection: psrp
+ansible_port: 5986
+ansible_psrp_protocol: https
+ansible_psrp_auth: negotiate
+# Set to 'validate' once you trust the WinRM listener certificate.
+ansible_psrp_cert_validation: ignore
+ansible_user: "{{ lookup('ansible.builtin.env', 'ANSIBLE_WIN_USER') }}"
+ansible_password: "{{ lookup('ansible.builtin.env', 'ANSIBLE_WIN_PASSWORD') }}"
+
+# ---------------------------------------------------------------------------
+# GitHub scope
+# ---------------------------------------------------------------------------
+github_runner_scope: enterprise
+github_runner_enterprise: my-enterprise-slug
+
+# Classic PAT with manage_runners:enterprise (enterprise scope requires classic;
+# fine-grained PATs and GitHub App tokens are NOT accepted at enterprise level).
+github_runner_api_token: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_API_TOKEN') }}"
+
+# ---------------------------------------------------------------------------
+# Placement + service identity
+# ---------------------------------------------------------------------------
+github_runner_base_dir: 'D:\enterprise-cloud-runners'
+github_runner_service_account: 'MYDOMAIN\svc-gh-runner'
+github_runner_service_password: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_SVC_PASSWORD') }}"
+
+# ---------------------------------------------------------------------------
+# Instances -> D:\enterprise-cloud-runners\1 .. \4
+# ---------------------------------------------------------------------------
+github_runner_default_labels: ['windows', 'x64', 'prod']
+github_runner_default_group: 'windows-prod'
+
+github_runner_instances:
+  - id: '1'
+    name: "{{ inventory_hostname | lower }}-1"
+  - id: '2'
+    name: "{{ inventory_hostname | lower }}-2"
+  - id: '3'
+    name: "{{ inventory_hostname | lower }}-3"
+  - id: '4'
+    name: "{{ inventory_hostname | lower }}-4"
+    labels: ['windows', 'x64', 'prod', 'gpu']   # per-instance override
+    runner_group: 'windows-gpu'
+
+# Equivalent generated form if you would rather drive it off a count:
+#
+# github_runner_count: 4
+# github_runner_instances: >-
+#   {{ range(1, github_runner_count + 1)
+#      | map('string')
+#      | map('community.general.dict_kv', 'id')
+#      | list }}
+# ...then set name via github_runner_name_template in defaults.

@@ -1,0 +1,15 @@
+---
+# Converge: lay down any missing runner instance and register it.
+# Idempotent - instances that already have a .runner file are skipped.
+#
+# Optional per-run overrides (Spacelift: Trigger with custom runtime config):
+#   GH_RUNNER_ONLY    comma-separated instance ids, e.g. "1,3"
+#   GH_RUNNER_VERSION runner package version, e.g. "2.328.0"
+#   GH_RUNNER_BATCH   hosts per wave, e.g. "1"
+- name: Install GitHub Actions self-hosted runners
+  hosts: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_TARGET') | default('gh_runners', true) }}"
+  gather_facts: true
+  serial: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_BATCH') | default('100%', true) }}"
+  roles:
+    - role: github_runner
+      github_runner_action: install

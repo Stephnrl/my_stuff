@@ -1,0 +1,52 @@
+---
+# Resolves the runner version, downloads the zip once per host into the staging
+# directory. Sets _ghr_version and _ghr_zip_path.
+
+- name: Resolve the latest actions/runner release
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/actions/runner/releases/latest"
+    headers:
+      Accept: "application/vnd.github+json"
+      X-GitHub-Api-Version: "2022-11-28"
+    status_code: [200]
+  delegate_to: localhost
+  vars:
+    ansible_connection: local
+  run_once: true
+  register: _ghr_release
+  check_mode: false
+  when: github_runner_version == 'latest'
+
+- name: Set the effective runner version
+  ansible.builtin.set_fact:
+    _ghr_version: >-
+      {{ (_ghr_release.json.tag_name | regex_replace('^v', ''))
+         if github_runner_version == 'latest'
+         else (github_runner_version | regex_replace('^v', '')) }}
+
+- name: Compute package name and source URL
+  ansible.builtin.set_fact:
+    _ghr_zip_name: "actions-runner-win-{{ github_runner_arch }}-{{ _ghr_version }}.zip"
+    _ghr_zip_url: >-
+      {{ github_runner_download_url if (github_runner_download_url | length > 0)
+         else 'https://github.com/actions/runner/releases/download/v' ~ _ghr_version ~
+              '/actions-runner-win-' ~ github_runner_arch ~ '-' ~ _ghr_version ~ '.zip' }}
+
+- name: Ensure the staging directory exists
+  ansible.windows.win_file:
+    path: "{{ github_runner_stage_dir }}"
+    state: directory
+
+- name: Download the runner package
+  ansible.windows.win_get_url:
+    url: "{{ _ghr_zip_url }}"
+    dest: "{{ github_runner_stage_dir }}\\{{ _ghr_zip_name }}"
+    force: false
+  register: _ghr_download
+  until: _ghr_download is succeeded
+  retries: 3
+  delay: 10
+
+- name: Record the staged package path
+  ansible.builtin.set_fact:
+    _ghr_zip_path: "{{ github_runner_stage_dir }}\\{{ _ghr_zip_name }}"

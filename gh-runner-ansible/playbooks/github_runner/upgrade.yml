@@ -1,0 +1,15 @@
+---
+# Rolling binary upgrade for fleets pinned with --disableupdate.
+# Defaults to one host at a time so the fleet never goes fully dark.
+#
+# Optional per-run overrides:
+#   GH_RUNNER_VERSION target version, e.g. "2.328.0" (default: latest release)
+#   GH_RUNNER_ONLY    comma-separated instance ids
+#   GH_RUNNER_BATCH   hosts per wave (default: 1)
+- name: Upgrade GitHub Actions runner binaries
+  hosts: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_TARGET') | default('gh_runners', true) }}"
+  gather_facts: true
+  serial: "{{ lookup('ansible.builtin.env', 'GH_RUNNER_BATCH') | default(1, true) }}"
+  roles:
+    - role: github_runner
+      github_runner_action: upgrade

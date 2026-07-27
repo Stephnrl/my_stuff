@@ -1,0 +1,70 @@
+---
+- name: Assert the requested action is supported
+  ansible.builtin.assert:
+    that:
+      - github_runner_action in _ghr_valid_actions
+    fail_msg: >-
+      github_runner_action must be one of {{ _ghr_valid_actions | join(', ') }},
+      got '{{ github_runner_action }}'.
+    quiet: true
+
+- name: Assert the GitHub scope is fully specified
+  ansible.builtin.assert:
+    that:
+      - github_runner_scope in ['enterprise', 'organization', 'repository']
+      - (github_runner_scope != 'enterprise')   or (github_runner_enterprise | length > 0)
+      - (github_runner_scope != 'organization') or (github_runner_org | length > 0)
+      - (github_runner_scope != 'repository')   or (github_runner_repo is search('/'))
+    fail_msg: >-
+      Set github_runner_scope and the matching identifier
+      (github_runner_enterprise / github_runner_org / github_runner_repo as owner/repo).
+    quiet: true
+
+- name: Assert at least one instance is defined
+  ansible.builtin.assert:
+    that:
+      - github_runner_instances | length > 0
+      - github_runner_instances | map(attribute='id')   | list | length == github_runner_instances | length
+      - github_runner_instances | map(attribute='name') | list | length == github_runner_instances | length
+      - (github_runner_instances | map(attribute='id') | unique | list | length) == (github_runner_instances | length)
+    fail_msg: "github_runner_instances must be a non-empty list of dicts with unique 'id' and a 'name'."
+    quiet: true
+
+- name: Assert we can obtain the tokens this action needs
+  ansible.builtin.assert:
+    that:
+      - (github_runner_api_token | length > 0)
+        or (github_runner_registration_token | length > 0 and github_runner_action == 'install')
+        or (github_runner_registration_token | length > 0 and github_runner_remove_token | length > 0)
+        or (github_runner_action == 'upgrade')
+    fail_msg: >-
+      Provide github_runner_api_token so the role can mint tokens, or supply
+      github_runner_registration_token (and github_runner_remove_token for
+      reregister/remove) directly.
+    quiet: true
+
+- name: Assert a password accompanies the service account
+  ansible.builtin.assert:
+    that:
+      - (github_runner_service_account | length == 0) or (github_runner_service_password | length > 0)
+    fail_msg: "github_runner_service_account is set but github_runner_service_password is empty."
+    quiet: true
+
+- name: Warn when command logging is enabled
+  ansible.builtin.debug:
+    msg: >-
+      WARNING - github_runner_debug_commands is true, so registration tokens and
+      the service account password will appear in the Ansible output. Do not use
+      this in Spacelift or any shared log.
+  when: github_runner_debug_commands | bool
+
+- name: Assert every requested instance id exists
+  ansible.builtin.assert:
+    that:
+      - (_ghr_only_ids | difference(github_runner_instances | map(attribute='id') | list)) | length == 0
+    fail_msg: >-
+      Unknown instance id(s):
+      {{ _ghr_only_ids | difference(github_runner_instances | map(attribute='id') | list) | join(', ') }}.
+      Known ids: {{ github_runner_instances | map(attribute='id') | join(', ') }}.
+    quiet: true
+  when: _ghr_only_ids | length > 0
