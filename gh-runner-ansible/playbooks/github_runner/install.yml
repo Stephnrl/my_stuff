@@ -1,8 +1,0 @@
----
-- name: Install GitHub Actions self-hosted runners
-  hosts: "{{ target | default('gh_runners') }}"
-  gather_facts: true
-  any_errors_fatal: false
-  roles:
-    - role: github_runner
-      github_runner_action: install

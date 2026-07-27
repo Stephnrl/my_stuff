@@ -1,8 +1,0 @@
----
-- name: Validate inputs
-  ansible.builtin.include_tasks: preflight.yml
-  tags: ['always']
-
-- name: "Dispatch action: {{ github_runner_action }}"
-  ansible.builtin.include_tasks: "{{ github_runner_action }}.yml"
-  tags: ['always']
