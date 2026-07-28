@@ -37,3 +37,28 @@ local parsers = {
   'terraform', 'hcl',
   'json', 'yaml', 'toml', 'dockerfile',
 }
+
+
+do
+  local function term_split(split, cmd)
+    vim.cmd(split)
+    vim.cmd(cmd and ('terminal ' .. cmd) or 'terminal')
+    vim.cmd 'startinsert'
+  end
+
+  vim.keymap.set('n', '<leader>tv', function() term_split 'vsplit' end,
+    { desc = '[T]erminal [V]ertical split' })
+  vim.keymap.set('n', '<leader>ts', function() term_split 'botright split | resize 15' end,
+    { desc = '[T]erminal [S]plit below' })
+  vim.keymap.set('n', '<leader>tc', function() term_split('vsplit', 'copilot') end,
+    { desc = '[T]erminal [C]opilot CLI' })
+
+  vim.api.nvim_create_autocmd('TermOpen', {
+    group = vim.api.nvim_create_augroup('custom-term-open', { clear = true }),
+    callback = function()
+      vim.opt_local.number = false
+      vim.opt_local.relativenumber = false
+      vim.opt_local.signcolumn = 'no'
+    end,
+  })
+end
