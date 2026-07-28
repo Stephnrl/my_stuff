@@ -28,3 +28,12 @@ formatters_by_ft = {
   ['terraform-vars'] = { 'terraform_fmt' },
   hcl = { 'packer_fmt' },
 },
+
+local parsers = {
+  'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline',
+  'query', 'vim', 'vimdoc',
+  'go', 'gomod', 'gosum', 'gowork',
+  'python',
+  'terraform', 'hcl',
+  'json', 'yaml', 'toml', 'dockerfile',
+}
