@@ -1,0 +1,14 @@
+  powershell_es = (function()
+    local bundle = vim.fn.stdpath 'data' .. '/mason/packages/powershell-editor-services'
+    local tmp = vim.fn.stdpath 'cache'
+    local command = ("& '%s/PowerShellEditorServices/Start-EditorServices.ps1' "
+      .. "-BundledModulesPath '%s' -LogPath '%s/pses.log' "
+      .. "-SessionDetailsPath '%s/pses.session.json' -FeatureFlags @() "
+      .. "-AdditionalModules @() -HostName nvim -HostProfileId 0 "
+      .. "-HostVersion 1.0.0 -Stdio -LogLevel Normal"):format(bundle, bundle, tmp, tmp)
+    return {
+      cmd = { 'pwsh', '-NoLogo', '-NoProfile', '-Command', command },
+      filetypes = { 'ps1', 'psm1', 'psd1' },
+      settings = { powershell = { codeFormatting = { Preset = 'OTBS' } } },
+    }
+  end)(),
