@@ -12,3 +12,19 @@
       settings = { powershell = { codeFormatting = { Preset = 'OTBS' } } },
     }
   end)(),
+
+
+vim.list_extend(ensure_installed, {
+  'goimports',
+  'gofumpt',
+  'tflint',
+})
+
+formatters_by_ft = {
+  lua = { 'stylua' },
+  go = { 'goimports', 'gofumpt' },
+  python = { 'ruff_organize_imports', 'ruff_format' },
+  terraform = { 'terraform_fmt' },
+  ['terraform-vars'] = { 'terraform_fmt' },
+  hcl = { 'packer_fmt' },
+},
