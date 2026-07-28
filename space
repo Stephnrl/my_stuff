@@ -1,41 +1,76 @@
-Creates a Spacelift stack that runs a single Ansible playbook from the
-`ansible-playbooks` repository against Azure Government.
+inputs:
+  - id: playbook
+    name: Playbook
+    description: Which playbook this stack will run, relative to the repo root
+    type: select
+    options:                        # CHANGE ME — your real playbook paths
+      - site.yml
+      - patching/monthly.yml
+      - hardening/stig.yml
+    validations:
+      required: true
 
-## Before you deploy
+  - id: environment
+    name: Environment
+    description: Target environment. Prod requires manual approval before each run.
+    type: select
+    options: [dev, test, prod]
+    default: dev
+    validations:
+      required: true
 
-Make sure the space you're deploying into matches your team. The service
-principal your playbook authenticates with is scoped to the space, so
-deploying into the wrong one will fail at Azure login even though the
-stack itself is created successfully.
+  - id: name_suffix
+    name: Stack identifier
+    description: Short name for this stack, e.g. "web-tier" or "db-patching"
+    type: short_text
+    validations:
+      required: true
+      min_length: 3
+      max_length: 30
+      pattern: "^[a-z0-9-]+$"
 
-## Inputs
+maps:
+  dev:
+    autodeploy: true
+    subscription_id: 00000000-0000-0000-0000-0000000000dev   # CHANGE ME
+  test:
+    autodeploy: false
+    subscription_id: 00000000-0000-0000-0000-000000000test   # CHANGE ME
+  prod:
+    autodeploy: false
+    subscription_id: 00000000-0000-0000-0000-000000000prod   # CHANGE ME
 
-**Playbook** — the playbook this stack runs. One stack runs one playbook.
-If you need three playbooks, deploy this template three times.
+stacks:
+  - key: ansible
+    name: ansible-${{ inputs.name_suffix }}-${{ inputs.environment }}
+    description: Runs ${{ inputs.playbook }} against ${{ inputs.environment }}
+    labels:
+      - ansible
+      - env/${{ inputs.environment }}
+    autodeploy: ${{ maps[inputs.environment].autodeploy }}
+    administrative: false
+    worker_pool: 01JXXXXXXXXXXXXXXXXXXXXXXX                  # CHANGE ME
 
-**Environment** — sets the target subscription and the deploy behaviour:
+    vcs:
+      provider: GITHUB
+      namespace: your-org                                    # CHANGE ME
+      repository: ansible-playbooks                          # CHANGE ME
+      reference:
+        value: main
+        type: branch
 
-| Environment | Runs deploy automatically? |
-|---|---|
-| dev  | Yes, on every merge to `main` |
-| test | No, someone confirms each run |
-| prod | No, someone confirms each run |
+    vendor:
+      ansible:
+        playbook: ${{ inputs.playbook }}
 
-**Stack identifier** — a short name describing what this stack does, not
-which playbook it runs. Lowercase letters, numbers and hyphens only.
-The full stack name is generated as `ansible-<identifier>-<environment>`,
-so `web-tier` in dev becomes `ansible-web-tier-dev`.
+    environment:
+      variables:
+        - name: ARM_SUBSCRIPTION_ID
+          value: ${{ maps[inputs.environment].subscription_id }}
+        - name: ANSIBLE_CONFIG
+          value: ansible.cfg
 
-## After you deploy
-
-The stack appears immediately but does not run until the next push to
-`main`, or until you trigger a run manually from the stack page.
-
-Runner image, Azure credentials and worker pool are all managed centrally.
-You don't need to configure them, and they aren't editable on the created
-stack — that's intentional. If you need something changed, it happens
-through this template.
-
-## Getting help
-
-Post in #platform-engineering. Include the deployment name and the run URL.
+    attachments:
+      contexts:
+        - id: azure-gov-oidc                                 # CHANGE ME
+          priority: 0
