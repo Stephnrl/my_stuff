@@ -1,0 +1,41 @@
+Creates a Spacelift stack that runs a single Ansible playbook from the
+`ansible-playbooks` repository against Azure Government.
+
+## Before you deploy
+
+Make sure the space you're deploying into matches your team. The service
+principal your playbook authenticates with is scoped to the space, so
+deploying into the wrong one will fail at Azure login even though the
+stack itself is created successfully.
+
+## Inputs
+
+**Playbook** — the playbook this stack runs. One stack runs one playbook.
+If you need three playbooks, deploy this template three times.
+
+**Environment** — sets the target subscription and the deploy behaviour:
+
+| Environment | Runs deploy automatically? |
+|---|---|
+| dev  | Yes, on every merge to `main` |
+| test | No, someone confirms each run |
+| prod | No, someone confirms each run |
+
+**Stack identifier** — a short name describing what this stack does, not
+which playbook it runs. Lowercase letters, numbers and hyphens only.
+The full stack name is generated as `ansible-<identifier>-<environment>`,
+so `web-tier` in dev becomes `ansible-web-tier-dev`.
+
+## After you deploy
+
+The stack appears immediately but does not run until the next push to
+`main`, or until you trigger a run manually from the stack page.
+
+Runner image, Azure credentials and worker pool are all managed centrally.
+You don't need to configure them, and they aren't editable on the created
+stack — that's intentional. If you need something changed, it happens
+through this template.
+
+## Getting help
+
+Post in #platform-engineering. Include the deployment name and the run URL.
