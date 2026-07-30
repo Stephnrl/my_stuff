@@ -1,0 +1,1 @@
+curl -sk https://github-nonprod.abc.com/saml/metadata | python3 -c "import sys,xml.dom.minidom as m; print(m.parseString(sys.stdin.read()).toprettyxml()[:800])"
