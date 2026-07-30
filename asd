@@ -1,2 +1,5 @@
-az account show --query "{tenant:tenantId, user:user.name}"
-az account get-access-token --resource-type ms-graph --query expiresOn
+Connect-MgGraph -Environment USGov -Scopes "Application.ReadWrite.All"
+# USGovDoD for L5
+
+$sp = Get-MgServicePrincipal -Filter "appId eq '<appId>'"
+Update-MgServicePrincipal -ServicePrincipalId $sp.Id -PreferredSingleSignOnMode "saml"
