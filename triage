@@ -1,0 +1,56 @@
+---
+on:
+  issues:
+    types: [opened]
+
+engine: copilot
+
+permissions:
+  contents: read
+  issues: read
+  actions: read
+
+runs-on: [self-hosted, linux, x64]
+runs-on-slim: [self-hosted, linux, x64]
+
+tools:
+  github:
+    toolsets: [default, projects]
+    github-app:
+      client-id: ${{ vars.APP_CLIENT_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      owner: "YOUR-ORG"
+      repositories: ["*"]
+
+safe-outputs:
+  github-app:
+    client-id: ${{ vars.APP_CLIENT_ID }}
+    private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    owner: "YOUR-ORG"
+  update-project:
+    project: "https://github.com/orgs/YOUR-ORG/projects/1"
+    max: 1
+  add-comment:
+    max: 1
+---
+
+# Project Triage
+
+A new issue was opened. Read it, then add it to the project board and set its fields.
+
+Always include the full project URL in the `update_project` call:
+`https://github.com/orgs/YOUR-ORG/projects/1`
+
+Set fields only from these exact values — never invent new ones:
+
+- **Status**: `Needs Triage` | `Ready` | `In Progress` | `Blocked`
+- **Priority**: `P0` | `P1` | `P2`
+- **Team**: `Platform` | `Infra` | `Tooling`
+
+New issues start at `Needs Triage` unless the report is complete enough to be
+actionable, in which case use `Ready`. Reserve `P0` for production impact.
+
+Then post one short comment explaining the routing and flagging any uncertainty.
+
+If for some reason no action is appropriate, you MUST call the `noop` tool:
+`{"noop": {"message": "No action needed: [reason]"}}`
