@@ -1,106 +1,19 @@
-Issues needs write because you're configuring github-app globally under safe-outputs, so add-comment mints from the App rather than GITHUB_TOKEN. And Issues read specifically is required for update-project to resolve issue-backed project items — covered by the above. 
-github
-
-Then: Generate a private key (downloads a .pem), note the Client ID (Iv23..., not the numeric App ID), and Install App on the org, granting it the repo(s) you'll run from.
-
-3. Wire up secrets
-bash
-gh variable set APP_CLIENT_ID --body "Iv23xxxxxxxx"
-gh aw secrets set APP_PRIVATE_KEY --value "$(cat ~/Downloads/your-app.private-key.pem)"
-
-For the Copilot engine: create a fine-grained PAT with resource owner = your user account (not the org) and Account permissions → Copilot Requests: Read, on an account with an active Copilot license. 
-GitHub
-
-bash
-gh aw secrets set COPILOT_GITHUB_TOKEN --value "github_pat_..."
-gh aw secrets bootstrap   # verifies what's set
-4. Init the repo
-bash
-gh aw init
-git add .gitattributes .github .vscode
-git commit -m "Initialize gh-aw"
-5. The workflow
-
-.github/workflows/project-triage.md:
-
-yaml
----
-on:
-  issues:
-    types: [opened]
-
-engine: copilot
-
-permissions:
-  contents: read
-  issues: read
-  actions: read
-
-runs-on: [self-hosted, linux, x64]
-runs-on-slim: [self-hosted, linux, x64]
-
-tools:
-  github:
-    toolsets: [default, projects]
-    github-app:
-      client-id: ${{ vars.APP_CLIENT_ID }}
-      private-key: ${{ secrets.APP_PRIVATE_KEY }}
-      owner: "YOUR-ORG"
-      repositories: ["*"]
-
-safe-outputs:
-  github-app:
-    client-id: ${{ vars.APP_CLIENT_ID }}
-    private-key: ${{ secrets.APP_PRIVATE_KEY }}
-    owner: "YOUR-ORG"
-  update-project:
-    project: "https://github.com/orgs/YOUR-ORG/projects/1"
-    max: 1
-  add-comment:
-    max: 1
----
-
-# Project Triage
-
-A new issue was opened. Read it, then add it to the project board and set its fields.
-
-Always include the full project URL in the `update_project` call:
-`https://github.com/orgs/YOUR-ORG/projects/1`
-
-Set fields only from these exact values — never invent new ones:
-
-- **Status**: `Needs Triage` | `Ready` | `In Progress` | `Blocked`
-- **Priority**: `P0` | `P1` | `P2`
-- **Team**: `Platform` | `Infra` | `Tooling`
-
-New issues start at `Needs Triage` unless the report is complete enough to be
-actionable, in which case use `Ready`. Reserve `P0` for production impact.
-
-Then post one short comment explaining the routing and flagging any uncertainty.
-
-If for some reason no action is appropriate, you MUST call the `noop` tool:
-`{"noop": {"message": "No action needed: [reason]"}}`
-
-Two details in there that are not optional: the agent's output must explicitly carry the project field — the value in frontmatter is documentation only, and if the agent finishes without calling any safe-output tool the workflow fails silently, which the docs call the #1 runtime failure mode for safe-output workflows. Hence spelling out noop in the prompt. 
-github
-github
-
-6. Compile and ship
-bash
-gh aw compile
-git add .github/workflows/project-triage.md .github/workflows/project-triage.lock.yml
-git commit -m "Add project triage workflow"
-git push
-
-The .lock.yml must be committed — that's the file Actions actually runs.
-
-7. First run
-
-Open a test issue with a realistic title and body. Then watch it:
-
-bash
-gh run watch
-gh aw logs project-triage
-
-I'd strongly suggest doing your first run against a throwaway board, or with staged mode enabled, so a badly-calibrated prompt doesn't scribble across a board you care about. 
-github
+{
+  "type": "AdaptiveCard",
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "version": "1.4",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "GHES alert test",
+      "weight": "Bolder",
+      "size": "Medium",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "If you can read this, the webhook path works.",
+      "wrap": true
+    }
+  ]
+}
