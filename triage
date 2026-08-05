@@ -1,1 +1,1 @@
-triggerBody()?['text']
+triggerBody()?['attachments']?[0]?['content']
