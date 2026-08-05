@@ -1,3 +1,24 @@
-curl -i -X POST "https://your-url" \
-  -H "Content-Type: application/json" \
-  -d '{"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":[{"type":"TextBlock","text":"hello world"}]}}]}'
+{
+  "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+  "type": "AdaptiveCard",
+  "version": "1.2",
+  "body": [
+    {
+      "type": "TextBlock",
+      "text": "@{coalesce(triggerBody()?['repository']?['full_name'], 'GitHub')}",
+      "weight": "Bolder",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "@{coalesce(triggerBody()?['head_commit']?['message'], triggerBody()?['zen'], 'event received')}",
+      "wrap": true
+    },
+    {
+      "type": "TextBlock",
+      "text": "by @{coalesce(triggerBody()?['sender']?['login'], 'unknown')}",
+      "isSubtle": true,
+      "wrap": true
+    }
+  ]
+}
