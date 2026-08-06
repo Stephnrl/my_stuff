@@ -1,1 +1,2 @@
-asPercent(collectd.ghes-01.df-data-user.df_complex-free, sumSeries(collectd.ghes-01.df-data-user.df_complex-*))
+asPercent(collectd.HOST.df-data-user.df_complex-free,
+          sumSeries(collectd.HOST.df-data-user.df_complex-*))
