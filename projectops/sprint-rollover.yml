@@ -1,0 +1,25 @@
+name: Sprint Rollover
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"   # Mondays 13:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet .
+
+      - name: Sprint status
+        env:
+          PROJECTOPS_TOKEN: ${{ secrets.PROJECTOPS_PAT }}
+        run: projectops sprint-report | tee -a "$GITHUB_STEP_SUMMARY"
