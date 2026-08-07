@@ -1,0 +1,86 @@
+name: ProjectOps Triage
+
+on:
+  issues:
+    types: [opened, reopened]
+
+concurrency:
+  group: projectops-triage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: read
+  id-token: write        # Entra federated credential for the plan job
+
+jobs:
+  # ---------------------------------------------------------------------
+  # UNTRUSTED. Reads the issue, calls Azure OpenAI, writes plan.json.
+  # Holds no board-write credential. Nothing it produces is acted upon here.
+  # ---------------------------------------------------------------------
+  plan:
+    runs-on: [self-hosted, linux, internal]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          pip config set global.index-url \
+            https://artifactory.internal/artifactory/api/pypi/pypi-remote/simple
+          pip install --quiet ".[azure]"
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Generate plan
+        env:
+          AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ vars.AZURE_OPENAI_DEPLOYMENT }}
+          PROJECTOPS_READ_TOKEN: ${{ secrets.PROJECTOPS_READ_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: projectops plan --issue ${{ github.event.issue.number }} --out plan.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: plan.json
+
+  # ---------------------------------------------------------------------
+  # TRUSTED. Holds the write token. Runs no model, makes no network call
+  # other than to the GitHub API. Validates before it touches anything.
+  # ---------------------------------------------------------------------
+  apply:
+    needs: plan
+    runs-on: [self-hosted, linux, internal]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: |
+          pip config set global.index-url \
+            https://artifactory.internal/artifactory/api/pypi/pypi-remote/simple
+          pip install --quiet .
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan
+
+      - name: Validate and apply
+        env:
+          PROJECTOPS_TOKEN: ${{ secrets.PROJECTOPS_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          projectops apply-plan plan.json \
+            --issue ${{ github.event.issue.number }} \
+            --min-confidence medium \
+            --max-changes 3

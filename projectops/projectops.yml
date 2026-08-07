@@ -1,0 +1,72 @@
+# ProjectOps board configuration.
+#
+# Field names below must match the field names on your Projects v2 board
+# exactly (matching is case-insensitive). Run `projectops doctor` to print
+# the real schema before editing this file.
+
+project:
+  # Projects v2 lives at the OWNER level, not the repo level. For a personal
+  # account this is .../users/<login>/projects/N -- note that App tokens
+  # cannot reach user-owned projects; you need a classic PAT with `project`.
+  url: https://github.com/orgs/YOUR-ORG/projects/1
+
+# Rules are evaluated top to bottom; the LAST match wins.
+# Order from general to specific.
+rules:
+  - when: {event: opened}
+    set:
+      Status: Backlog
+      Priority: P2
+
+  - when: {label: ready}
+    set: {Status: Ready}
+
+  - when: {event: assigned}
+    set: {Status: In Progress}
+
+  - when: {label: blocked}
+    set: {Status: Blocked}
+
+  - when: {event: closed, state_reason: COMPLETED}
+    set: {Status: Done}
+
+  - when: {event: closed, state_reason: NOT_PLANNED}
+    set: {Status: Cancelled}
+
+  - when: {event: reopened}
+    set: {Status: In Progress}
+
+  # Escalate anything labelled as an incident regardless of other rules.
+  - when: {any_label: [incident, sev1, security]}
+    set:
+      Priority: P0
+      Status: In Progress
+
+# Applied only when no rule already set a points value.
+defaults:
+  points_by_type:
+    Task: 1
+    Story: 3
+    Feature: 8
+    Epic: 13
+
+sprint:
+  # An ITERATION-type field. The current iteration is whichever window
+  # contains today's date.
+  field: Sprint
+  # Only pull items into the sprint once they leave the backlog, so grooming
+  # does not silently inflate the current iteration.
+  only_when_status: [Ready, In Progress]
+
+# Set true to fail the workflow when any single field write fails.
+# Default (false) logs the failure and continues, so one bad Priority value
+# does not block the Status update.
+fail_on_field_error: false
+
+# Fields the MODEL is permitted to propose. Everything outside this list is
+# rejected by `apply-plan` before any write happens -- deliberately narrower
+# than the deterministic rules above, which are trusted code.
+agent:
+  allowed_fields:
+    - Status
+    - Priority

@@ -1,0 +1,35 @@
+name: Publish to Artifactory
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: [self-hosted, linux, internal]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel
+        run: |
+          pip config set global.index-url \
+            https://artifactory.internal/artifactory/api/pypi/pypi-remote/simple
+          pip install --quiet build twine
+          python -m build
+
+      - name: Verify metadata
+        run: twine check dist/*
+
+      - name: Upload
+        env:
+          TWINE_REPOSITORY_URL: https://artifactory.internal/artifactory/api/pypi/pypi-local
+          TWINE_USERNAME: ${{ secrets.ARTIFACTORY_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.ARTIFACTORY_TOKEN }}
+        run: twine upload --non-interactive dist/*
