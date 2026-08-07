@@ -13,3 +13,11 @@ gh api graphql -f enterprise=YOUR-ENTERPRISE-SLUG -f query='
       }
     }
   }'
+
+
+gh api graphql --paginate --slurp \
+  -f enterprise=YOUR-ENTERPRISE-SLUG \
+  -f query='...same query as above...' \
+  | jq -r '.[].data.enterprise.ownerInfo.samlIdentityProvider.externalIdentities.nodes[]
+           | select(.user.login != null)
+           | [.samlIdentity.nameId, .user.login] | @tsv'
