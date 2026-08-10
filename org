@@ -11,3 +11,16 @@ aws iam attach-role-policy \
 aws sts assume-role \
   --role-arn arn:aws:iam::<MEMBER-ACCT>:role/OrganizationAccountAccessRole \
   --role-session-name test
+
+
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<MGMT-ACCOUNT-ID>:root" },
+    "Action": "sts:AssumeRole",
+    "Condition": {
+      "Bool": { "aws:MultiFactorAuthPresent": "true" }
+    }
+  }]
+}
