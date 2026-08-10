@@ -1,0 +1,56 @@
+# Consumer-repo workflow. Note the two DIFFERENT credentials in play:
+#   1. AWS OIDC  -> lets Terraform talk to AWS
+#   2. GitHub App token -> lets `terraform init` clone the internal module repo
+# OIDC does nothing for #2. The default GITHUB_TOKEN is scoped to this repo
+# only, so it cannot clone terraform-aws-network either.
+
+name: terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write      # required for AWS OIDC
+  contents: read
+  pull-requests: write
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mint token for the internal module repo
+        id: modules-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.TF_MODULES_APP_ID }}
+          private-key: ${{ secrets.TF_MODULES_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: terraform-aws-network
+
+      # Rewrites the https://github.com/ prefix so `terraform init` can clone
+      # private module sources without embedding a token in source URLs.
+      - name: Configure git for private module sources
+        run: |
+          git config --global url."https://x-access-token:${{ steps.modules-token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Assume AWS role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.BOOTSTRAP_ACCOUNT_ID }}:role/GitHubActionsTerraform
+          aws-region: us-east-1
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - run: terraform init
+      - run: terraform validate
+      - run: terraform plan -out=tfplan -input=false
+
+      - name: Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -input=false -auto-approve tfplan
