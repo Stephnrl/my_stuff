@@ -1,0 +1,13 @@
+aws iam create-role \
+  --role-name OrganizationAccountAccessRole \
+  --assume-role-policy-document file://trust.json \
+  --max-session-duration 3600 \
+  --description "Cross-account admin from management account"
+
+aws iam attach-role-policy \
+  --role-name OrganizationAccountAccessRole \
+  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
+
+aws sts assume-role \
+  --role-arn arn:aws:iam::<MEMBER-ACCT>:role/OrganizationAccountAccessRole \
+  --role-session-name test
