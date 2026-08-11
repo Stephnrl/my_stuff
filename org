@@ -1,11 +1,6 @@
 az graph query -q "resources
   | where type =~ 'microsoft.storage/storageaccounts'
   | project name, resourceGroup, subscriptionId, location" \
-  --first 1000 -o tsv > accounts.txt
-
-while read -r name rg sub loc; do
-  for svc in blob file queue table; do
-    ip=$(dig +short "${name}.${svc}.core.usgovcloudapi.net" | tail -1)
-    [ -n "$ip" ] && echo "$name $svc $ip"
-  done
-done < accounts.txt | grep -E '20\.141\.7\.4|52\.127\.117\.4'
+  --first 1000 \
+  --query "data[].[name,resourceGroup,subscriptionId,location]" \
+  -o tsv > accounts.txt
