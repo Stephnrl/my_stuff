@@ -4,3 +4,8 @@ az graph query -q "resources
   --first 1000 \
   --query "data[].[name,resourceGroup,subscriptionId,location]" \
   -o tsv > accounts.txt
+
+
+cut -f1 accounts.txt | \
+  xargs -P 20 -I{} sh -c 'echo "{} $(dig +short {}.blob.core.usgovcloudapi.net | tail -1)"' \
+  | grep -E '20\.141\.7\.4|52\.127\.117\.4'
