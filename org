@@ -1,11 +1,32 @@
-az graph query -q "resources
-  | where type =~ 'microsoft.storage/storageaccounts'
-  | project name, resourceGroup, subscriptionId, location" \
-  --first 1000 \
-  --query "data[].[name,resourceGroup,subscriptionId,location]" \
-  -o tsv > accounts.txt
+Here you go — paste-ready blocks.
 
+Short Description
+Enable Claude Opus 5 model policy for GitHub Copilot at the GitHub Cloud Enterprise level
 
-cut -f1 accounts.txt | \
-  xargs -P 20 -I{} sh -c 'echo "{} $(dig +short {}.blob.core.usgovcloudapi.net | tail -1)"' \
-  | grep -E '20\.141\.7\.4|52\.127\.117\.4'
+Description
+Enable the Claude Opus 5 policy in GitHub Copilot settings for enterprise account [enterprise-slug] so licensed Copilot Business/Enterprise users can select the model. Copilot Enterprise and Business administrators must enable the Claude Opus 5 policy in Copilot settings before it is available; Claude Opus 4.7 remains enabled as a fallback. 
+github
+
+Communication Plan
+Notice to [#eng-all / DL] three business days prior and a post-implementation announcement confirming availability, with the Service Desk briefed in advance since rollout is gradual and the model may not appear for all users immediately. Stakeholders notified: engineering leadership, [FinOps], [Security], and Service Desk. 
+github
+
+Justification
+Claude Opus 5 is the successor to our currently enabled Opus 4.7 and is designed for complex, long-running coding tasks requiring careful reasoning, effective tool use, and reliable multi-step execution, which supports [team/use case]. Enabling it also keeps us current ahead of eventual retirement of the older model, avoiding a future emergency change. 
+github
+
+Implementation Plan
+Enterprise owner signs in to GitHub Cloud, navigates to Enterprise settings → Copilot → Policies, sets the Claude Opus 5 policy to Enabled for [all orgs / listed orgs], and confirms org-level inheritance where applicable. Estimated 15 minutes, no outage or maintenance window required.
+
+Risk and Impact Analysis
+Low risk — tenant-level configuration toggle with no downtime and no impact to repositories, Actions, CI/CD, branch protections, or SSO. Primary risk is cost, since Opus 5 is billed at provider API list price under usage-based billing, mitigated by the [$X] enterprise spending limit and billing review at 24 hours and 7 days. 
+github
+
+Backout Plan
+Set the Claude Opus 5 policy back to Disabled in Enterprise settings → Copilot → Policies, which removes it from the model picker within minutes. Backout takes approximately 5 minutes with no data migration or support dependency, and Opus 4.7 remains available throughout.
+
+Test Plan
+Confirm the model appears in the picker for a licensed pilot user, returns a valid response to a representative coding prompt in both VS Code and github.com, and completes a Copilot cloud agent task in a sandbox repository. Screenshots and results attached to the change record.
+
+Verification Plan
+Implementer confirms the policy shows Enabled, test plan steps pass, and previously enabled models remain selectable, with no related Service Desk tickets in the first hour. [Platform team] monitors Copilot usage metrics and billing for 5 business days; change closed as Successful if spend stays within [$X] and no P1/P2 incidents are attributable.
