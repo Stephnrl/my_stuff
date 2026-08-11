@@ -1,26 +1,11 @@
-aws iam create-role \
-  --role-name OrganizationAccountAccessRole \
-  --assume-role-policy-document file://trust.json \
-  --max-session-duration 3600 \
-  --description "Cross-account admin from management account"
+az graph query -q "resources
+  | where type =~ 'microsoft.storage/storageaccounts'
+  | project name, resourceGroup, subscriptionId, location" \
+  --first 1000 -o tsv > accounts.txt
 
-aws iam attach-role-policy \
-  --role-name OrganizationAccountAccessRole \
-  --policy-arn arn:aws:iam::aws:policy/AdministratorAccess
-
-aws sts assume-role \
-  --role-arn arn:aws:iam::<MEMBER-ACCT>:role/OrganizationAccountAccessRole \
-  --role-session-name test
-
-
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": { "AWS": "arn:aws:iam::<MGMT-ACCOUNT-ID>:root" },
-    "Action": "sts:AssumeRole",
-    "Condition": {
-      "Bool": { "aws:MultiFactorAuthPresent": "true" }
-    }
-  }]
-}
+while read -r name rg sub loc; do
+  for svc in blob file queue table; do
+    ip=$(dig +short "${name}.${svc}.core.usgovcloudapi.net" | tail -1)
+    [ -n "$ip" ] && echo "$name $svc $ip"
+  done
+done < accounts.txt | grep -E '20\.141\.7\.4|52\.127\.117\.4'
