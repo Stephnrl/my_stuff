@@ -1,1 +1,12 @@
-This change is an additive, tenant-level configuration toggle with no service interruption, no downtime, and no user impact; it can be reversed in approximately five minutes with no restore or support dependency. Business-hours execution is preferred so that the implementer, Service Desk, and vendor support are all available during validation, and so that active developer usage can confirm the model is selectable.
+{
+  "mcpServers": {
+    "github-mcp-server": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "tools": ["projects_list", "projects_get", "projects_write", "..."],
+      "headers": {
+        "X-MCP-Toolsets": "repos,issues,pull_requests,projects"
+      }
+    }
+  }
+}
