@@ -3,7 +3,7 @@
     "github-mcp-server": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/",
-      "tools": ["projects_list", "projects_get", "projects_write", "..."],
+      "tools": ["*"],
       "headers": {
         "X-MCP-Toolsets": "repos,issues,pull_requests,projects"
       }
