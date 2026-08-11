@@ -1,12 +1,4 @@
-{
-  "mcpServers": {
-    "github-mcp-server": {
-      "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "tools": ["*"],
-      "headers": {
-        "X-MCP-Toolsets": "repos,issues,pull_requests,projects"
-      }
-    }
-  }
-}
+curl -s -H "Authorization: bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"query { repository(owner:\"abc-devsecops\", name:\"YOUR-REPO\") { id } }"}' \
+  https://api.github.com/graphql
