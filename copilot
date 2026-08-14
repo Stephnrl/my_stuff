@@ -1,288 +1,66 @@
-# Kanban System Design — DevSecOps Team
+Not the headline one, no. SLE is a promise to your customers — the people filing requests. Your director isn't the customer of a service request; he's the person deciding where eight people's time goes. Different audience, different artifact.
 
-**A proposal to change what we commit to, not when we report.**
+Two distinctions worth being precise about:
 
----
+SLE is a target, not a measurement. The metric is your cycle-time percentile. The SLE is the promise you set from it. What's actually reportable upward is SLE attainment — "87% of Standard requests landed inside the 6-day SLE this quarter" — which is a single percentage with a trend line.
 
-## 1. The ask, in one paragraph
+That framing will land unusually well with your audience specifically. SLE attainment is structurally identical to an SLO: a target, an attainment percentage, an error budget you're either inside or outside. A DevSecOps director already reads dashboards shaped like that. "Standard requests: 6-day SLE, 87% attainment, trending flat" is a sentence that needs no Kanban vocabulary at all.
 
-We keep the two-week cadence. We keep the reviews. We keep speaking in sprint increments to the project teams whose delivery dates depend on us. What we change is the **commitment container**: instead of committing to a fixed set of items for the next two weeks, we commit to a **capacity allocation across work item types** and to **service level expectations per class of service**. This produces a standing set of artifacts — allocation actual vs. target, throughput by work item type, cycle-time percentiles, and aging work-in-progress — that show direction, purpose, and allocation every two weeks, and that stay meaningful in a month where escalations consume half the team.
+Here's how I'd tier it:
 
-This is Kanban. Not Scrumban, and not an invented local method. The vocabulary below is standard, so the design can be evaluated against established practice rather than defended as something the team made up.
+Audience	Cadence	What they get
+Director	Monthly/quarterly	Allocation vs target, SLE attainment %, outcome metrics, blocker themes needing his authority
+Your manager	Fortnightly	Throughput by work item type, cycle-time percentiles, aging WIP, blocker pareto
+The team	Daily	Aging WIP, WIP limit state, what's blocked
 
----
+The headline for a director is allocation. That's what your manager literally asked for — direction, purpose, how the team is allocated. SLE attainment is the supporting act: it's the answer to the question he'll inevitably ask, which is some version of "but are they reliable?" Because that's the Scrum-shaped question, and without SLE attainment you have no answer to it. With it, you have a better answer than sprint completion ever gave.
 
-## 2. The problem, stated in Kanban terms
+The second thing a director genuinely wants is the blocker pareto, because it's the only chart on the list that contains a task for him. Everything else is reporting; that one is a request.
 
-Our current system has a **commitment point** at the start of a sprint, at which we take on a fixed batch of work. Kanban's principle is that commitment should happen as late as possible, at the last responsible moment, because commitment made early against uncertain demand creates waste when it has to be abandoned.
+Two cautions.
 
-Our demand profile makes early batch commitment structurally unsound:
+Don't publish an SLE before the backfill. Once a director hears a number it becomes a target, and a target you invented from nothing will be wrong in a direction you don't control. Derive it from real data, then state it.
 
-- **Unplanned demand is a permanent, first-class part of our workload.** Escalations and incidents are not an interruption to the work — for at least one team member, they *are* the work. A system that treats them as sprint spillover will misreport that person's entire contribution as failure.
-- **Our work item types have wildly different natural cycle times.** A platform build and a service request do not belong in the same commitment batch, and averaging them produces a number that describes neither.
-- **We have multiple concurrent workstreams with different customers.** Automation initiatives, AKS and tooling, AI landing zones, request handling, and escalations are effectively five services sharing one team. One sprint backlog flattens five distinct demand streams into a single undifferentiated list.
+Report attainment, never individual misses. The moment the conversation becomes "which four items missed SLE," you've reconstructed sprint commitment with extra steps, and someone will start gaming it by splitting cards. The unit of accountability is the percentage and its trend.
 
-The symptom we feel is "it's hard to show all our work." The cause is that our current artifact — sprint completion — can only represent one of the five streams well.
+what can insights offer here?
 
----
+Architected workaround leveraging field stamping for SLE attainment visualization
 
-## 3. Definition of Workflow (DoW)
+The governing rule: Insights counts items and groups them by field values. It can't do math across items. So percentiles, medians, and durations are out — but anything you precompute into a field becomes chartable.
 
-The explicit statement of how work moves. Every policy below hangs off this.
+That's the whole trick for SLE attainment. Add one field:
 
-| State | Type | Meaning |
-| --- | --- | --- |
-| **Triage** | Queue (pre-commitment) | Raised, not yet analyzed. No WIP limit. Nothing here is a promise. |
-| **Ready** | Queue (commitment point) | Analyzed, sized, accepted into the system. **Cycle time starts here.** |
-| **In Progress** | Active | Being actively worked. |
-| **Blocked / Waiting** | Queue | Stopped on an external dependency. Blocker reason is mandatory. |
-| **In Review** | Active | PR review, change approval, security sign-off. |
-| **Done** | Terminal | Delivered to the customer of the work. **Cycle time stops here.** |
+bash
+create_field "SLE Status" SINGLE_SELECT "Within SLE,Breached,No SLE"
 
-**Commitment point:** entry into *Ready*. Before that, an item carries no promise and can be dropped at zero cost. This is the single most important policy change — it moves commitment from "start of two-week box" to "the moment we pull the item."
+The same Action that stamps Completed and computes Cycle Time (days) compares that number against the threshold for the item's class of service and writes the verdict. Now Insights charts it natively:
 
-**Delivery point:** entry into *Done*.
+Chart	Config
+Attainment trend	X-axis Iteration, Group by SLE Status, filter -class-of-service:Intangible
+Attainment by type	X-axis Work Item Type, Group by SLE Status
 
-Splitting *Blocked / Waiting* out from *In Progress* is what makes **flow efficiency** measurable. Without that split we cannot tell whether our lead times are caused by the work or by waiting on other teams — which, for a DevSecOps team with heavy external dependencies, is likely the dominant factor.
+The first one is your director chart. Stacked bars per two-week period, green-over-red, trend visible at a glance — and it's the SLO-shaped artifact I mentioned, generated in-product with no export.
 
----
+So the director tier maps like this:
 
-## 4. Work Item Types (WITs)
+Artifact	Insights?
+Allocation vs target	Native
+SLE attainment	Native, via the stamped field
+Blocker pareto	Native
+Escalation demand trend	Native, historical chart
+Cycle-time percentiles	No — needs generating
+Aging WIP distribution	No — table view approximates it
+DORA / outcome metrics	No — different system entirely
 
-Every item on the board carries exactly one WIT. This field is the backbone of the reporting model — the allocation chart, throughput splits, and per-type cycle times are all derived from it.
+Five of seven, which is better than I'd expect from a tool this simple.
 
-| WIT | Description | Typical source of demand | Natural cycle time |
-| --- | --- | --- | --- |
-| **Escalation** | Production fires, incidents, urgent breakage | Unplanned, event-driven | Hours to days |
-| **Service Request** | General tickets, access, standard changes, small asks | Continuous, customer-initiated | Days |
-| **Platform Build** | AKS, tooling, landing zones, environment work | Planned, roadmap-driven | Weeks |
-| **Automation Initiative** | Large automation projects, GitHub Actions, pipeline work | Planned, internally initiated | Weeks |
-| **AI Enablement** | AI landing zones and supporting platform work | Planned, roadmap-driven | Weeks |
-| **Security & Compliance** | Vulnerability remediation, policy enforcement, audit response | Mixed — some scheduled, some event-driven | Days to weeks |
-| **Toil Reduction** | Internal improvement, automation of our own manual work | Self-initiated | Days |
+Three limits worth knowing before you promise a dashboard.
 
-Two notes for discussion:
+Insights only knows an item's current field values — it has no history of what a field used to be. Historical charts track open/closed state, nothing else. This is fine for your design because Iteration and SLE Status are stamped at completion and never change afterward, so filtering by iteration gives you real historical slices. It would break if you tried to chart something mutable.
 
-- **Toil Reduction exists as a named type on purpose.** Work that improves our own capacity is currently invisible and therefore always first to be sacrificed. Naming it and allocating to it is how it survives contact with a busy month.
-- **Security & Compliance may need to split** into planned versus reactive once we have data. Leave it merged for the first quarter and let the cycle-time distribution tell us whether it's really one type or two.
+There's no export or embed. You screenshot charts into a deck. Slightly annoying at director cadence, not a blocker.
 
----
+And the average-cycle-time chart I suggested earlier is a trap if it becomes the number of record. Your SLE is a percentile precisely because averages hide the tail, and the tail is what stakeholders remember. Keep that chart for the team's own tuning; report attainment upward.
 
-## 5. Classes of Service (CoS)
-
-Where WIT describes *what the work is*, class of service describes *how we treat it* — the risk profile and cost-of-delay shape. CoS drives pull order, so the daily "what should I work on" question is answered by policy rather than by negotiation.
-
-| Class of Service | Cost of delay | Pull policy | WIP treatment | Target |
-| --- | --- | --- | --- | --- |
-| **Expedite** | Immediate and steep | Pulled ahead of everything. May preempt in-progress work. | Hard limit of **1** system-wide. Never two at once. | Resolve immediately |
-| **Fixed Date** | Cliff at a specific date | Pulled when the SLE for its type says it must start to hit the date | Counts against normal WIP | Meet the date |
-| **Standard** | Gradual, roughly linear | FIFO within the class, pulled when capacity frees | Counts against normal WIP | Meet the SLE |
-| **Intangible** | Low now, potentially severe later | Pulled to fill genuine slack; used to keep flow smooth | Counts against normal WIP | No SLE |
-
-**Policies worth stating explicitly:**
-
-- The Expedite limit of 1 is the mechanism that makes fires visible instead of corrosive. When a second escalation arrives while one is active, the system forces a real decision — swarm, queue, or escalate for more capacity — rather than silently absorbing it and blowing every other commitment.
-- Fixed Date is where **external project deadlines live**. It is the correct home for anything the sprint-based project teams depend on, and it is more honest than pretending those deadlines are sprint-shaped.
-- Intangible is not "low priority forever." Most Toil Reduction lands here, and the allocation target is what guarantees it actually gets pulled.
-
-CoS is independent of WIT. A Platform Build can be Fixed Date. A Service Request can be Expedite. Do not collapse the two fields.
-
----
-
-## 6. Capacity allocation
-
-**This is the artifact that answers "how is the team allocated."**
-
-We commit to a *shape of investment* rather than a list of items, and report actual against target every two weeks.
-
-Proposed starting targets — **to be calibrated, not assumed**:
-
-| WIT | Target share of capacity |
-| --- | --- |
-| Platform Build + AI Enablement | 35% |
-| Automation Initiative | 20% |
-| Service Request | 20% |
-| Escalation | 15% |
-| Security & Compliance | 5% |
-| Toil Reduction | 5% |
-
-These numbers are a hypothesis. The first step of implementation is to **backfill the last 90 days of closed issues with a WIT** and measure what our allocation has actually been. The targets should then be set as a deliberate adjustment from the measured baseline, so that the first allocation chart shows a real position rather than an aspiration.
-
-**Why this survives a bad month.** If escalations consume 35% of capacity against a 15% target, that is not a failed sprint — it is a measured finding with a clear implication, and it is a far stronger conversation with the director than "we completed 31 of 40 points." Repeated overrun against the escalation target is the quantitative case for either more headcount or a hard investment in the Toil Reduction and Automation types that reduce escalation volume at the source.
-
----
-
-## 7. WIP limits
-
-Kanban's core mechanism. Limits are set per column and per person, and they are the thing that converts a to-do list into a pull system.
-
-| Constraint | Proposed limit | Rationale |
-| --- | --- | --- |
-| Expedite, system-wide | 1 | Forces explicit triage of concurrent fires |
-| In Progress, per person | 2 | One primary, one legitimately parked |
-| In Progress, team-wide | ~1.5 × team size | Leaves genuine slack for unplanned demand |
-| Blocked / Waiting | No limit, but **aging is reviewed daily** | Blockers are the constraint; hiding them helps nobody |
-
-Set these deliberately low at the start. The purpose of a WIP limit is to make the system push back visibly when it's overloaded — a limit that never binds is not doing its job.
-
-**Little's Law** (`WIP = Throughput × Cycle Time`) is why this matters: with throughput roughly fixed by team size, cutting WIP is the only lever that shortens cycle time. This is the formal answer to "can we go faster" that does not involve asking people to work harder.
-
----
-
-## 8. Replenishment and the commitment point
-
-The **Replenishment Meeting** replaces sprint planning. It is short, and it does exactly one thing: move items from Triage into Ready, up to the space available.
-
-- **Cadence:** weekly, or on-demand when Ready runs low. Decoupled from the two-week reporting cadence on purpose.
-- **Input:** capacity allocation targets, current WIP, aging items, and the Fixed Date horizon.
-- **Rule:** an item is only replenished if there is room for it and its WIT is under its allocation target. This is the mechanism that makes the allocation real rather than decorative.
-- **Output:** a Ready queue, not a two-week promise.
-
-Because commitment happens here and not at the top of a sprint, an item that becomes irrelevant while sitting in Triage costs us nothing.
-
----
-
-## 9. Cadences
-
-**This section directly addresses the objection that removing sprints leaves no structure.** It doesn't. Kanban defines cadences as first-class elements of the method; they are simply decoupled from each other rather than fused into one two-week ceremony. We adopt a subset:
-
-| Cadence | Frequency | Purpose | Artifact produced |
-| --- | --- | --- | --- |
-| **Kanban Meeting** (standup) | Daily, ≤15 min | Walk the board **right to left**, oldest aging item first. Not a status round-robin. | Blocker list |
-| **Replenishment Meeting** | Weekly | Commit items into Ready against allocation targets | Ready queue |
-| **Service Delivery Review** | **Every two weeks** | Review flow metrics with stakeholders; are we meeting our SLEs? | **The two-week report pack** |
-| **Risk Review** | Monthly | Blocker clustering, aging analysis, recurring dependency patterns | Escalation case for cross-team dependencies |
-| **Operations Review** | Monthly or quarterly | Cross-team: are allocation targets still the right ones? | Allocation adjustment decision |
-
-The **Service Delivery Review on a two-week cadence is our interface to the rest of the organization.** It lands on the same rhythm as everyone else's sprint boundary, so the project teams get a report on the increment they expect. Internally, nothing about our execution is sprint-shaped. This is a translation layer at an organizational boundary, and it is standard practice where a flow-based team has to interoperate with iteration-based teams.
-
----
-
-## 10. Metrics and the two-week report pack
-
-What goes in front of the director. Five artifacts, all generated from board data.
-
-**1. Capacity allocation, actual vs. target.**
-Stacked bar by WIT, current period plus trailing six. *Shows direction, purpose, and allocation in one image.*
-
-**2. Throughput by WIT.**
-Items completed per period, split by type, trailing six periods. Shows the full breadth of what the team delivers — including the escalation work that Scrum could not represent.
-
-**3. Cycle time percentiles by class of service.**
-Reported as a scatterplot with 50th / 85th / 95th percentile lines. Stated as: *"85% of Standard service requests complete within N days."*
-
-**4. Aging WIP.**
-Every in-flight item plotted against its age, with SLE percentile lines overlaid. This is the most operationally useful chart we will have — it identifies items in trouble **now**, whereas cycle time only reports on the past.
-
-**5. Blocked time and blocker clustering.**
-Total time blocked, grouped by blocker reason. Expect two or three external dependencies to dominate. That list is a directly actionable artifact for a director, because those are precisely the problems that require authority above our team to fix.
-
-**Supporting charts as needed:** Cumulative Flow Diagram for queue growth, and flow efficiency (active time ÷ total lead time) as a quarterly measure. A first flow-efficiency measurement in the 15–25% range is typical and, if we land there, is the strongest possible argument that our lead times are a dependency problem rather than an effort problem.
-
-**Outcome layer, quarterly.** Flow metrics prove the machine is healthy; they do not prove it is pointed somewhere useful. Pair them with DORA metrics where we own the delivery path (deployment frequency, lead time for changes, change failure rate, failed-deployment recovery time) and with platform outcomes — time to provision a landing zone, percentage of clusters on the standard baseline, mean time to remediate a critical finding.
-
----
-
-## 11. Service Level Expectations (SLEs)
-
-An SLE replaces the sprint commitment as our promise to stakeholders. It is a probabilistic statement derived from our own historical cycle-time data, not a negotiated estimate.
-
-Format: *"85% of items of this class complete within N days of commitment."*
-
-We cannot set the numbers today — they come from the 90-day backfill. Once set, per class of service and per WIT where the sample supports it, they give stakeholders a **better** promise than a sprint commitment, because it is measured rather than optimistic, and it applies from the moment their item is committed rather than deferring to an arbitrary sprint boundary.
-
-For larger initiatives, forecast with **Monte Carlo simulation over historical throughput** rather than estimation. This yields "80% confident by March 14," which is both more honest and more useful than a story-point projection.
-
----
-
-## 12. GitHub Projects implementation
-
-All of this is native to GitHub Projects. No new tooling, no new license.
-
-**Fields:**
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `Work Item Type` | Single select | Section 4. The backbone of all reporting. |
-| `Class of Service` | Single select | Expedite / Fixed Date / Standard / Intangible |
-| `Status` | Single select | The DoW states from Section 3 |
-| `Workstream` | Single select | Platform / AI / Automation / Requests / Escalations |
-| `Iteration` | Iteration (2 weeks) | Reporting boundary and join key to project teams' sprints. Stamped on **completion**, not on promise. |
-| `Committed` | Date | Set on entry to Ready — cycle time start |
-| `Completed` | Date | Set on entry to Done — cycle time stop |
-| `Blocked Reason` | Single select | Mandatory when Status = Blocked |
-| `Target Date` | Date | Fixed Date class only |
-
-The `Committed` and `Completed` stamps can be automated with a GitHub Actions workflow on `projects_v2_item` events, so the data collection is not a manual discipline that decays.
-
-**Views:**
-
-- **Board grouped by Status** — daily working view, WIP limits set per column
-- **Board grouped by Work Item Type** — the allocation view; this is the screenshot for the deck
-- **Table, `Status != Done`, sorted by `Committed` ascending** — the aging WIP view; the top row is the oldest in-flight item and is discussed first at standup
-- **Roadmap view, filtered to Fixed Date** — external commitments and delivery dates
-- **Insights** — throughput by iteration grouped by Work Item Type
-
----
-
-## 13. Rollout
-
-Following **STATIK** (Systems Thinking Approach to Introducing Kanban) — the standard method for introducing Kanban to an existing team, which is deliberately evolutionary rather than a process replacement.
-
-| Step | Action | Duration |
-| --- | --- | --- |
-| 1 | Identify sources of dissatisfaction — internal and from our customers | 1 session |
-| 2 | **Analyze demand** — backfill 90 days of closed issues with WIT and CoS via the GitHub API; measure actual arrival rates and allocation | ~1 day of scripting |
-| 3 | Analyze capability — derive current throughput and cycle-time distributions from the backfill | Same |
-| 4 | Model the workflow — validate the DoW in Section 3 against how work actually moves | 1 session |
-| 5 | Discover classes of service — validate Section 5 against real examples | Same session |
-| 6 | Design the board — build in GitHub Projects | 1 day |
-| 7 | Socialize and negotiate — this document, plus the backfilled charts | This conversation |
-
-**Then run it as a shadow board for two iterations** alongside the existing process. Nothing is at risk during that window, and at the end of it we will have two real allocation charts and a first cut at our SLEs. If the artifacts are not better than what Scrum was giving us, we stop and we have lost nothing.
-
-**The sequencing point:** step 2 comes before the decision. We can generate the first allocation chart from historical data *before* changing anything, which means the choice can be made against a real artifact rather than a description of one.
-
----
-
-## 14. Addressing the objections
-
-**"If you look at it from the totally opposite view — no Scrum, no sprints — it begins to break down."**
-
-Correct, and the argument is sound as far as it goes. It establishes that *some* cadence, *some* forecasting mechanism, and *some* commitment discipline are necessary. It does not establish that those must take the form of a sprint commitment. Section 9 supplies the cadences, Section 11 supplies the forecasting, Section 8 supplies the commitment discipline. What we are removing is specifically the fixed two-week batch commitment — the one element that our demand profile makes unsound — and nothing else.
-
-**"All our projects work on the sprint cadence, so we'd just have to speak in sprints on project X while we discuss deadlines and delivery dates on our team."**
-
-Yes — and that is the design, not a compromise in it. The Service Delivery Review runs on a two-week cadence for exactly this reason. Fixed Date class of service is the explicit mechanism for external delivery commitments. Interoperating with iteration-based teams from a flow-based team is a solved problem.
-
-**"Sprints are basically the equivalent of a single point toward a sprint."**
-
-This is the observation that the sprint is functioning as a *reporting unit* rather than a *planning unit*. If that is what it is doing, we should keep it in that role — which is what the Iteration field does — and stop asking it to also serve as a commitment container it cannot support.
-
-**"Will eschewing all current methods in favor of a much more different approach not work?"**
-
-It would not, and we are not proposing it. Kanban explicitly starts with the current process and evolves it; that is a stated principle of the method, not a concession. Roles do not change. The two-week rhythm does not change. Our external reporting boundary does not change. What changes is the contents of the commitment and the artifacts we produce from it.
-
----
-
-## 15. Glossary
-
-| Term | Meaning |
-| --- | --- |
-| **WIT** | Work Item Type — what kind of work this is |
-| **CoS** | Class of Service — how we treat this work, based on cost of delay |
-| **WIP** | Work In Progress — items started but not finished |
-| **DoW** | Definition of Workflow — the explicit statement of states and policies |
-| **SLE** | Service Level Expectation — probabilistic delivery promise from historical data |
-| **Commitment point** | The state transition at which we promise to deliver an item |
-| **Cycle time** | Elapsed time from commitment point to delivery point |
-| **Lead time** | Elapsed time from customer request to delivery |
-| **Throughput** | Items delivered per unit time |
-| **Flow efficiency** | Active time ÷ total elapsed time |
-| **Aging WIP** | How long each in-flight item has been in progress |
-| **CFD** | Cumulative Flow Diagram — stacked area chart of items per state over time |
-| **Little's Law** | WIP = Throughput × Cycle Time |
-| **Capacity allocation** | Deliberate split of capacity across WITs |
-| **Replenishment** | Moving work into the committed queue |
-| **STATIK** | Systems Thinking Approach to Introducing Kanban |
-| **DORA metrics** | Deployment frequency, lead time for changes, change failure rate, failed-deployment recovery time |
+The percentile generator is the one thing genuinely worth building — a scheduled Action computing p50/p85/p95 from the Cycle Time (days) values, posted as a comment or committed as a chart. It's also what tells you where to set the SLE thresholds in the first place, so it comes before the SLE Status field is meaningful.
