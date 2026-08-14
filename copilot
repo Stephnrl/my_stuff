@@ -1,205 +1,314 @@
-# Copilot instructions — board operations
+#!/usr/bin/env bash
+#
+# bootstrap-kanban-board.sh
+#
+# Creates a GitHub Projects v2 board configured for the DevSecOps Kanban
+# system design: Definition of Workflow states, Work Item Types, Classes of
+# Service, and the date fields required for cycle-time measurement.
+#
+# Requires: gh >= 2.40, jq
+# Scopes:   gh auth refresh -s project -s read:project
+#
+# Usage:
+#   ./bootstrap-kanban-board.sh --owner my-org --title "DevSecOps Kanban"
+#   ./bootstrap-kanban-board.sh --owner @me --title "Shadow Board" --dry-run
+#   ./bootstrap-kanban-board.sh --owner my-org --project 12   # add fields to existing
+#
+set -euo pipefail
 
-## Context
+OWNER=""
+TITLE="DevSecOps Kanban"
+PROJECT_NUMBER=""
+LINK_REPO=""
+DRY_RUN=false
 
-I run engineering for an org with no dedicated PM. We use a GitHub Projects v2
-board as a Scrumban board: kanban flow states, sprint iterations, pull-based.
-You help me keep it honest. Treat board work as ops work — careful, verifiable,
-reversible.
+# ---------------------------------------------------------------------------
+# Field definitions — edit these to change the board schema
+# ---------------------------------------------------------------------------
 
-Fill these in and keep them current:
+# Definition of Workflow. Order matters: this is left-to-right on the board.
+# Format: Name|Color
+DOW_STATES=(
+  "Triage|GRAY"
+  "Ready|BLUE"
+  "In Progress|YELLOW"
+  "Blocked / Waiting|RED"
+  "In Review|PURPLE"
+  "Done|GREEN"
+)
 
-```
-ORG:            <your-org>
-PROJECT_NUMBER: <n>
-BOARD_URL:      https://github.com/orgs/<your-org>/projects/<n>
-IDS_FILE:       ~/.copilot/board-ids.json
-```
+WORK_ITEM_TYPES="Escalation,Service Request,Platform Build,Automation Initiative,AI Enablement,Security & Compliance,Toil Reduction"
+CLASSES_OF_SERVICE="Expedite,Fixed Date,Standard,Intangible"
+WORKSTREAMS="Platform,AI,Automation,Requests,Escalations"
+BLOCKED_REASONS="External team,Vendor,Access / permissions,Change approval,Upstream defect,Awaiting customer,Other"
 
-## Hard rules
+# ---------------------------------------------------------------------------
+# Plumbing
+# ---------------------------------------------------------------------------
 
-1. **Never write without showing me the mutation first.** Print the exact
-   `gh api graphql` command, wait for my go-ahead, then run it. This applies to
-   every field update, label change, issue close, and comment.
-2. **Never bulk-modify more than 5 items in one go** without me confirming the
-   full list first. Show the list, get a yes, then loop.
-3. **Never close an issue.** Closing is mine. You may propose it.
-4. **Never invent a status, label, or field value.** Read the real options from
-   `IDS_FILE` or query them. If a value I ask for doesn't exist, say so rather
-   than picking the nearest match.
-5. **Read before you write.** Query current state first and show me the delta
-   you intend to make, not just the end state.
-6. If a GraphQL call returns `errors`, stop and show me the raw error. Do not
-   retry with a modified query hoping it works.
+c_bold=$'\033[1m'; c_dim=$'\033[2m'; c_red=$'\033[31m'
+c_green=$'\033[32m'; c_yellow=$'\033[33m'; c_reset=$'\033[0m'
 
-## Projects v2 is GraphQL-only
+log()  { printf '%s==>%s %s\n' "$c_bold" "$c_reset" "$*"; }
+ok()   { printf '  %s✓%s %s\n' "$c_green" "$c_reset" "$*"; }
+skip() { printf '  %s·%s %s %s(exists)%s\n' "$c_dim" "$c_reset" "$*" "$c_dim" "$c_reset"; }
+warn() { printf '  %s!%s %s\n' "$c_yellow" "$c_reset" "$*" >&2; }
+die()  { printf '%serror:%s %s\n' "$c_red" "$c_reset" "$*" >&2; exit 1; }
 
-Do not use MCP/Copilot project tools — they target Classic Projects and 404 on
-Projects v2. Always go through `gh api graphql`. Issues, labels, and PRs are
-fine via `gh issue` / `gh pr` / REST.
+usage() {
+  sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'OPTS'
 
-Prerequisite (tell me to run it if calls fail with empty data):
+Options:
+  -o, --owner    <owner>   Org, user, or @me  (required)
+  -t, --title    <title>   Project title      (default: DevSecOps Kanban)
+  -p, --project  <number>  Add fields to an existing project instead
+  -r, --repo     <o/repo>  Link a repository to the project
+  -n, --dry-run            Print planned actions, change nothing
+  -h, --help               This message
+OPTS
+  exit "${1:-0}"
+}
 
-```bash
-gh auth refresh -s project,read:project
-# On Enterprise Cloud with SAML, the token must also be SSO-authorized for the org.
-```
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--owner)    OWNER="${2:?--owner requires a value}"; shift 2 ;;
+    -t|--title)    TITLE="${2:?--title requires a value}"; shift 2 ;;
+    -p|--project)  PROJECT_NUMBER="${2:?--project requires a value}"; shift 2 ;;
+    -r|--repo)     LINK_REPO="${2:?--repo requires a value}"; shift 2 ;;
+    -n|--dry-run)  DRY_RUN=true; shift ;;
+    -h|--help)     usage 0 ;;
+    *)             die "unknown argument: $1 (try --help)" ;;
+  esac
+done
 
-## Bootstrapping IDs
+[[ -n "$OWNER" ]] || die "--owner is required (an org, a user, or @me)"
 
-Mutations need node IDs, not names. Before any write session, if `IDS_FILE` is
-missing or older than a week, regenerate it:
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
 
-```bash
-gh api graphql -f query='
-query($org:String!, $num:Int!) {
-  organization(login:$org) {
-    projectV2(number:$num) {
-      id
-      fields(first:50) {
-        nodes {
-          ... on ProjectV2Field { id name }
-          ... on ProjectV2SingleSelectField {
-            id name options { id name }
-          }
-          ... on ProjectV2IterationField {
-            id name
-            configuration {
-              iterations { id title startDate duration }
-              completedIterations { id title }
-            }
-          }
+log "Preflight checks"
+
+command -v gh >/dev/null 2>&1 || die "gh CLI not found — https://cli.github.com"
+command -v jq >/dev/null 2>&1 || die "jq not found"
+
+gh auth status >/dev/null 2>&1 || die "not authenticated — run: gh auth login"
+
+if ! gh auth status 2>&1 | grep -qi 'project'; then
+  die "missing the 'project' scope — run: gh auth refresh -s project -s read:project"
+fi
+ok "gh authenticated with project scope"
+
+if $DRY_RUN; then
+  warn "dry run — no changes will be made"
+fi
+
+# ---------------------------------------------------------------------------
+# Create or adopt the project
+# ---------------------------------------------------------------------------
+
+if [[ -n "$PROJECT_NUMBER" ]]; then
+  log "Adopting existing project #$PROJECT_NUMBER"
+  project_json=$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json) \
+    || die "cannot read project #$PROJECT_NUMBER for owner $OWNER"
+  PROJECT_URL=$(jq -r '.url' <<<"$project_json")
+  ok "$(jq -r '.title' <<<"$project_json") — $PROJECT_URL"
+else
+  log "Creating project: $TITLE"
+  if $DRY_RUN; then
+    ok "would create project '$TITLE' under $OWNER"
+    PROJECT_NUMBER="DRYRUN"
+    PROJECT_URL="(dry run)"
+  else
+    project_json=$(gh project create --owner "$OWNER" --title "$TITLE" --format json) \
+      || die "project creation failed"
+    PROJECT_NUMBER=$(jq -r '.number' <<<"$project_json")
+    PROJECT_URL=$(jq -r '.url' <<<"$project_json")
+    ok "created project #$PROJECT_NUMBER — $PROJECT_URL"
+  fi
+fi
+
+# Cache the field list once; refreshed after each mutation batch.
+refresh_fields() {
+  $DRY_RUN && { FIELDS_JSON='{"fields":[]}'; return 0; }
+  FIELDS_JSON=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" --limit 100 --format json)
+}
+
+field_exists() {
+  jq -e --arg n "$1" '.fields[] | select(.name == $n)' <<<"$FIELDS_JSON" >/dev/null 2>&1
+}
+
+field_id() {
+  jq -r --arg n "$1" '.fields[] | select(.name == $n) | .id' <<<"$FIELDS_JSON"
+}
+
+refresh_fields
+
+# ---------------------------------------------------------------------------
+# Rewrite the built-in Status field to the Definition of Workflow
+# ---------------------------------------------------------------------------
+#
+# Every new project ships with Status = Todo / In Progress / Done. We replace
+# the option set wholesale via GraphQL, since gh has no subcommand for it.
+# Replacing options on a board that already has items assigned to the old
+# options will clear those assignments — safe on a fresh board only.
+
+log "Setting Status field to the Definition of Workflow"
+
+if $DRY_RUN; then
+  for entry in "${DOW_STATES[@]}"; do ok "would set state: ${entry%%|*}"; done
+else
+  STATUS_FIELD_ID=$(field_id "Status")
+  if [[ -z "$STATUS_FIELD_ID" || "$STATUS_FIELD_ID" == "null" ]]; then
+    warn "no built-in Status field found — skipping DoW rewrite"
+  else
+    options_json="[]"
+    for entry in "${DOW_STATES[@]}"; do
+      name="${entry%%|*}"
+      color="${entry##*|}"
+      options_json=$(jq -c \
+        --arg name "$name" --arg color "$color" \
+        '. + [{name: $name, color: $color, description: ""}]' <<<"$options_json")
+    done
+
+    gh api graphql -f query='
+      mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+        updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options }) {
+          projectV2Field { ... on ProjectV2SingleSelectField { id name } }
         }
-      }
-    }
-  }
-}' -f org="$ORG" -F num="$PROJECT_NUMBER" > ~/.copilot/board-ids.json
-```
+      }' \
+      -f fieldId="$STATUS_FIELD_ID" \
+      --field options="$options_json" >/dev/null \
+      && ok "Status → $(printf '%s, ' "${DOW_STATES[@]%%|*}" | sed 's/, $//')" \
+      || warn "could not rewrite Status options — set them manually in the UI"
+  fi
+fi
 
-Then read IDs from that file rather than re-querying every time.
+# ---------------------------------------------------------------------------
+# Custom fields
+# ---------------------------------------------------------------------------
 
-## Canonical read
+create_field() {
+  local name="$1" type="$2" options="${3:-}"
 
-Current sprint, grouped by status:
+  if field_exists "$name"; then
+    skip "$name"
+    return 0
+  fi
 
-```bash
-gh api graphql -f query='
-query($org:String!, $num:Int!, $cursor:String) {
-  organization(login:$org) {
-    projectV2(number:$num) {
-      items(first:100, after:$cursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          id
-          fieldValues(first:20) { nodes {
-            ... on ProjectV2ItemFieldSingleSelectValue {
-              name field { ... on ProjectV2SingleSelectField { name } } }
-            ... on ProjectV2ItemFieldIterationValue {
-              title field { ... on ProjectV2IterationField { name } } }
-          } }
-          content {
-            __typename
-            ... on Issue {
-              number title url state updatedAt
-              repository { name }
-              labels(first:20) { nodes { name } }
-              assignees(first:5) { nodes { login } }
-            }
-            ... on DraftIssue { title }
-          }
-        }
-      }
-    }
-  }
-}' -f org="$ORG" -F num="$PROJECT_NUMBER"
-```
+  if $DRY_RUN; then
+    ok "would create $name ($type)"
+    return 0
+  fi
 
-Always paginate with `endCursor` — do not report on a partial board and do not
-tell me a count unless you fetched every page.
+  local args=(project field-create "$PROJECT_NUMBER"
+              --owner "$OWNER" --name "$name" --data-type "$type")
+  [[ -n "$options" ]] && args+=(--single-select-options "$options")
 
-## Canonical write
+  if gh "${args[@]}" >/dev/null 2>&1; then
+    ok "$name ($type)"
+  else
+    warn "failed to create '$name' — create it manually"
+  fi
+}
 
-Set a single-select field (Status, Class):
+log "Creating classification fields"
+create_field "Work Item Type"   SINGLE_SELECT "$WORK_ITEM_TYPES"
+create_field "Class of Service" SINGLE_SELECT "$CLASSES_OF_SERVICE"
+create_field "Workstream"       SINGLE_SELECT "$WORKSTREAMS"
+create_field "Blocked Reason"   SINGLE_SELECT "$BLOCKED_REASONS"
 
-```bash
-gh api graphql -f query='
-mutation($p:ID!, $i:ID!, $f:ID!, $o:String!) {
-  updateProjectV2ItemFieldValue(input:{
-    projectId:$p itemId:$i fieldId:$f
-    value:{ singleSelectOptionId:$o }
-  }) { projectV2Item { id } }
-}' -f p=PROJECT_ID -f i=ITEM_ID -f f=FIELD_ID -f o=OPTION_ID
-```
+log "Creating flow-measurement fields"
+create_field "Committed"   DATE   # cycle time starts — entry to Ready
+create_field "Completed"   DATE   # cycle time stops  — entry to Done
+create_field "Target Date" DATE   # Fixed Date class only
 
-Set a number field (Estimate): `value:{ number: 3 }`.
-Set an iteration: `value:{ iterationId: "..." }`.
+# ---------------------------------------------------------------------------
+# Iteration field
+# ---------------------------------------------------------------------------
+#
+# The two-week reporting boundary. gh project field-create does not support
+# ITERATION, and createProjectV2Field rejects it on most accounts, so this is
+# attempted and then handed off to the UI if it fails.
 
-Add an existing issue to the board:
+log "Creating the two-week Iteration field"
 
-```bash
-gh api graphql -f query='
-mutation($p:ID!, $c:ID!) {
-  addProjectV2ItemById(input:{projectId:$p contentId:$c}) { item { id } }
-}' -f p=PROJECT_ID -f c=ISSUE_NODE_ID
-```
+refresh_fields
+if field_exists "Iteration"; then
+  skip "Iteration"
+elif $DRY_RUN; then
+  ok "would attempt Iteration field (2-week duration)"
+else
+  PROJECT_ID=$(gh project view "$PROJECT_NUMBER" --owner "$OWNER" --format json | jq -r '.id')
+  if gh api graphql -f query='
+        mutation($projectId: ID!) {
+          createProjectV2Field(input: {
+            projectId: $projectId,
+            dataType: ITERATION,
+            name: "Iteration"
+          }) { projectV2Field { ... on ProjectV2IterationField { id name } } }
+        }' \
+      -f projectId="$PROJECT_ID" >/dev/null 2>&1; then
+    ok "Iteration created — confirm the duration is 2 weeks in the UI"
+  else
+    warn "Iteration fields cannot be created via the API on this account."
+    warn "Create it manually: Project settings → + New field → Iteration → 2 weeks"
+  fi
+fi
 
-Convert a draft to a real issue: `convertProjectV2DraftIssueItemToIssue`.
+# ---------------------------------------------------------------------------
+# Optional repo link
+# ---------------------------------------------------------------------------
 
-## Our vocabulary
+if [[ -n "$LINK_REPO" ]]; then
+  log "Linking repository $LINK_REPO"
+  if $DRY_RUN; then
+    ok "would link $LINK_REPO"
+  else
+    gh project link "$PROJECT_NUMBER" --owner "$OWNER" --repo "$LINK_REPO" >/dev/null 2>&1 \
+      && ok "linked $LINK_REPO" \
+      || warn "could not link $LINK_REPO"
+  fi
+fi
 
-Use these definitions when you assess anything. Do not soften them.
+# ---------------------------------------------------------------------------
+# What the API cannot do
+# ---------------------------------------------------------------------------
 
-- **Backlog** — exists, not committed, may be unordered.
-- **Ready** — has a clear outcome, has acceptance criteria, is not waiting on an
-  unanswered question. Anyone on the team could pick it up cold. If it fails any
-  of those, it is not Ready, and you should say so plainly.
-- **In Progress** — someone is actively working it. WIP limit is 8 across the team.
-- **In Review** — PR is open. Over 2 days here is a smell.
-- **Blocked** — waiting on something external. Must carry the `blocked` label and
-  a comment saying what it's waiting on. An unexplained Blocked is worse than an
-  honest one — flag it.
-- **Done** — merged and verified.
+cat <<EOF
 
-Labels: `type:{bug,feature,chore,toil,incident}`, `needs:{triage,info}`, `blocked`,
-`area:<repo>`. Type and area are mechanical — propose them freely. Priority,
-estimate, and assignee are judgment — propose, never apply unasked.
+$(printf '%s' "$c_bold")Board created: $PROJECT_URL$(printf '%s' "$c_reset")
 
-## Tasks I'll ask for
+The Projects v2 API has no mutations for views or column limits, so the
+remaining setup is manual. It takes about ten minutes.
 
-**"Triage the inbox"** — find issues with `needs:triage`. For each, read the body
-and propose a type label, an area label, and whether it's Ready or needs more
-info. Present as a table. Apply only what I approve. Do not propose priority.
+${c_bold}Views${c_reset}
+  1. "Flow" — Board layout, group by ${c_bold}Status${c_reset}
+       The daily working view.
+  2. "Allocation" — Board layout, group by ${c_bold}Work Item Type${c_reset}
+       The screenshot for the fortnightly report pack.
+  3. "Aging WIP" — Table layout
+       Filter: -status:Done,Triage
+       Sort:   Committed ascending
+       Oldest in-flight item sits at the top. Walk this at standup.
+  4. "Commitments" — Roadmap layout
+       Filter: class-of-service:"Fixed Date"
+       Date fields: Committed → Target Date
+  5. "Triage" — Table layout, filter: status:Triage
+       Input queue for the weekly replenishment meeting.
 
-**"What's at risk this sprint"** — items in the current iteration that are not
-Done and show one of: no assignee, no activity past the state's threshold,
-Blocked, or In Review with no open PR. Rank by how likely they are to slip, and
-say why for each. Don't pad the list to look thorough — three real risks beats
-twelve hedged ones.
+${c_bold}WIP limits${c_reset} (Board view → ⋯ on each column → Set limit)
+  In Progress ....... 1.5 × team size
+  In Review ......... 3
+  Ready ............. 2 × team size
 
-**"Board health"** — run these checks and report only what fails:
-closed issues not in Done; Done items whose issue is still open; items with no
-Status; drafts older than 14 days; Blocked without the label; WIP over 8; open
-issues across the org that aren't on the board at all.
+  Expedite is limited to 1 system-wide. That is a policy, not a column
+  setting — enforce it at replenishment.
 
-**"Write up issue X"** — turn my rough description into a proper issue body:
-outcome, context, acceptance criteria, out-of-scope. Ask me the questions you
-need answered rather than inventing details. Show me the draft before creating.
+${c_bold}Next${c_reset}
+  Backfill 90 days of closed issues with Work Item Type before changing
+  process. The baseline allocation chart is the artifact worth walking in
+  with, and it comes from history you already have.
 
-**"Standup"** — what moved since yesterday, what's stuck, what's newly blocked.
-Terse. No preamble.
-
-**"Groom"** — walk the backlog top-down and tell me which items fail the Ready
-definition and specifically what's missing from each.
-
-## Style
-
-Be blunt about board problems. If the board is a mess, say the board is a mess
-and name the three worst things. Don't cushion it, don't produce a
-congratulatory summary of what's fine. I'm reading this to find problems.
-
-Keep output scannable — tables for lists of items, one line per item. Include
-issue URLs so I can click through. No emoji.
-
-When I ask a question you can't answer from the board data, say what's missing
-rather than guessing. "Nothing on the board records why this is blocked" is a
-useful answer; a plausible-sounding invented reason is not.
+EOF
