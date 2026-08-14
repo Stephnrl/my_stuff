@@ -1,3 +1,68 @@
-gh project field-create <number> --owner <owner> \
-  --name "Work Item Type" --data-type SINGLE_SELECT \
-  --single-select-options "Escalation,Service Request,Platform Build,Automation Initiative,AI Enablement,Security & Compliance,Toil Reduction"
+#!/usr/bin/env bash
+#
+# fix-status-field.sh — rewrite the built-in Status field to the Definition
+# of Workflow states. Fixes the failed rewrite in bootstrap-kanban-board.sh.
+#
+# Usage: ./fix-status-field.sh --owner my-org --project 12
+#
+# WARNING: replacing single-select options clears any item assignments to the
+# old options. Safe on a fresh board, destructive on a populated one.
+#
+set -euo pipefail
+
+OWNER=""; PROJECT_NUMBER=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--owner)   OWNER="${2:?}"; shift 2 ;;
+    -p|--project) PROJECT_NUMBER="${2:?}"; shift 2 ;;
+    *) echo "usage: $0 --owner <owner> --project <number>" >&2; exit 1 ;;
+  esac
+done
+[[ -n "$OWNER" && -n "$PROJECT_NUMBER" ]] || { echo "--owner and --project required" >&2; exit 1; }
+
+DOW_STATES=(
+  "Triage|GRAY"
+  "Ready|BLUE"
+  "In Progress|YELLOW"
+  "Blocked / Waiting|RED"
+  "In Review|PURPLE"
+  "Done|GREEN"
+)
+
+echo "==> Locating the Status field"
+STATUS_FIELD_ID=$(gh project field-list "$PROJECT_NUMBER" --owner "$OWNER" \
+  --limit 100 --format json | jq -r '.fields[] | select(.name=="Status") | .id')
+
+[[ -n "$STATUS_FIELD_ID" && "$STATUS_FIELD_ID" != "null" ]] \
+  || { echo "no Status field found on project #$PROJECT_NUMBER" >&2; exit 1; }
+echo "    $STATUS_FIELD_ID"
+
+# Build the options array as real JSON.
+options_json="[]"
+for entry in "${DOW_STATES[@]}"; do
+  options_json=$(jq -c --arg name "${entry%%|*}" --arg color "${entry##*|}" \
+    '. + [{name: $name, color: $color, description: ""}]' <<<"$options_json")
+done
+
+read -r -d '' QUERY <<'GQL' || true
+mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options }) {
+    projectV2Field { ... on ProjectV2SingleSelectField { name options { name } } }
+  }
+}
+GQL
+
+echo "==> Rewriting Status options"
+
+# The whole payload goes in as one JSON body. Passing the array via
+# `gh api graphql --field` sends it as a *string*, which GraphQL rejects
+# against [ProjectV2SingleSelectFieldOptionInput!]! — that was the bug.
+jq -n --arg q "$QUERY" --arg fid "$STATUS_FIELD_ID" --argjson opts "$options_json" \
+     '{query: $q, variables: {fieldId: $fid, options: $opts}}' \
+  | gh api graphql --input - \
+  | jq -r '
+      if .errors then
+        "FAILED: " + (.errors[0].message)
+      else
+        "Status → " + ([.data.updateProjectV2Field.projectV2Field.options[].name] | join(", "))
+      end'
