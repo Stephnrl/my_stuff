@@ -1,377 +1,257 @@
-"""Render POA&M state to xlsx.
+"""Persistence for POA&M state.
 
-This is a VIEW of state/current.json, never a source of truth. Nothing in the
-pipeline ever reads a workbook back.
+The canonical record is JSON. The xlsx is a render of it and is never parsed
+back - round-tripping through a spreadsheet loses types and merged-cell
+structure and will eventually corrupt the audit trail.
 
-Summary counts are written as COUNTIFS formulas rather than baked-in numbers so
-the workbook stays live if someone edits a status cell by hand during review.
+Two drivers:
+  local://./state      - filesystem, for tests and dry runs
+  az://<account>/<container>  - Azure Blob, with ETag optimistic concurrency
+
+The concurrency guard matters: two builds of the same component running at
+once will otherwise interleave read-modify-write on current.json and one
+build's findings vanish.
 """
 
 from __future__ import annotations
 
-import io
-from typing import Any, Iterable
+import json
+import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
-from openpyxl import Workbook
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.worksheet.datavalidation import DataValidation
+from .models import PoamRecord, utc_now_iso
 
-from .models import DiffResult, PoamRecord, ScanMeta, SEVERITY_ORDER, today_iso
-
-FONT = "Arial"
-
-HEADER_FILL = PatternFill("solid", fgColor="1F3864")
-HEADER_FONT = Font(name=FONT, size=10, bold=True, color="FFFFFF")
-BASE_FONT = Font(name=FONT, size=10)
-BOLD = Font(name=FONT, size=10, bold=True)
-TITLE_FONT = Font(name=FONT, size=14, bold=True, color="1F3864")
-
-SEVERITY_FILL = {
-    "CRITICAL": PatternFill("solid", fgColor="C00000"),
-    "HIGH": PatternFill("solid", fgColor="ED7D31"),
-    "MEDIUM": PatternFill("solid", fgColor="FFC000"),
-    "LOW": PatternFill("solid", fgColor="A9D08E"),
-    "UNKNOWN": PatternFill("solid", fgColor="D9D9D9"),
-}
-SEVERITY_TEXT = {
-    "CRITICAL": Font(name=FONT, size=10, bold=True, color="FFFFFF"),
-    "HIGH": Font(name=FONT, size=10, bold=True, color="FFFFFF"),
-}
-OVERDUE_FILL = PatternFill("solid", fgColor="FFC7CE")
-NEW_FILL = PatternFill("solid", fgColor="FFF2CC")
-THIN = Side(style="thin", color="BFBFBF")
-BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
-
-COLUMNS: list[tuple[str, str, int]] = [
-    ("poam_id", "POA&M ID", 20),
-    ("vuln_id", "Vulnerability ID", 18),
-    ("severity", "Severity", 11),
-    ("poam_status", "Status", 24),
-    ("pkg_name", "Package", 24),
-    ("installed_version", "Installed Version", 18),
-    ("fixed_version", "Fixed Version", 18),
-    ("target", "Location", 34),
-    ("pkg_type", "Package Type", 14),
-    ("cvss_score", "CVSS v3", 9),
-    ("first_detected", "First Detected", 14),
-    ("last_detected", "Last Detected", 14),
-    ("scheduled_completion_date", "Scheduled Completion", 20),
-    ("closed_date", "Closed Date", 13),
-    ("reopened_count", "Reopened", 10),
-    ("deviation_type", "Deviation Type", 22),
-    ("deviation_ref", "Deviation Ref", 16),
-    ("deviation_approved_by", "Approved By", 18),
-    ("deviation_expires", "Deviation Expires", 18),
-    ("deviation_justification", "Justification / Remediation Plan", 46),
-    ("title", "Description", 52),
-    ("primary_url", "Reference", 40),
-    ("purl", "Package URL", 40),
-    ("last_seen_tag", "Last Seen Tag", 22),
-]
+STATE_SCHEMA_VERSION = 1
 
 
-def _style_header(ws, row: int, width_map: list[tuple[str, str, int]]) -> None:
-    for idx, (_, header, width) in enumerate(width_map, start=1):
-        cell = ws.cell(row=row, column=idx, value=header)
-        cell.fill = HEADER_FILL
-        cell.font = HEADER_FONT
-        cell.alignment = Alignment(vertical="center", wrap_text=True)
-        cell.border = BORDER
-        ws.column_dimensions[get_column_letter(idx)].width = width
-    ws.row_dimensions[row].height = 30
+@dataclass
+class StateDocument:
+    component_id: str
+    records: list[PoamRecord]
+    next_seq: int = 1
+    schema_version: int = STATE_SCHEMA_VERSION
+    last_updated: str = ""
+    last_scan: dict[str, Any] | None = None
+    scan_count: int = 0
+    etag: str | None = None          # transport concern, not serialized
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "schema_version": self.schema_version,
+                "component_id": self.component_id,
+                "next_seq": self.next_seq,
+                "last_updated": self.last_updated or utc_now_iso(),
+                "scan_count": self.scan_count,
+                "last_scan": self.last_scan or {},
+                "records": [r.to_dict() for r in self.records],
+            },
+            indent=2,
+            sort_keys=False,
+        )
+
+    @classmethod
+    def from_json(cls, blob: str, component_id: str, etag: str | None = None) -> "StateDocument":
+        data = json.loads(blob)
+        return cls(
+            component_id=data.get("component_id", component_id),
+            records=[PoamRecord.from_dict(r) for r in data.get("records", [])],
+            next_seq=int(data.get("next_seq", 1)),
+            schema_version=int(data.get("schema_version", STATE_SCHEMA_VERSION)),
+            last_updated=data.get("last_updated", ""),
+            last_scan=data.get("last_scan"),
+            scan_count=int(data.get("scan_count", 0)),
+            etag=etag,
+        )
+
+    @classmethod
+    def empty(cls, component_id: str) -> "StateDocument":
+        return cls(component_id=component_id, records=[], next_seq=1)
 
 
-def _write_records(ws, records: list[PoamRecord], start_row: int, new_keys: set[str]) -> int:
-    row = start_row
-    today = today_iso()
-    for rec in records:
-        for idx, (attr, _, _) in enumerate(COLUMNS, start=1):
-            value = getattr(rec, attr, "")
-            if attr == "reopened_count" and not value:
-                value = ""
-            cell = ws.cell(row=row, column=idx, value=value)
-            cell.font = BASE_FONT
-            cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=attr in {"title", "deviation_justification", "target", "purl"})
-            if attr == "severity":
-                cell.fill = SEVERITY_FILL.get(rec.severity, SEVERITY_FILL["UNKNOWN"])
-                cell.font = SEVERITY_TEXT.get(rec.severity, BOLD)
-                cell.alignment = Alignment(horizontal="center", vertical="top")
-            if attr == "cvss_score" and value:
-                cell.number_format = "0.0"
-        if rec.is_overdue(today):
-            ws.cell(row=row, column=13).fill = OVERDUE_FILL
-            ws.cell(row=row, column=13).font = Font(name=FONT, size=10, bold=True, color="9C0006")
-        if rec.finding_key in new_keys:
-            ws.cell(row=row, column=1).fill = NEW_FILL
-        row += 1
-    return row
+def component_slug(component_id: str) -> str:
+    """Filesystem/blob-safe path segment. Preserves hierarchy with '/'.
+
+    Dot-only segments are dropped outright. component_id reaches us from a
+    workflow input, so "../../etc/passwd" or "a/../../b" must not be able to
+    walk out of the state prefix and overwrite another component's POA&M.
+    """
+    parts = [p for p in component_id.strip("/").split("/") if p]
+    safe: list[str] = []
+    for part in parts:
+        cleaned = "".join(ch if (ch.isalnum() or ch in "-._") else "-" for ch in part)
+        # Reject "." / ".." / "..." and anything that is only dots.
+        if not cleaned.strip("."):
+            continue
+        safe.append(cleaned.strip("."))
+    return "/".join(p for p in safe if p) or "unknown"
 
 
-def _sheet_poam(wb: Workbook, records: list[PoamRecord], new_keys: set[str], title: str) -> None:
-    ws = wb.create_sheet(title)
-    _style_header(ws, 1, COLUMNS)
-    end = _write_records(ws, records, 2, new_keys)
-    ws.freeze_panes = "E2"
-    if end > 2:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{end - 1}"
-    ws.sheet_view.showGridLines = False
+class StateStore:
+    """Interface: read_state / write_state / put_artifact."""
+
+    def read_state(self, component_id: str) -> StateDocument:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def write_state(self, doc: StateDocument) -> str:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def put_artifact(self, path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        raise NotImplementedError  # pragma: no cover - interface
 
 
-def _sheet_summary(
-    wb: Workbook,
-    meta: ScanMeta,
-    diff: DiffResult,
-    decision: Any,
-    open_rows: int,
-) -> None:
-    ws = wb.create_sheet("Summary", 0)
-    ws.sheet_view.showGridLines = False
-    ws.column_dimensions["A"].width = 34
-    ws.column_dimensions["B"].width = 58
-    ws.column_dimensions["C"].width = 14
-    ws.column_dimensions["D"].width = 14
+class LocalStore(StateStore):
+    def __init__(self, root: str) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
 
-    ws["A1"] = "Plan of Action & Milestones"
-    ws["A1"].font = TITLE_FONT
-    ws["A2"] = meta.component_id
-    ws["A2"].font = Font(name=FONT, size=11, bold=True)
+    def _state_path(self, component_id: str) -> Path:
+        return self.root / "state" / component_slug(component_id) / "current.json"
 
-    rows: list[tuple[str, Any]] = [
-        ("Generated (UTC)", meta.scan_timestamp),
-        ("Scan Type", "Initial" if meta.is_initial_scan else "Recurring"),
-        ("Image Reference", meta.image_ref),
-        ("Image Digest", meta.image_digest),
-        ("Image Tag", meta.image_tag),
-        ("Gate Result", getattr(decision, "result", "unknown").upper()),
-        ("", ""),
-        ("Trivy Version", meta.trivy_version),
-        ("Vulnerability DB Updated", meta.vuln_db_updated_at),
-        ("Vulnerability DB Next Update", meta.vuln_db_next_update),
-        ("Policy Profile", meta.policy_profile),
-        ("Policy Fingerprint", meta.policy_sha),
-        ("Gate Version", meta.gate_version),
-        ("Source Repository", meta.repository),
-        ("Workflow Run", meta.run_url),
-        ("Triggered By", meta.actor),
-        ("Commit", meta.git_sha),
-    ]
-    r = 4
-    for label, value in rows:
-        if label:
-            ws.cell(row=r, column=1, value=label).font = BOLD
-            c = ws.cell(row=r, column=2, value=value)
-            c.font = BASE_FONT
-            c.alignment = Alignment(wrap_text=False)
-        r += 1
+    def read_state(self, component_id: str) -> StateDocument:
+        p = self._state_path(component_id)
+        if not p.exists():
+            return StateDocument.empty(component_id)
+        return StateDocument.from_json(p.read_text(encoding="utf-8"), component_id)
 
-    r += 1
-    ws.cell(row=r, column=1, value="This Scan").font = Font(name=FONT, size=12, bold=True, color="1F3864")
-    r += 1
-    counts = diff.counts()
-    for label, key in [
-        ("New findings", "new"),
-        ("Closed this scan", "closed"),
-        ("Reopened (regression)", "reopened"),
-        ("Carried forward", "persisting"),
-        ("Severity reclassified", "severity_drift"),
-    ]:
-        ws.cell(row=r, column=1, value=label).font = BASE_FONT
-        ws.cell(row=r, column=2, value=counts.get(key, 0)).font = BOLD
-        r += 1
+    def write_state(self, doc: StateDocument) -> str:
+        p = self._state_path(doc.component_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(doc.to_json(), encoding="utf-8")
+        return str(p)
 
-    r += 1
-    ws.cell(row=r, column=1, value="Open Items by Severity").font = Font(
-        name=FONT, size=12, bold=True, color="1F3864"
+    def put_artifact(self, path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        p = self.root / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+        return str(p)
+
+
+class AzureBlobStore(StateStore):
+    """Azure Blob driver. Auth via DefaultAzureCredential (OIDC/workload identity).
+
+    For Azure Government pass environment='usgovernment' so the credential
+    targets the correct authority host and the endpoint suffix is right.
+    """
+
+    def __init__(
+        self,
+        account: str,
+        container: str,
+        environment: str = "public",
+        credential: Any | None = None,
+        max_retries: int = 5,
+    ) -> None:
+        from azure.identity import AzureAuthorityHosts, DefaultAzureCredential
+        from azure.storage.blob import BlobServiceClient
+
+        suffix = "blob.core.usgovcloudapi.net" if environment == "usgovernment" else "blob.core.windows.net"
+        authority = (
+            AzureAuthorityHosts.AZURE_GOVERNMENT
+            if environment == "usgovernment"
+            else AzureAuthorityHosts.AZURE_PUBLIC_CLOUD
+        )
+        cred = credential or DefaultAzureCredential(authority=authority)
+        self._client = BlobServiceClient(f"https://{account}.{suffix}", credential=cred)
+        self._container = self._client.get_container_client(container)
+        self.max_retries = max_retries
+        self.account = account
+        self.container = container
+        self.suffix = suffix
+
+    def _state_blob(self, component_id: str) -> str:
+        return f"state/{component_slug(component_id)}/current.json"
+
+    def read_state(self, component_id: str) -> StateDocument:
+        from azure.core.exceptions import ResourceNotFoundError
+
+        blob = self._container.get_blob_client(self._state_blob(component_id))
+        try:
+            downloader = blob.download_blob(encoding="utf-8")
+            etag = downloader.properties.etag
+            return StateDocument.from_json(downloader.readall(), component_id, etag=etag)
+        except ResourceNotFoundError:
+            return StateDocument.empty(component_id)
+
+    def write_state(self, doc: StateDocument) -> str:
+        """Write guarded by If-Match. Caller re-reads and retries on conflict."""
+        from azure.core import MatchConditions
+        from azure.core.exceptions import ResourceModifiedError, ResourceExistsError
+
+        name = self._state_blob(doc.component_id)
+        blob = self._container.get_blob_client(name)
+        payload = doc.to_json().encode("utf-8")
+
+        if doc.etag:
+            blob.upload_blob(
+                payload,
+                overwrite=True,
+                etag=doc.etag,
+                match_condition=MatchConditions.IfNotModified,
+                content_type="application/json",
+            )
+        else:
+            # First write for this component: fail if someone beat us to it.
+            blob.upload_blob(
+                payload,
+                overwrite=False,
+                content_type="application/json",
+            )
+        return f"https://{self.account}.{self.suffix}/{self.container}/{name}"
+
+    def put_artifact(self, path: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        blob = self._container.get_blob_client(path)
+        blob.upload_blob(data, overwrite=True, content_type=content_type)
+        return f"https://{self.account}.{self.suffix}/{self.container}/{path}"
+
+
+def build_store(uri: str, environment: str = "public") -> StateStore:
+    """uri: 'local://./state' or 'az://<account>/<container>'."""
+    if uri.startswith("local://"):
+        return LocalStore(uri[len("local://") :] or "./.state")
+    if uri.startswith("az://"):
+        rest = uri[len("az://") :].strip("/")
+        if "/" not in rest:
+            raise ValueError("az:// URI must be az://<account>/<container>")
+        account, container = rest.split("/", 1)
+        return AzureBlobStore(account, container.split("/")[0], environment=environment)
+    raise ValueError(f"Unsupported store URI: {uri}")
+
+
+def with_concurrency_retry(store: StateStore, component_id: str, mutate, max_retries: int = 5):
+    """Read -> mutate -> write, retrying the whole cycle on an ETag conflict.
+
+    `mutate(doc) -> (doc, extra)`. Re-runs the reconcile against freshly read
+    state rather than blindly retrying the write, which would clobber the
+    concurrent build's findings.
+    """
+    # Imported lazily and optionally: the local driver must work on a runner
+    # that has no Azure SDK installed (tests, dry runs, air-gapped debugging).
+    try:
+        from azure.core.exceptions import (  # type: ignore
+            ResourceExistsError,
+            ResourceModifiedError,
+        )
+
+        conflict_errors: tuple[type[Exception], ...] = (ResourceModifiedError, ResourceExistsError)
+    except ImportError:
+        conflict_errors = ()
+
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        doc = store.read_state(component_id)
+        doc, extra = mutate(doc)
+        try:
+            uri = store.write_state(doc)
+            return doc, extra, uri
+        except conflict_errors as exc:  # pragma: no cover - needs Azure
+            last_exc = exc
+            sleep_for = min(2**attempt * 0.5, 8) + (os.getpid() % 100) / 1000.0
+            time.sleep(sleep_for)
+    raise RuntimeError(
+        f"Could not commit POA&M state for {component_id} after {max_retries} attempts "
+        f"(concurrent builds of the same component). Last error: {last_exc}"
     )
-    r += 1
-    header_row = r
-    for i, label in enumerate(["Severity", "Total Open", "Counting Toward Gate"]):
-        c = ws.cell(row=header_row, column=i + 1, value=label)
-        c.fill = HEADER_FILL
-        c.font = HEADER_FONT
-        c.border = BORDER
-    r += 1
-
-    # COUNTIFS against the live POA&M sheet keeps this honest if a reviewer
-    # edits a status cell during assessment.
-    last = max(open_rows, 2)
-    for sev in SEVERITY_ORDER:
-        ws.cell(row=r, column=1, value=sev).font = BOLD
-        ws.cell(row=r, column=1).fill = SEVERITY_FILL.get(sev, SEVERITY_FILL["UNKNOWN"])
-        ws.cell(row=r, column=1).font = SEVERITY_TEXT.get(sev, BOLD)
-        ws.cell(row=r, column=2, value=f'=COUNTIFS(\'POA&M Items\'!$C$2:$C${last},A{r})').font = BASE_FONT
-        ws.cell(
-            row=r, column=3,
-            value=f'=COUNTIFS(\'POA&M Items\'!$C$2:$C${last},A{r},\'POA&M Items\'!$P$2:$P${last},"")',
-        ).font = BASE_FONT
-        for col in (1, 2, 3):
-            ws.cell(row=r, column=col).border = BORDER
-        r += 1
-
-    ws.cell(row=r, column=1, value="TOTAL").font = BOLD
-    ws.cell(row=r, column=2, value=f"=SUM(B{r - len(SEVERITY_ORDER)}:B{r - 1})").font = BOLD
-    ws.cell(row=r, column=3, value=f"=SUM(C{r - len(SEVERITY_ORDER)}:C{r - 1})").font = BOLD
-
-    r += 2
-    ws.cell(row=r, column=1, value="Column P is Deviation Type; blank means the item counts toward the gate.").font = Font(
-        name=FONT, size=9, italic=True, color="808080"
-    )
-    r += 1
-    ws.cell(
-        row=r, column=1,
-        value="Counts are formulas over the POA&M Items sheet and recalculate on open.",
-    ).font = Font(name=FONT, size=9, italic=True, color="808080")
-
-    if getattr(decision, "bypass_used", False):
-        r += 2
-        ws.cell(row=r, column=1, value="EMERGENCY BYPASS USED").font = Font(
-            name=FONT, size=12, bold=True, color="C00000"
-        )
-        r += 1
-        for label, value in [
-            ("Approved by", getattr(decision, "bypass_actor", "")),
-            ("Justification", getattr(decision, "bypass_reason", "")),
-        ]:
-            ws.cell(row=r, column=1, value=label).font = BOLD
-            ws.cell(row=r, column=2, value=value).font = BASE_FONT
-            r += 1
-
-
-def _sheet_violations(wb: Workbook, decision: Any) -> None:
-    violations = getattr(decision, "violations", []) or []
-    if not violations:
-        return
-    ws = wb.create_sheet("Gate Violations")
-    ws.sheet_view.showGridLines = False
-    headers = [
-        ("rule", "Rule", 18),
-        ("poam_id", "POA&M ID", 20),
-        ("vuln_id", "Vulnerability ID", 18),
-        ("severity", "Severity", 11),
-        ("pkg_name", "Package", 24),
-        ("installed_version", "Installed", 16),
-        ("fixed_version", "Fixed In", 16),
-        ("scheduled_completion_date", "Due", 14),
-        ("target", "Location", 40),
-    ]
-    _style_header(ws, 1, headers)
-    for i, v in enumerate(violations, start=2):
-        for idx, (key, _, _) in enumerate(headers, start=1):
-            cell = ws.cell(row=i, column=idx, value=v.get(key, ""))
-            cell.font = BASE_FONT
-            cell.border = BORDER
-            if key == "severity":
-                cell.fill = SEVERITY_FILL.get(v.get("severity"), SEVERITY_FILL["UNKNOWN"])
-                cell.font = SEVERITY_TEXT.get(v.get("severity"), BOLD)
-    ws.freeze_panes = "A2"
-
-
-def _sheet_deviations(wb: Workbook, records: list[PoamRecord]) -> None:
-    active = [r for r in records if r.has_active_deviation and r.is_open]
-    ws = wb.create_sheet("Deviations")
-    ws.sheet_view.showGridLines = False
-    headers = [
-        ("poam_id", "POA&M ID", 20),
-        ("vuln_id", "Vulnerability ID", 18),
-        ("severity", "Severity", 11),
-        ("deviation_type", "Deviation Type", 22),
-        ("deviation_ref", "Reference", 16),
-        ("deviation_approved_by", "Approved By", 20),
-        ("deviation_expires", "Expires", 14),
-        ("deviation_justification", "Justification", 70),
-    ]
-    _style_header(ws, 1, headers)
-    for i, rec in enumerate(active, start=2):
-        for idx, (attr, _, _) in enumerate(headers, start=1):
-            cell = ws.cell(row=i, column=idx, value=getattr(rec, attr, ""))
-            cell.font = BASE_FONT
-            cell.border = BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=attr == "deviation_justification")
-    if not active:
-        ws.cell(row=2, column=1, value="No active deviations.").font = Font(
-            name=FONT, size=10, italic=True, color="808080"
-        )
-    ws.freeze_panes = "A2"
-
-
-def _sheet_change_log(wb: Workbook, diff: DiffResult) -> None:
-    ws = wb.create_sheet("Change Log")
-    ws.sheet_view.showGridLines = False
-    headers = [
-        ("change", "Change", 16),
-        ("poam_id", "POA&M ID", 20),
-        ("vuln_id", "Vulnerability ID", 18),
-        ("severity", "Severity", 11),
-        ("pkg_name", "Package", 24),
-        ("detail", "Detail", 60),
-    ]
-    _style_header(ws, 1, headers)
-    row = 2
-    buckets = [("NEW", diff.new), ("CLOSED", diff.closed), ("REOPENED", diff.reopened)]
-    for label, recs in buckets:
-        for rec in recs:
-            detail = {
-                "NEW": f"First detected {rec.first_detected}; due {rec.scheduled_completion_date}",
-                "CLOSED": f"No longer reported as of {rec.closed_date}",
-                "REOPENED": f"Regression #{rec.reopened_count}; due {rec.scheduled_completion_date}",
-            }[label]
-            for idx, value in enumerate(
-                [label, rec.poam_id, rec.vuln_id, rec.severity, rec.pkg_name, detail], start=1
-            ):
-                cell = ws.cell(row=row, column=idx, value=value)
-                cell.font = BASE_FONT
-                cell.border = BORDER
-            row += 1
-    for drift in diff.severity_drift:
-        arrow = "escalated" if drift["escalation"] else "downgraded"
-        for idx, value in enumerate(
-            [
-                "RECLASSIFIED",
-                drift["poam_id"],
-                drift["vuln_id"],
-                drift["to"],
-                drift["pkg_name"],
-                f"Severity {arrow}: {drift['from']} -> {drift['to']}",
-            ],
-            start=1,
-        ):
-            cell = ws.cell(row=row, column=idx, value=value)
-            cell.font = BASE_FONT
-            cell.border = BORDER
-        row += 1
-    if row == 2:
-        ws.cell(row=2, column=1, value="No changes since the previous scan.").font = Font(
-            name=FONT, size=10, italic=True, color="808080"
-        )
-    ws.freeze_panes = "A2"
-
-
-def render_poam(
-    records: list[PoamRecord],
-    diff: DiffResult,
-    meta: ScanMeta,
-    decision: Any,
-) -> bytes:
-    """Build the workbook and return it as bytes."""
-    wb = Workbook()
-    wb.remove(wb.active)
-
-    new_keys = {r.finding_key for r in diff.new}
-    open_records = [r for r in records if r.is_open]
-    closed_records = [r for r in records if not r.is_open]
-
-    _sheet_poam(wb, open_records, new_keys, "POA&M Items")
-    _sheet_poam(wb, closed_records, set(), "Closed Items")
-    _sheet_change_log(wb, diff)
-    _sheet_deviations(wb, records)
-    _sheet_violations(wb, decision)
-    _sheet_summary(wb, meta, diff, decision, open_rows=len(open_records) + 1)
-
-    wb.properties.title = f"POA&M - {meta.component_id}"
-    wb.properties.creator = "container-security-gate"
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
