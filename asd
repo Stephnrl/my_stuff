@@ -1,167 +1,219 @@
-"""Turn raw Trivy JSON into normalized Findings.
+"""Reconcile a fresh scan against prior POA&M state.
 
-The subtle bug this file exists to prevent: for OS packages Trivy reports
-`Target` as something like "myacr.azurecr.us/team/api:v1.4.2 (debian 12.1)".
-That string contains the image TAG. If it lands in the finding identity key,
-every release produces an entirely new set of findings and the POA&M diff
-never matches anything. We normalize it to "os:debian" instead.
+Pure functions, no I/O, no Azure. Everything here is unit-testable, which
+matters because a bug in this file silently corrupts an audit artifact.
+
+State machine per finding_key:
+
+                     in current scan        absent from current scan
+    prior Open       -> PERSISTING          -> CLOSED (stamp closed_date)
+    prior Closed     -> REOPENED            -> stays Closed
+    not in prior     -> NEW                 -> n/a
 """
 
 from __future__ import annotations
 
-import json
-import re
-from pathlib import Path
 from typing import Any, Iterable
 
-from .models import Finding, SEVERITY_ORDER
-
-# Matches the "(debian 12.1)" / "(alpine 3.19.1)" suffix Trivy appends.
-_OS_SUFFIX = re.compile(r"\(([a-z0-9\-]+)\s+[^)]*\)\s*$", re.IGNORECASE)
-
-
-def normalize_target(result: dict[str, Any], vuln: dict[str, Any]) -> str:
-    """Produce a location string that is stable across image versions."""
-    pkg_path = (vuln.get("PkgPath") or "").strip()
-    if pkg_path:
-        return pkg_path
-
-    cls = (result.get("Class") or "").lower()
-    target = (result.get("Target") or "").strip()
-
-    if cls == "os-pkgs":
-        os_family = (result.get("Type") or "").strip().lower()
-        if not os_family:
-            m = _OS_SUFFIX.search(target)
-            os_family = m.group(1).lower() if m else "unknown"
-        return f"os:{os_family}"
-
-    # lang-pkgs and friends: Target is normally a lockfile path, which is stable.
-    # Defensively strip any image-ref prefix if one leaked in.
-    if "@sha256:" in target or _OS_SUFFIX.search(target):
-        return f"{cls or 'pkgs'}:{result.get('Type', 'unknown')}"
-    return target
+from .models import (
+    STATUS_CLOSED,
+    STATUS_OPEN,
+    DiffResult,
+    Finding,
+    PoamRecord,
+    ScanMeta,
+    today_iso,
+)
 
 
-def _extract_cvss(vuln: dict[str, Any], prefer: str = "nvd") -> tuple[float | None, str]:
-    """Pull a CVSS v3 score/vector, preferring one source but accepting any."""
-    cvss = vuln.get("CVSS") or {}
-    order = [prefer] + [k for k in cvss.keys() if k != prefer]
-    for source in order:
-        entry = cvss.get(source) or {}
-        score = entry.get("V3Score", entry.get("V4Score"))
-        vector = entry.get("V3Vector", entry.get("V4Vector", ""))
-        if score is not None:
-            return float(score), vector or ""
-    return None, ""
+def _add_days(iso_date: str, days: int) -> str:
+    from datetime import date, timedelta
+
+    y, m, d = (int(x) for x in iso_date.split("-"))
+    return (date(y, m, d) + timedelta(days=days)).isoformat()
 
 
-def _severity_from_nvd(vuln: dict[str, Any]) -> str:
-    """Derive a severity band from the NVD CVSS score, ignoring vendor rating."""
-    score, _ = _extract_cvss(vuln, prefer="nvd")
-    if score is None:
-        return (vuln.get("Severity") or "UNKNOWN").upper()
-    if score >= 9.0:
-        return "CRITICAL"
-    if score >= 7.0:
-        return "HIGH"
-    if score >= 4.0:
-        return "MEDIUM"
-    if score > 0:
-        return "LOW"
-    return "UNKNOWN"
+def next_poam_id(component_id: str, seq: int) -> str:
+    """Sequential and never reused. Prefix keeps IDs readable in a merged POA&M."""
+    slug = component_id.strip("/").replace("/", "-").replace("_", "-").upper()
+    slug = "".join(ch for ch in slug if ch.isalnum() or ch == "-")[-24:]
+    return f"{slug}-{seq:04d}"
 
 
-def findings_from_trivy(
-    report: dict[str, Any],
-    severity_source: str = "vendor",
-    ignore_unfixed: bool = False,
-) -> list[Finding]:
-    """Flatten a Trivy image report into deduplicated Findings.
+def _record_from_finding(
+    finding: Finding,
+    poam_id: str,
+    meta: ScanMeta,
+    sla_days: dict[str, int],
+    as_of: str,
+) -> PoamRecord:
+    sla = sla_days.get(finding.severity, sla_days.get("DEFAULT", 90))
+    return PoamRecord(
+        poam_id=poam_id,
+        finding_key=finding.finding_key,
+        vuln_id=finding.vuln_id,
+        pkg_name=finding.pkg_name,
+        target=finding.target,
+        installed_version=finding.installed_version,
+        fixed_version=finding.fixed_version,
+        severity=finding.severity,
+        original_severity=finding.severity,
+        cvss_score=finding.cvss_score,
+        cvss_vector=finding.cvss_vector,
+        title=finding.title,
+        primary_url=finding.primary_url,
+        pkg_type=finding.pkg_type,
+        purl=finding.purl,
+        fix_status=finding.fix_status,
+        status=STATUS_OPEN,
+        first_detected=as_of,
+        last_detected=as_of,
+        scheduled_completion_date=_add_days(as_of, sla),
+        first_seen_digest=meta.image_digest,
+        last_seen_digest=meta.image_digest,
+        first_seen_tag=meta.image_tag,
+        last_seen_tag=meta.image_tag,
+    )
 
-    severity_source:
-      "vendor" - use Trivy's Severity field (distro maintainer rating; usually
-                 more accurate about real-world exploitability on that distro)
-      "nvd"    - derive the band from the NVD CVSS v3 base score (usually
-                 harsher; some compliance programs mandate it)
+
+def _refresh_mutable_fields(record: PoamRecord, finding: Finding, meta: ScanMeta, as_of: str) -> None:
+    """Update the attributes that legitimately change while identity holds."""
+    record.installed_version = finding.installed_version
+    record.fixed_version = finding.fixed_version
+    record.cvss_score = finding.cvss_score
+    record.cvss_vector = finding.cvss_vector
+    record.fix_status = finding.fix_status
+    record.purl = finding.purl or record.purl
+    record.title = finding.title or record.title
+    record.primary_url = finding.primary_url or record.primary_url
+    record.last_detected = as_of
+    record.last_seen_digest = meta.image_digest
+    record.last_seen_tag = meta.image_tag
+
+
+def reconcile(
+    findings: Iterable[Finding],
+    prior_records: Iterable[PoamRecord],
+    meta: ScanMeta,
+    sla_days: dict[str, int] | None = None,
+    next_seq: int = 1,
+    as_of: str | None = None,
+    reset_sla_on_reopen: bool = True,
+) -> tuple[DiffResult, int]:
+    """Return (DiffResult, next_sequence_number).
+
+    `reset_sla_on_reopen` - when a closed finding comes back, restart the
+    remediation clock. Default True: a regression is a fresh obligation.
+    Set False if your assessor wants continuity from original discovery.
     """
-    findings: dict[str, Finding] = {}
+    sla_days = sla_days or {"CRITICAL": 30, "HIGH": 30, "MEDIUM": 90, "LOW": 180, "DEFAULT": 90}
+    as_of = as_of or today_iso()
+    seq = next_seq
 
-    for result in report.get("Results") or []:
-        for vuln in result.get("Vulnerabilities") or []:
-            fixed_version = (vuln.get("FixedVersion") or "").strip()
-            if ignore_unfixed and not fixed_version:
-                continue
+    current: dict[str, Finding] = {f.finding_key: f for f in findings}
+    prior: dict[str, PoamRecord] = {r.finding_key: r for r in prior_records}
 
-            if severity_source == "nvd":
-                severity = _severity_from_nvd(vuln)
-            else:
-                severity = (vuln.get("Severity") or "UNKNOWN").upper()
-            if severity not in SEVERITY_ORDER:
-                severity = "UNKNOWN"
+    result = DiffResult()
 
-            score, vector = _extract_cvss(vuln, prefer="nvd")
-            identifier = vuln.get("PkgIdentifier") or {}
+    for key, finding in current.items():
+        existing = prior.get(key)
 
-            f = Finding(
-                vuln_id=(vuln.get("VulnerabilityID") or "").strip(),
-                pkg_name=(vuln.get("PkgName") or "").strip(),
-                target=normalize_target(result, vuln),
-                installed_version=(vuln.get("InstalledVersion") or "").strip(),
-                fixed_version=fixed_version,
-                severity=severity,
-                cvss_score=score,
-                cvss_vector=vector,
-                title=(vuln.get("Title") or "").strip()[:500],
-                primary_url=(vuln.get("PrimaryURL") or "").strip(),
-                pkg_type=(result.get("Type") or "").strip(),
-                purl=(identifier.get("PURL") or "").strip(),
-                fix_status=(vuln.get("Status") or "").strip(),
-                published_date=(vuln.get("PublishedDate") or "")[:10],
+        if existing is None:
+            record = _record_from_finding(finding, next_poam_id(meta.component_id, seq), meta, sla_days, as_of)
+            seq += 1
+            result.new.append(record)
+            result.all_records.append(record)
+            continue
+
+        was_closed = existing.status == STATUS_CLOSED
+        prior_severity = existing.severity
+
+        _refresh_mutable_fields(existing, finding, meta, as_of)
+
+        # Severity reclassification on an otherwise unchanged finding is worth
+        # surfacing: a Medium promoted to Critical is a real posture change.
+        if finding.severity != prior_severity:
+            existing.severity = finding.severity
+            result.severity_drift.append(
+                {
+                    "poam_id": existing.poam_id,
+                    "vuln_id": existing.vuln_id,
+                    "pkg_name": existing.pkg_name,
+                    "from": prior_severity,
+                    "to": finding.severity,
+                    "escalation": _is_escalation(prior_severity, finding.severity),
+                }
             )
-            if not f.vuln_id or not f.pkg_name:
-                continue
+            # Re-derive the due date from the ORIGINAL detection date so an
+            # escalation tightens the deadline instead of granting a new window.
+            sla = sla_days.get(finding.severity, sla_days.get("DEFAULT", 90))
+            base = existing.first_detected or as_of
+            existing.scheduled_completion_date = _add_days(base, sla)
 
-            # Same key can appear twice (multiple Results touching one package).
-            # Keep the highest-severity instance.
-            existing = findings.get(f.finding_key)
-            if existing is None or SEVERITY_ORDER.index(f.severity) < SEVERITY_ORDER.index(
-                existing.severity
-            ):
-                findings[f.finding_key] = f
+        if was_closed:
+            existing.status = STATUS_OPEN
+            existing.closed_date = ""
+            existing.reopened_count += 1
+            if reset_sla_on_reopen:
+                sla = sla_days.get(finding.severity, sla_days.get("DEFAULT", 90))
+                existing.scheduled_completion_date = _add_days(as_of, sla)
+            result.reopened.append(existing)
+        else:
+            result.persisting.append(existing)
 
-    return list(findings.values())
+        result.all_records.append(existing)
 
+    # Anything previously open and absent from this scan is remediated.
+    for key, record in prior.items():
+        if key in current:
+            continue
+        if record.status == STATUS_OPEN:
+            record.status = STATUS_CLOSED
+            record.closed_date = as_of
+            result.closed.append(record)
+        result.all_records.append(record)
 
-def scan_metadata_from_trivy(report: dict[str, Any]) -> dict[str, str]:
-    """Pull DB provenance out of the report so the POA&M is reproducible."""
-    meta: dict[str, str] = {}
-    for key in ("SchemaVersion", "ArtifactName", "ArtifactType"):
-        if key in report:
-            meta[key] = str(report[key])
-
-    metadata = report.get("Metadata") or {}
-    repo_digests = metadata.get("RepoDigests") or []
-    if repo_digests:
-        meta["repo_digest"] = repo_digests[0]
-    repo_tags = metadata.get("RepoTags") or []
-    if repo_tags:
-        meta["repo_tag"] = repo_tags[0]
-
-    os_info = metadata.get("OS") or {}
-    if os_info:
-        meta["os"] = f"{os_info.get('Family', '')} {os_info.get('Name', '')}".strip()
-
-    return meta
+    result.all_records.sort(key=_sort_key)
+    return result, seq
 
 
-def load_report(path: str | Path) -> dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+def _is_escalation(old: str, new: str) -> bool:
+    from .models import SEVERITY_RANK
+
+    return SEVERITY_RANK.get(new, 99) < SEVERITY_RANK.get(old, 99)
 
 
-def digest_from_ref(image_ref: str) -> str:
-    """Extract sha256:... from a digest-pinned reference."""
-    if "@" in image_ref:
-        return image_ref.split("@", 1)[1]
-    return ""
+def _sort_key(record: PoamRecord) -> tuple:
+    from .models import SEVERITY_RANK
+
+    return (
+        0 if record.is_open else 1,
+        SEVERITY_RANK.get(record.severity, 99),
+        record.scheduled_completion_date or "9999-12-31",
+        record.vuln_id,
+        record.pkg_name,
+    )
+
+
+def summarize(result: DiffResult) -> dict[str, Any]:
+    """Compact summary suitable for telemetry and job-summary rendering."""
+    counts = result.counts()
+    by_sev_new: dict[str, int] = {}
+    for r in result.new:
+        by_sev_new[r.severity] = by_sev_new.get(r.severity, 0) + 1
+
+    overdue = [r for r in result.all_records if r.is_overdue()]
+    by_sev_overdue: dict[str, int] = {}
+    for r in overdue:
+        by_sev_overdue[r.severity] = by_sev_overdue.get(r.severity, 0) + 1
+
+    return {
+        **counts,
+        "open_by_severity": result.severity_breakdown(only_gating=False),
+        "gating_by_severity": result.severity_breakdown(only_gating=True),
+        "new_by_severity": by_sev_new,
+        "overdue_count": len(overdue),
+        "overdue_by_severity": by_sev_overdue,
+        "deviations_active": len([r for r in result.all_records if r.has_active_deviation]),
+        "escalations": len([d for d in result.severity_drift if d["escalation"]]),
+    }
