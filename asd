@@ -1,356 +1,377 @@
-"""Exception handling and the gate decision.
+"""Render POA&M state to xlsx.
 
-Design rule enforced here: exceptions are applied AFTER the scan, to the POA&M
-records. We never hand Trivy an --ignorefile, because suppression at scan time
-deletes the finding from the output entirely and it never reaches the POA&M.
-An assessor wants to see the deviation documented, not disappeared.
+This is a VIEW of state/current.json, never a source of truth. Nothing in the
+pipeline ever reads a workbook back.
+
+Summary counts are written as COUNTIFS formulas rather than baked-in numbers so
+the workbook stays live if someone edits a status cell by hand during review.
 """
 
 from __future__ import annotations
 
-import fnmatch
-import hashlib
-import json
-from dataclasses import dataclass, field
-from pathlib import Path
+import io
 from typing import Any, Iterable
 
-import yaml
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
-from .models import (
-    VALID_DEVIATIONS,
-    DiffResult,
-    PoamRecord,
-    SEVERITY_ORDER,
-    today_iso,
-)
+from .models import DiffResult, PoamRecord, ScanMeta, SEVERITY_ORDER, today_iso
 
-DEFAULT_POLICY: dict[str, Any] = {
-    "name": "default",
-    "severity_source": "vendor",
-    "ignore_unfixed": False,
-    "severity_sla_days": {"CRITICAL": 30, "HIGH": 30, "MEDIUM": 90, "LOW": 180, "DEFAULT": 90},
-    "grace_period_days": 0,
-    "fail_on": {
-        "new": ["CRITICAL"],
-        "overdue": ["CRITICAL", "HIGH"],
-        "reopened": [],
-        "escalated_into": [],
-    },
-    "deviations": {
-        "require_expiry": True,
-        "max_days": 90,
-        "allowed_types": sorted(VALID_DEVIATIONS),
-        "warn_before_expiry_days": 14,
-    },
-    "reset_sla_on_reopen": True,
+FONT = "Arial"
+
+HEADER_FILL = PatternFill("solid", fgColor="1F3864")
+HEADER_FONT = Font(name=FONT, size=10, bold=True, color="FFFFFF")
+BASE_FONT = Font(name=FONT, size=10)
+BOLD = Font(name=FONT, size=10, bold=True)
+TITLE_FONT = Font(name=FONT, size=14, bold=True, color="1F3864")
+
+SEVERITY_FILL = {
+    "CRITICAL": PatternFill("solid", fgColor="C00000"),
+    "HIGH": PatternFill("solid", fgColor="ED7D31"),
+    "MEDIUM": PatternFill("solid", fgColor="FFC000"),
+    "LOW": PatternFill("solid", fgColor="A9D08E"),
+    "UNKNOWN": PatternFill("solid", fgColor="D9D9D9"),
 }
+SEVERITY_TEXT = {
+    "CRITICAL": Font(name=FONT, size=10, bold=True, color="FFFFFF"),
+    "HIGH": Font(name=FONT, size=10, bold=True, color="FFFFFF"),
+}
+OVERDUE_FILL = PatternFill("solid", fgColor="FFC7CE")
+NEW_FILL = PatternFill("solid", fgColor="FFF2CC")
+THIN = Side(style="thin", color="BFBFBF")
+BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+COLUMNS: list[tuple[str, str, int]] = [
+    ("poam_id", "POA&M ID", 20),
+    ("vuln_id", "Vulnerability ID", 18),
+    ("severity", "Severity", 11),
+    ("poam_status", "Status", 24),
+    ("pkg_name", "Package", 24),
+    ("installed_version", "Installed Version", 18),
+    ("fixed_version", "Fixed Version", 18),
+    ("target", "Location", 34),
+    ("pkg_type", "Package Type", 14),
+    ("cvss_score", "CVSS v3", 9),
+    ("first_detected", "First Detected", 14),
+    ("last_detected", "Last Detected", 14),
+    ("scheduled_completion_date", "Scheduled Completion", 20),
+    ("closed_date", "Closed Date", 13),
+    ("reopened_count", "Reopened", 10),
+    ("deviation_type", "Deviation Type", 22),
+    ("deviation_ref", "Deviation Ref", 16),
+    ("deviation_approved_by", "Approved By", 18),
+    ("deviation_expires", "Deviation Expires", 18),
+    ("deviation_justification", "Justification / Remediation Plan", 46),
+    ("title", "Description", 52),
+    ("primary_url", "Reference", 40),
+    ("purl", "Package URL", 40),
+    ("last_seen_tag", "Last Seen Tag", 22),
+]
 
 
-@dataclass
-class Exception_:
-    """One approved deviation from the central exception store."""
-
-    component_id: str
-    vuln_id: str = "*"
-    pkg_name: str = "*"
-    target: str = "*"
-    deviation_type: str = "Risk Adjusted"
-    justification: str = ""
-    approved_by: str = ""
-    expires_on: str = ""
-    ref: str = ""
-    source_file: str = ""
-
-    def matches(self, record: PoamRecord, component_id: str) -> bool:
-        return (
-            fnmatch.fnmatch(component_id, self.component_id)
-            and fnmatch.fnmatch(record.vuln_id, self.vuln_id)
-            and fnmatch.fnmatch(record.pkg_name, self.pkg_name)
-            and fnmatch.fnmatch(record.target, self.target)
-        )
-
-    def is_expired(self, as_of: str | None = None) -> bool:
-        if not self.expires_on:
-            return False
-        return self.expires_on < (as_of or today_iso())
-
-    def days_to_expiry(self, as_of: str | None = None) -> int | None:
-        if not self.expires_on:
-            return None
-        from datetime import date
-
-        ref = as_of or today_iso()
-        a = date(*(int(x) for x in ref.split("-")))
-        b = date(*(int(x) for x in self.expires_on.split("-")))
-        return (b - a).days
+def _style_header(ws, row: int, width_map: list[tuple[str, str, int]]) -> None:
+    for idx, (_, header, width) in enumerate(width_map, start=1):
+        cell = ws.cell(row=row, column=idx, value=header)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        cell.border = BORDER
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    ws.row_dimensions[row].height = 30
 
 
-@dataclass
-class GateDecision:
-    result: str = "pass"                  # pass | fail | pass_with_bypass
-    reasons: list[str] = field(default_factory=list)
-    violations: list[dict[str, Any]] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    bypass_used: bool = False
-    bypass_reason: str = ""
-    bypass_actor: str = ""
-
-    @property
-    def failed(self) -> bool:
-        return self.result == "fail"
-
-
-def load_policy(path: str | Path | None) -> dict[str, Any]:
-    policy = json.loads(json.dumps(DEFAULT_POLICY))  # deep copy
-    if not path:
-        return policy
-    with open(path, "r", encoding="utf-8") as fh:
-        loaded = yaml.safe_load(fh) or {}
-    for key, value in loaded.items():
-        if isinstance(value, dict) and isinstance(policy.get(key), dict):
-            policy[key].update(value)
-        else:
-            policy[key] = value
-    return policy
+def _write_records(ws, records: list[PoamRecord], start_row: int, new_keys: set[str]) -> int:
+    row = start_row
+    today = today_iso()
+    for rec in records:
+        for idx, (attr, _, _) in enumerate(COLUMNS, start=1):
+            value = getattr(rec, attr, "")
+            if attr == "reopened_count" and not value:
+                value = ""
+            cell = ws.cell(row=row, column=idx, value=value)
+            cell.font = BASE_FONT
+            cell.border = BORDER
+            cell.alignment = Alignment(vertical="top", wrap_text=attr in {"title", "deviation_justification", "target", "purl"})
+            if attr == "severity":
+                cell.fill = SEVERITY_FILL.get(rec.severity, SEVERITY_FILL["UNKNOWN"])
+                cell.font = SEVERITY_TEXT.get(rec.severity, BOLD)
+                cell.alignment = Alignment(horizontal="center", vertical="top")
+            if attr == "cvss_score" and value:
+                cell.number_format = "0.0"
+        if rec.is_overdue(today):
+            ws.cell(row=row, column=13).fill = OVERDUE_FILL
+            ws.cell(row=row, column=13).font = Font(name=FONT, size=10, bold=True, color="9C0006")
+        if rec.finding_key in new_keys:
+            ws.cell(row=row, column=1).fill = NEW_FILL
+        row += 1
+    return row
 
 
-def policy_fingerprint(policy: dict[str, Any]) -> str:
-    """Hash of the effective policy, recorded in the POA&M for auditability."""
-    blob = json.dumps(policy, sort_keys=True).encode("utf-8")
-    return hashlib.sha256(blob).hexdigest()[:16]
+def _sheet_poam(wb: Workbook, records: list[PoamRecord], new_keys: set[str], title: str) -> None:
+    ws = wb.create_sheet(title)
+    _style_header(ws, 1, COLUMNS)
+    end = _write_records(ws, records, 2, new_keys)
+    ws.freeze_panes = "E2"
+    if end > 2:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{end - 1}"
+    ws.sheet_view.showGridLines = False
 
 
-def load_exceptions(paths: Iterable[str | Path]) -> tuple[list[Exception_], list[str]]:
-    """Load every *.yaml/*.yml under the given files or directories.
-
-    Returns (valid_exceptions, validation_errors). Malformed entries are
-    rejected loudly rather than silently ignored - a broken exception file
-    must not quietly become "no exceptions" or "everything excepted".
-    """
-    exceptions: list[Exception_] = []
-    errors: list[str] = []
-    files: list[Path] = []
-
-    for p in paths:
-        path = Path(p)
-        if path.is_dir():
-            files.extend(sorted(path.rglob("*.yaml")))
-            files.extend(sorted(path.rglob("*.yml")))
-        elif path.is_file():
-            files.append(path)
-
-    for f in files:
-        if f.name in {"schema.json", "schema.yaml"}:
-            continue
-        try:
-            data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError as exc:
-            errors.append(f"{f}: unparseable YAML: {exc}")
-            continue
-
-        entries = data.get("exceptions") if isinstance(data, dict) else data
-        if not isinstance(entries, list):
-            errors.append(f"{f}: expected a top-level 'exceptions' list")
-            continue
-
-        for i, raw in enumerate(entries):
-            if not isinstance(raw, dict):
-                errors.append(f"{f}[{i}]: entry is not a mapping")
-                continue
-            missing = [k for k in ("component_id", "vuln_id", "justification", "approved_by") if not raw.get(k)]
-            if missing:
-                errors.append(f"{f}[{i}]: missing required field(s): {', '.join(missing)}")
-                continue
-            dev_type = str(raw.get("deviation_type", "Risk Adjusted"))
-            if dev_type not in VALID_DEVIATIONS:
-                errors.append(f"{f}[{i}]: invalid deviation_type '{dev_type}'")
-                continue
-            expires = raw.get("expires_on", "")
-            exceptions.append(
-                Exception_(
-                    component_id=str(raw["component_id"]),
-                    vuln_id=str(raw.get("vuln_id", "*")),
-                    pkg_name=str(raw.get("pkg_name", "*")),
-                    target=str(raw.get("target", "*")),
-                    deviation_type=dev_type,
-                    justification=str(raw["justification"]),
-                    approved_by=str(raw["approved_by"]),
-                    expires_on=str(expires) if expires else "",
-                    ref=str(raw.get("ref", "")),
-                    source_file=str(f),
-                )
-            )
-
-    return exceptions, errors
-
-
-def apply_exceptions(
-    records: Iterable[PoamRecord],
-    exceptions: list[Exception_],
-    component_id: str,
-    policy: dict[str, Any],
-    as_of: str | None = None,
-) -> dict[str, Any]:
-    """Stamp deviation metadata onto matching records. Fails closed on expiry."""
-    dev_cfg = policy.get("deviations", {})
-    require_expiry = dev_cfg.get("require_expiry", True)
-    max_days = dev_cfg.get("max_days", 90)
-    warn_days = dev_cfg.get("warn_before_expiry_days", 14)
-
-    applied = 0
-    expiring_soon: list[dict[str, Any]] = []
-    rejected: list[str] = []
-    expired_hits: list[str] = []
-
-    usable: list[Exception_] = []
-    for exc in exceptions:
-        if require_expiry and not exc.expires_on:
-            rejected.append(f"{exc.vuln_id} ({exc.source_file}): no expires_on and policy requires one")
-            continue
-        if exc.is_expired(as_of):
-            expired_hits.append(f"{exc.vuln_id} expired {exc.expires_on} ({exc.source_file})")
-            continue
-        remaining = exc.days_to_expiry(as_of)
-        if remaining is not None and max_days and remaining > max_days:
-            rejected.append(
-                f"{exc.vuln_id} ({exc.source_file}): expiry {exc.expires_on} exceeds max_days={max_days}"
-            )
-            continue
-        usable.append(exc)
-
-    for record in records:
-        if not record.is_open:
-            continue
-        for exc in usable:
-            if not exc.matches(record, component_id):
-                continue
-            record.deviation_type = exc.deviation_type
-            record.deviation_ref = exc.ref
-            record.deviation_justification = exc.justification
-            record.deviation_approved_by = exc.approved_by
-            record.deviation_expires = exc.expires_on
-            applied += 1
-            remaining = exc.days_to_expiry(as_of)
-            if remaining is not None and remaining <= warn_days:
-                expiring_soon.append(
-                    {
-                        "poam_id": record.poam_id,
-                        "vuln_id": record.vuln_id,
-                        "expires_on": exc.expires_on,
-                        "days_remaining": remaining,
-                        "approved_by": exc.approved_by,
-                    }
-                )
-            break
-
-    return {
-        "applied": applied,
-        "usable": len(usable),
-        "expiring_soon": expiring_soon,
-        "rejected": rejected,
-        "expired": expired_hits,
-    }
-
-
-def evaluate(
+def _sheet_summary(
+    wb: Workbook,
+    meta: ScanMeta,
     diff: DiffResult,
-    policy: dict[str, Any],
-    bypass: bool = False,
-    bypass_reason: str = "",
-    bypass_actor: str = "",
-    as_of: str | None = None,
-) -> GateDecision:
-    """Decide pass/fail. Only gating records (open, no active deviation) count."""
-    as_of = as_of or today_iso()
-    decision = GateDecision()
-    fail_on = policy.get("fail_on", {})
-    grace = int(policy.get("grace_period_days", 0) or 0)
+    decision: Any,
+    open_rows: int,
+) -> None:
+    ws = wb.create_sheet("Summary", 0)
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 34
+    ws.column_dimensions["B"].width = 58
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 14
 
-    def _sev_set(key: str) -> set[str]:
-        return {s.upper() for s in (fail_on.get(key) or [])}
+    ws["A1"] = "Plan of Action & Milestones"
+    ws["A1"].font = TITLE_FONT
+    ws["A2"] = meta.component_id
+    ws["A2"].font = Font(name=FONT, size=11, bold=True)
 
-    # 1. New findings above threshold, outside any grace window.
-    new_sevs = _sev_set("new")
-    if new_sevs:
-        for r in diff.new:
-            if not r.gating or r.severity not in new_sevs:
-                continue
-            if grace:
-                from datetime import date, timedelta
+    rows: list[tuple[str, Any]] = [
+        ("Generated (UTC)", meta.scan_timestamp),
+        ("Scan Type", "Initial" if meta.is_initial_scan else "Recurring"),
+        ("Image Reference", meta.image_ref),
+        ("Image Digest", meta.image_digest),
+        ("Image Tag", meta.image_tag),
+        ("Gate Result", getattr(decision, "result", "unknown").upper()),
+        ("", ""),
+        ("Trivy Version", meta.trivy_version),
+        ("Vulnerability DB Updated", meta.vuln_db_updated_at),
+        ("Vulnerability DB Next Update", meta.vuln_db_next_update),
+        ("Policy Profile", meta.policy_profile),
+        ("Policy Fingerprint", meta.policy_sha),
+        ("Gate Version", meta.gate_version),
+        ("Source Repository", meta.repository),
+        ("Workflow Run", meta.run_url),
+        ("Triggered By", meta.actor),
+        ("Commit", meta.git_sha),
+    ]
+    r = 4
+    for label, value in rows:
+        if label:
+            ws.cell(row=r, column=1, value=label).font = BOLD
+            c = ws.cell(row=r, column=2, value=value)
+            c.font = BASE_FONT
+            c.alignment = Alignment(wrap_text=False)
+        r += 1
 
-                first = date(*(int(x) for x in r.first_detected.split("-")))
-                if date(*(int(x) for x in as_of.split("-"))) < first + timedelta(days=grace):
-                    decision.warnings.append(
-                        f"{r.poam_id} {r.vuln_id} ({r.severity}) new, within {grace}-day grace period"
-                    )
-                    continue
-            decision.violations.append(_violation(r, "new"))
+    r += 1
+    ws.cell(row=r, column=1, value="This Scan").font = Font(name=FONT, size=12, bold=True, color="1F3864")
+    r += 1
+    counts = diff.counts()
+    for label, key in [
+        ("New findings", "new"),
+        ("Closed this scan", "closed"),
+        ("Reopened (regression)", "reopened"),
+        ("Carried forward", "persisting"),
+        ("Severity reclassified", "severity_drift"),
+    ]:
+        ws.cell(row=r, column=1, value=label).font = BASE_FONT
+        ws.cell(row=r, column=2, value=counts.get(key, 0)).font = BOLD
+        r += 1
 
-    # 2. Anything past its scheduled completion date.
-    overdue_sevs = _sev_set("overdue")
-    if overdue_sevs:
-        for r in diff.all_records:
-            if r.severity in overdue_sevs and r.is_overdue(as_of):
-                decision.violations.append(_violation(r, "overdue"))
+    r += 1
+    ws.cell(row=r, column=1, value="Open Items by Severity").font = Font(
+        name=FONT, size=12, bold=True, color="1F3864"
+    )
+    r += 1
+    header_row = r
+    for i, label in enumerate(["Severity", "Total Open", "Counting Toward Gate"]):
+        c = ws.cell(row=header_row, column=i + 1, value=label)
+        c.fill = HEADER_FILL
+        c.font = HEADER_FONT
+        c.border = BORDER
+    r += 1
 
-    # 3. Regressions: a previously closed finding that came back.
-    reopened_sevs = _sev_set("reopened")
-    if reopened_sevs:
-        for r in diff.reopened:
-            if r.gating and r.severity in reopened_sevs:
-                decision.violations.append(_violation(r, "reopened"))
+    # COUNTIFS against the live POA&M sheet keeps this honest if a reviewer
+    # edits a status cell during assessment.
+    last = max(open_rows, 2)
+    for sev in SEVERITY_ORDER:
+        ws.cell(row=r, column=1, value=sev).font = BOLD
+        ws.cell(row=r, column=1).fill = SEVERITY_FILL.get(sev, SEVERITY_FILL["UNKNOWN"])
+        ws.cell(row=r, column=1).font = SEVERITY_TEXT.get(sev, BOLD)
+        ws.cell(row=r, column=2, value=f'=COUNTIFS(\'POA&M Items\'!$C$2:$C${last},A{r})').font = BASE_FONT
+        ws.cell(
+            row=r, column=3,
+            value=f'=COUNTIFS(\'POA&M Items\'!$C$2:$C${last},A{r},\'POA&M Items\'!$P$2:$P${last},"")',
+        ).font = BASE_FONT
+        for col in (1, 2, 3):
+            ws.cell(row=r, column=col).border = BORDER
+        r += 1
 
-    # 4. Severity escalation into a listed band on an existing item.
-    escalated_sevs = _sev_set("escalated_into")
-    if escalated_sevs:
-        by_id = {r.poam_id: r for r in diff.all_records}
-        for drift in diff.severity_drift:
-            if not drift["escalation"] or drift["to"] not in escalated_sevs:
-                continue
-            r = by_id.get(drift["poam_id"])
-            if r and r.gating:
-                decision.violations.append(_violation(r, f"escalated {drift['from']}->{drift['to']}"))
+    ws.cell(row=r, column=1, value="TOTAL").font = BOLD
+    ws.cell(row=r, column=2, value=f"=SUM(B{r - len(SEVERITY_ORDER)}:B{r - 1})").font = BOLD
+    ws.cell(row=r, column=3, value=f"=SUM(C{r - len(SEVERITY_ORDER)}:C{r - 1})").font = BOLD
 
-    # Deduplicate: one item can trip several rules.
-    seen: set[str] = set()
-    unique: list[dict[str, Any]] = []
-    for v in decision.violations:
-        if v["poam_id"] in seen:
-            continue
-        seen.add(v["poam_id"])
-        unique.append(v)
-    decision.violations = unique
+    r += 2
+    ws.cell(row=r, column=1, value="Column P is Deviation Type; blank means the item counts toward the gate.").font = Font(
+        name=FONT, size=9, italic=True, color="808080"
+    )
+    r += 1
+    ws.cell(
+        row=r, column=1,
+        value="Counts are formulas over the POA&M Items sheet and recalculate on open.",
+    ).font = Font(name=FONT, size=9, italic=True, color="808080")
 
-    if unique:
-        by_rule: dict[str, int] = {}
-        for v in unique:
-            by_rule[v["rule"]] = by_rule.get(v["rule"], 0) + 1
-        decision.reasons = [f"{count} {rule} finding(s)" for rule, count in sorted(by_rule.items())]
-        if bypass:
-            decision.result = "pass_with_bypass"
-            decision.bypass_used = True
-            decision.bypass_reason = bypass_reason
-            decision.bypass_actor = bypass_actor
-        else:
-            decision.result = "fail"
-    else:
-        decision.result = "pass"
-        if bypass:
-            decision.warnings.append("Bypass was requested but no violations were present.")
-
-    return decision
+    if getattr(decision, "bypass_used", False):
+        r += 2
+        ws.cell(row=r, column=1, value="EMERGENCY BYPASS USED").font = Font(
+            name=FONT, size=12, bold=True, color="C00000"
+        )
+        r += 1
+        for label, value in [
+            ("Approved by", getattr(decision, "bypass_actor", "")),
+            ("Justification", getattr(decision, "bypass_reason", "")),
+        ]:
+            ws.cell(row=r, column=1, value=label).font = BOLD
+            ws.cell(row=r, column=2, value=value).font = BASE_FONT
+            r += 1
 
 
-def _violation(record: PoamRecord, rule: str) -> dict[str, Any]:
-    return {
-        "rule": rule,
-        "poam_id": record.poam_id,
-        "vuln_id": record.vuln_id,
-        "pkg_name": record.pkg_name,
-        "installed_version": record.installed_version,
-        "fixed_version": record.fixed_version,
-        "severity": record.severity,
-        "target": record.target,
-        "scheduled_completion_date": record.scheduled_completion_date,
-    }
+def _sheet_violations(wb: Workbook, decision: Any) -> None:
+    violations = getattr(decision, "violations", []) or []
+    if not violations:
+        return
+    ws = wb.create_sheet("Gate Violations")
+    ws.sheet_view.showGridLines = False
+    headers = [
+        ("rule", "Rule", 18),
+        ("poam_id", "POA&M ID", 20),
+        ("vuln_id", "Vulnerability ID", 18),
+        ("severity", "Severity", 11),
+        ("pkg_name", "Package", 24),
+        ("installed_version", "Installed", 16),
+        ("fixed_version", "Fixed In", 16),
+        ("scheduled_completion_date", "Due", 14),
+        ("target", "Location", 40),
+    ]
+    _style_header(ws, 1, headers)
+    for i, v in enumerate(violations, start=2):
+        for idx, (key, _, _) in enumerate(headers, start=1):
+            cell = ws.cell(row=i, column=idx, value=v.get(key, ""))
+            cell.font = BASE_FONT
+            cell.border = BORDER
+            if key == "severity":
+                cell.fill = SEVERITY_FILL.get(v.get("severity"), SEVERITY_FILL["UNKNOWN"])
+                cell.font = SEVERITY_TEXT.get(v.get("severity"), BOLD)
+    ws.freeze_panes = "A2"
+
+
+def _sheet_deviations(wb: Workbook, records: list[PoamRecord]) -> None:
+    active = [r for r in records if r.has_active_deviation and r.is_open]
+    ws = wb.create_sheet("Deviations")
+    ws.sheet_view.showGridLines = False
+    headers = [
+        ("poam_id", "POA&M ID", 20),
+        ("vuln_id", "Vulnerability ID", 18),
+        ("severity", "Severity", 11),
+        ("deviation_type", "Deviation Type", 22),
+        ("deviation_ref", "Reference", 16),
+        ("deviation_approved_by", "Approved By", 20),
+        ("deviation_expires", "Expires", 14),
+        ("deviation_justification", "Justification", 70),
+    ]
+    _style_header(ws, 1, headers)
+    for i, rec in enumerate(active, start=2):
+        for idx, (attr, _, _) in enumerate(headers, start=1):
+            cell = ws.cell(row=i, column=idx, value=getattr(rec, attr, ""))
+            cell.font = BASE_FONT
+            cell.border = BORDER
+            cell.alignment = Alignment(vertical="top", wrap_text=attr == "deviation_justification")
+    if not active:
+        ws.cell(row=2, column=1, value="No active deviations.").font = Font(
+            name=FONT, size=10, italic=True, color="808080"
+        )
+    ws.freeze_panes = "A2"
+
+
+def _sheet_change_log(wb: Workbook, diff: DiffResult) -> None:
+    ws = wb.create_sheet("Change Log")
+    ws.sheet_view.showGridLines = False
+    headers = [
+        ("change", "Change", 16),
+        ("poam_id", "POA&M ID", 20),
+        ("vuln_id", "Vulnerability ID", 18),
+        ("severity", "Severity", 11),
+        ("pkg_name", "Package", 24),
+        ("detail", "Detail", 60),
+    ]
+    _style_header(ws, 1, headers)
+    row = 2
+    buckets = [("NEW", diff.new), ("CLOSED", diff.closed), ("REOPENED", diff.reopened)]
+    for label, recs in buckets:
+        for rec in recs:
+            detail = {
+                "NEW": f"First detected {rec.first_detected}; due {rec.scheduled_completion_date}",
+                "CLOSED": f"No longer reported as of {rec.closed_date}",
+                "REOPENED": f"Regression #{rec.reopened_count}; due {rec.scheduled_completion_date}",
+            }[label]
+            for idx, value in enumerate(
+                [label, rec.poam_id, rec.vuln_id, rec.severity, rec.pkg_name, detail], start=1
+            ):
+                cell = ws.cell(row=row, column=idx, value=value)
+                cell.font = BASE_FONT
+                cell.border = BORDER
+            row += 1
+    for drift in diff.severity_drift:
+        arrow = "escalated" if drift["escalation"] else "downgraded"
+        for idx, value in enumerate(
+            [
+                "RECLASSIFIED",
+                drift["poam_id"],
+                drift["vuln_id"],
+                drift["to"],
+                drift["pkg_name"],
+                f"Severity {arrow}: {drift['from']} -> {drift['to']}",
+            ],
+            start=1,
+        ):
+            cell = ws.cell(row=row, column=idx, value=value)
+            cell.font = BASE_FONT
+            cell.border = BORDER
+        row += 1
+    if row == 2:
+        ws.cell(row=2, column=1, value="No changes since the previous scan.").font = Font(
+            name=FONT, size=10, italic=True, color="808080"
+        )
+    ws.freeze_panes = "A2"
+
+
+def render_poam(
+    records: list[PoamRecord],
+    diff: DiffResult,
+    meta: ScanMeta,
+    decision: Any,
+) -> bytes:
+    """Build the workbook and return it as bytes."""
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    new_keys = {r.finding_key for r in diff.new}
+    open_records = [r for r in records if r.is_open]
+    closed_records = [r for r in records if not r.is_open]
+
+    _sheet_poam(wb, open_records, new_keys, "POA&M Items")
+    _sheet_poam(wb, closed_records, set(), "Closed Items")
+    _sheet_change_log(wb, diff)
+    _sheet_deviations(wb, records)
+    _sheet_violations(wb, decision)
+    _sheet_summary(wb, meta, diff, decision, open_rows=len(open_records) + 1)
+
+    wb.properties.title = f"POA&M - {meta.component_id}"
+    wb.properties.creator = "container-security-gate"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
