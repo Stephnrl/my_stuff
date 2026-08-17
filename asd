@@ -1,214 +1,167 @@
-"""Core data models for the security gate POA&M engine.
+"""Turn raw Trivy JSON into normalized Findings.
 
-The single most important thing in this file is `Finding.finding_key`.
-It deliberately EXCLUDES the installed package version so that patching
-openssl 3.0.1 -> 3.0.2 while the CVE persists keeps the SAME POA&M item
-and the same remediation clock. Version is a mutable attribute, not identity.
+The subtle bug this file exists to prevent: for OS packages Trivy reports
+`Target` as something like "myacr.azurecr.us/team/api:v1.4.2 (debian 12.1)".
+That string contains the image TAG. If it lands in the finding identity key,
+every release produces an entirely new set of findings and the POA&M diff
+never matches anything. We normalize it to "os:debian" instead.
 """
 
 from __future__ import annotations
 
-import hashlib
-from dataclasses import dataclass, field, asdict
-from datetime import date, datetime, timezone
-from typing import Any
+import json
+import re
+from pathlib import Path
+from typing import Any, Iterable
 
-SEVERITY_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
-SEVERITY_RANK = {s: i for i, s in enumerate(SEVERITY_ORDER)}
+from .models import Finding, SEVERITY_ORDER
 
-# POA&M lifecycle. `status` is Open/Closed only; a deviation is a separate
-# attribute so an excepted item still APPEARS in the POA&M rather than vanishing.
-STATUS_OPEN = "Open"
-STATUS_CLOSED = "Closed"
-
-DEVIATION_RISK_ADJUSTED = "Risk Adjusted"
-DEVIATION_FALSE_POSITIVE = "False Positive"
-DEVIATION_OPERATIONAL = "Operational Requirement"
-VALID_DEVIATIONS = {
-    DEVIATION_RISK_ADJUSTED,
-    DEVIATION_FALSE_POSITIVE,
-    DEVIATION_OPERATIONAL,
-}
+# Matches the "(debian 12.1)" / "(alpine 3.19.1)" suffix Trivy appends.
+_OS_SUFFIX = re.compile(r"\(([a-z0-9\-]+)\s+[^)]*\)\s*$", re.IGNORECASE)
 
 
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+def normalize_target(result: dict[str, Any], vuln: dict[str, Any]) -> str:
+    """Produce a location string that is stable across image versions."""
+    pkg_path = (vuln.get("PkgPath") or "").strip()
+    if pkg_path:
+        return pkg_path
+
+    cls = (result.get("Class") or "").lower()
+    target = (result.get("Target") or "").strip()
+
+    if cls == "os-pkgs":
+        os_family = (result.get("Type") or "").strip().lower()
+        if not os_family:
+            m = _OS_SUFFIX.search(target)
+            os_family = m.group(1).lower() if m else "unknown"
+        return f"os:{os_family}"
+
+    # lang-pkgs and friends: Target is normally a lockfile path, which is stable.
+    # Defensively strip any image-ref prefix if one leaked in.
+    if "@sha256:" in target or _OS_SUFFIX.search(target):
+        return f"{cls or 'pkgs'}:{result.get('Type', 'unknown')}"
+    return target
 
 
-def today_iso() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+def _extract_cvss(vuln: dict[str, Any], prefer: str = "nvd") -> tuple[float | None, str]:
+    """Pull a CVSS v3 score/vector, preferring one source but accepting any."""
+    cvss = vuln.get("CVSS") or {}
+    order = [prefer] + [k for k in cvss.keys() if k != prefer]
+    for source in order:
+        entry = cvss.get(source) or {}
+        score = entry.get("V3Score", entry.get("V4Score"))
+        vector = entry.get("V3Vector", entry.get("V4Vector", ""))
+        if score is not None:
+            return float(score), vector or ""
+    return None, ""
 
 
-@dataclass
-class Finding:
-    """A single vulnerability observation from one scan."""
-
-    vuln_id: str
-    pkg_name: str
-    target: str                      # normalized location, never contains image tag
-    installed_version: str = ""
-    fixed_version: str = ""
-    severity: str = "UNKNOWN"
-    cvss_score: float | None = None
-    cvss_vector: str = ""
-    title: str = ""
-    primary_url: str = ""
-    pkg_type: str = ""
-    purl: str = ""
-    fix_status: str = ""             # trivy: fixed / affected / will_not_fix / end_of_life
-    published_date: str = ""
-
-    @property
-    def finding_key(self) -> str:
-        raw = f"{self.vuln_id}|{self.pkg_name}|{self.target}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-    @property
-    def has_fix(self) -> bool:
-        return bool(self.fixed_version.strip())
+def _severity_from_nvd(vuln: dict[str, Any]) -> str:
+    """Derive a severity band from the NVD CVSS score, ignoring vendor rating."""
+    score, _ = _extract_cvss(vuln, prefer="nvd")
+    if score is None:
+        return (vuln.get("Severity") or "UNKNOWN").upper()
+    if score >= 9.0:
+        return "CRITICAL"
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    if score > 0:
+        return "LOW"
+    return "UNKNOWN"
 
 
-@dataclass
-class PoamRecord:
-    """A persisted POA&M line item. Never deleted, only transitioned."""
+def findings_from_trivy(
+    report: dict[str, Any],
+    severity_source: str = "vendor",
+    ignore_unfixed: bool = False,
+) -> list[Finding]:
+    """Flatten a Trivy image report into deduplicated Findings.
 
-    poam_id: str
-    finding_key: str
-    vuln_id: str
-    pkg_name: str
-    target: str
-
-    installed_version: str = ""
-    fixed_version: str = ""
-    severity: str = "UNKNOWN"
-    original_severity: str = ""      # severity at first detection, for drift detection
-    cvss_score: float | None = None
-    cvss_vector: str = ""
-    title: str = ""
-    primary_url: str = ""
-    pkg_type: str = ""
-    purl: str = ""
-    fix_status: str = ""
-
-    status: str = STATUS_OPEN
-    first_detected: str = ""
-    last_detected: str = ""
-    closed_date: str = ""
-    reopened_count: int = 0
-    scheduled_completion_date: str = ""
-
-    # Deviation / exception metadata, applied from the central exception store.
-    deviation_type: str = ""
-    deviation_ref: str = ""
-    deviation_justification: str = ""
-    deviation_approved_by: str = ""
-    deviation_expires: str = ""
-
-    first_seen_digest: str = ""
-    last_seen_digest: str = ""
-    first_seen_tag: str = ""
-    last_seen_tag: str = ""
-
-    # Free-form, survives round trips.
-    notes: str = ""
-
-    @property
-    def is_open(self) -> bool:
-        return self.status == STATUS_OPEN
-
-    @property
-    def has_active_deviation(self) -> bool:
-        return bool(self.deviation_type)
-
-    @property
-    def gating(self) -> bool:
-        """Open, and not covered by an active deviation -> counts toward the gate."""
-        return self.is_open and not self.has_active_deviation
-
-    def is_overdue(self, as_of: str | None = None) -> bool:
-        if not self.gating or not self.scheduled_completion_date:
-            return False
-        ref = as_of or today_iso()
-        return self.scheduled_completion_date < ref
-
-    @property
-    def poam_status(self) -> str:
-        """Combined status column for the rendered workbook."""
-        if self.status == STATUS_CLOSED:
-            return STATUS_CLOSED
-        if self.deviation_type:
-            return f"Open - {self.deviation_type}"
-        return STATUS_OPEN
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "PoamRecord":
-        known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in d.items() if k in known})
-
-
-@dataclass
-class ScanMeta:
-    """Provenance for one gate execution. Goes in the workbook and the telemetry.
-
-    The trivy DB timestamp matters: the DB refreshes roughly every 6 hours, so
-    the same image scanned two days apart legitimately yields different results.
-    Without this recorded, that looks like a bug.
+    severity_source:
+      "vendor" - use Trivy's Severity field (distro maintainer rating; usually
+                 more accurate about real-world exploitability on that distro)
+      "nvd"    - derive the band from the NVD CVSS v3 base score (usually
+                 harsher; some compliance programs mandate it)
     """
+    findings: dict[str, Finding] = {}
 
-    component_id: str = ""
-    image_ref: str = ""
-    image_digest: str = ""
-    image_tag: str = ""
-    scan_timestamp: str = field(default_factory=utc_now_iso)
-    trivy_version: str = ""
-    vuln_db_updated_at: str = ""
-    vuln_db_next_update: str = ""
-    java_db_version: str = ""
-    policy_profile: str = ""
-    policy_sha: str = ""
-    gate_version: str = ""
-    run_id: str = ""
-    run_url: str = ""
-    repository: str = ""
-    actor: str = ""
-    git_sha: str = ""
-    is_initial_scan: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class DiffResult:
-    """Outcome of reconciling a scan against prior POA&M state."""
-
-    new: list[PoamRecord] = field(default_factory=list)
-    closed: list[PoamRecord] = field(default_factory=list)
-    reopened: list[PoamRecord] = field(default_factory=list)
-    persisting: list[PoamRecord] = field(default_factory=list)
-    severity_drift: list[dict[str, Any]] = field(default_factory=list)
-    all_records: list[PoamRecord] = field(default_factory=list)
-
-    def counts(self) -> dict[str, int]:
-        return {
-            "new": len(self.new),
-            "closed": len(self.closed),
-            "reopened": len(self.reopened),
-            "persisting": len(self.persisting),
-            "severity_drift": len(self.severity_drift),
-            "total_open": len([r for r in self.all_records if r.is_open]),
-            "total_closed": len([r for r in self.all_records if not r.is_open]),
-        }
-
-    def severity_breakdown(self, only_gating: bool = True) -> dict[str, int]:
-        out = {s: 0 for s in SEVERITY_ORDER}
-        for r in self.all_records:
-            if only_gating and not r.gating:
+    for result in report.get("Results") or []:
+        for vuln in result.get("Vulnerabilities") or []:
+            fixed_version = (vuln.get("FixedVersion") or "").strip()
+            if ignore_unfixed and not fixed_version:
                 continue
-            if not only_gating and not r.is_open:
+
+            if severity_source == "nvd":
+                severity = _severity_from_nvd(vuln)
+            else:
+                severity = (vuln.get("Severity") or "UNKNOWN").upper()
+            if severity not in SEVERITY_ORDER:
+                severity = "UNKNOWN"
+
+            score, vector = _extract_cvss(vuln, prefer="nvd")
+            identifier = vuln.get("PkgIdentifier") or {}
+
+            f = Finding(
+                vuln_id=(vuln.get("VulnerabilityID") or "").strip(),
+                pkg_name=(vuln.get("PkgName") or "").strip(),
+                target=normalize_target(result, vuln),
+                installed_version=(vuln.get("InstalledVersion") or "").strip(),
+                fixed_version=fixed_version,
+                severity=severity,
+                cvss_score=score,
+                cvss_vector=vector,
+                title=(vuln.get("Title") or "").strip()[:500],
+                primary_url=(vuln.get("PrimaryURL") or "").strip(),
+                pkg_type=(result.get("Type") or "").strip(),
+                purl=(identifier.get("PURL") or "").strip(),
+                fix_status=(vuln.get("Status") or "").strip(),
+                published_date=(vuln.get("PublishedDate") or "")[:10],
+            )
+            if not f.vuln_id or not f.pkg_name:
                 continue
-            out[r.severity if r.severity in out else "UNKNOWN"] += 1
-        return out
+
+            # Same key can appear twice (multiple Results touching one package).
+            # Keep the highest-severity instance.
+            existing = findings.get(f.finding_key)
+            if existing is None or SEVERITY_ORDER.index(f.severity) < SEVERITY_ORDER.index(
+                existing.severity
+            ):
+                findings[f.finding_key] = f
+
+    return list(findings.values())
+
+
+def scan_metadata_from_trivy(report: dict[str, Any]) -> dict[str, str]:
+    """Pull DB provenance out of the report so the POA&M is reproducible."""
+    meta: dict[str, str] = {}
+    for key in ("SchemaVersion", "ArtifactName", "ArtifactType"):
+        if key in report:
+            meta[key] = str(report[key])
+
+    metadata = report.get("Metadata") or {}
+    repo_digests = metadata.get("RepoDigests") or []
+    if repo_digests:
+        meta["repo_digest"] = repo_digests[0]
+    repo_tags = metadata.get("RepoTags") or []
+    if repo_tags:
+        meta["repo_tag"] = repo_tags[0]
+
+    os_info = metadata.get("OS") or {}
+    if os_info:
+        meta["os"] = f"{os_info.get('Family', '')} {os_info.get('Name', '')}".strip()
+
+    return meta
+
+
+def load_report(path: str | Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def digest_from_ref(image_ref: str) -> str:
+    """Extract sha256:... from a digest-pinned reference."""
+    if "@" in image_ref:
+        return image_ref.split("@", 1)[1]
+    return ""
