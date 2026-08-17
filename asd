@@ -1,219 +1,356 @@
-"""Reconcile a fresh scan against prior POA&M state.
+"""Exception handling and the gate decision.
 
-Pure functions, no I/O, no Azure. Everything here is unit-testable, which
-matters because a bug in this file silently corrupts an audit artifact.
-
-State machine per finding_key:
-
-                     in current scan        absent from current scan
-    prior Open       -> PERSISTING          -> CLOSED (stamp closed_date)
-    prior Closed     -> REOPENED            -> stays Closed
-    not in prior     -> NEW                 -> n/a
+Design rule enforced here: exceptions are applied AFTER the scan, to the POA&M
+records. We never hand Trivy an --ignorefile, because suppression at scan time
+deletes the finding from the output entirely and it never reaches the POA&M.
+An assessor wants to see the deviation documented, not disappeared.
 """
 
 from __future__ import annotations
 
+import fnmatch
+import hashlib
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable
 
+import yaml
+
 from .models import (
-    STATUS_CLOSED,
-    STATUS_OPEN,
+    VALID_DEVIATIONS,
     DiffResult,
-    Finding,
     PoamRecord,
-    ScanMeta,
+    SEVERITY_ORDER,
     today_iso,
 )
 
-
-def _add_days(iso_date: str, days: int) -> str:
-    from datetime import date, timedelta
-
-    y, m, d = (int(x) for x in iso_date.split("-"))
-    return (date(y, m, d) + timedelta(days=days)).isoformat()
-
-
-def next_poam_id(component_id: str, seq: int) -> str:
-    """Sequential and never reused. Prefix keeps IDs readable in a merged POA&M."""
-    slug = component_id.strip("/").replace("/", "-").replace("_", "-").upper()
-    slug = "".join(ch for ch in slug if ch.isalnum() or ch == "-")[-24:]
-    return f"{slug}-{seq:04d}"
-
-
-def _record_from_finding(
-    finding: Finding,
-    poam_id: str,
-    meta: ScanMeta,
-    sla_days: dict[str, int],
-    as_of: str,
-) -> PoamRecord:
-    sla = sla_days.get(finding.severity, sla_days.get("DEFAULT", 90))
-    return PoamRecord(
-        poam_id=poam_id,
-        finding_key=finding.finding_key,
-        vuln_id=finding.vuln_id,
-        pkg_name=finding.pkg_name,
-        target=finding.target,
-        installed_version=finding.installed_version,
-        fixed_version=finding.fixed_version,
-        severity=finding.severity,
-        original_severity=finding.severity,
-        cvss_score=finding.cvss_score,
-        cvss_vector=finding.cvss_vector,
-        title=finding.title,
-        primary_url=finding.primary_url,
-        pkg_type=finding.pkg_type,
-        purl=finding.purl,
-        fix_status=finding.fix_status,
-        status=STATUS_OPEN,
-        first_detected=as_of,
-        last_detected=as_of,
-        scheduled_completion_date=_add_days(as_of, sla),
-        first_seen_digest=meta.image_digest,
-        last_seen_digest=meta.image_digest,
-        first_seen_tag=meta.image_tag,
-        last_seen_tag=meta.image_tag,
-    )
+DEFAULT_POLICY: dict[str, Any] = {
+    "name": "default",
+    "severity_source": "vendor",
+    "ignore_unfixed": False,
+    "severity_sla_days": {"CRITICAL": 30, "HIGH": 30, "MEDIUM": 90, "LOW": 180, "DEFAULT": 90},
+    "grace_period_days": 0,
+    "fail_on": {
+        "new": ["CRITICAL"],
+        "overdue": ["CRITICAL", "HIGH"],
+        "reopened": [],
+        "escalated_into": [],
+    },
+    "deviations": {
+        "require_expiry": True,
+        "max_days": 90,
+        "allowed_types": sorted(VALID_DEVIATIONS),
+        "warn_before_expiry_days": 14,
+    },
+    "reset_sla_on_reopen": True,
+}
 
 
-def _refresh_mutable_fields(record: PoamRecord, finding: Finding, meta: ScanMeta, as_of: str) -> None:
-    """Update the attributes that legitimately change while identity holds."""
-    record.installed_version = finding.installed_version
-    record.fixed_version = finding.fixed_version
-    record.cvss_score = finding.cvss_score
-    record.cvss_vector = finding.cvss_vector
-    record.fix_status = finding.fix_status
-    record.purl = finding.purl or record.purl
-    record.title = finding.title or record.title
-    record.primary_url = finding.primary_url or record.primary_url
-    record.last_detected = as_of
-    record.last_seen_digest = meta.image_digest
-    record.last_seen_tag = meta.image_tag
+@dataclass
+class Exception_:
+    """One approved deviation from the central exception store."""
+
+    component_id: str
+    vuln_id: str = "*"
+    pkg_name: str = "*"
+    target: str = "*"
+    deviation_type: str = "Risk Adjusted"
+    justification: str = ""
+    approved_by: str = ""
+    expires_on: str = ""
+    ref: str = ""
+    source_file: str = ""
+
+    def matches(self, record: PoamRecord, component_id: str) -> bool:
+        return (
+            fnmatch.fnmatch(component_id, self.component_id)
+            and fnmatch.fnmatch(record.vuln_id, self.vuln_id)
+            and fnmatch.fnmatch(record.pkg_name, self.pkg_name)
+            and fnmatch.fnmatch(record.target, self.target)
+        )
+
+    def is_expired(self, as_of: str | None = None) -> bool:
+        if not self.expires_on:
+            return False
+        return self.expires_on < (as_of or today_iso())
+
+    def days_to_expiry(self, as_of: str | None = None) -> int | None:
+        if not self.expires_on:
+            return None
+        from datetime import date
+
+        ref = as_of or today_iso()
+        a = date(*(int(x) for x in ref.split("-")))
+        b = date(*(int(x) for x in self.expires_on.split("-")))
+        return (b - a).days
 
 
-def reconcile(
-    findings: Iterable[Finding],
-    prior_records: Iterable[PoamRecord],
-    meta: ScanMeta,
-    sla_days: dict[str, int] | None = None,
-    next_seq: int = 1,
-    as_of: str | None = None,
-    reset_sla_on_reopen: bool = True,
-) -> tuple[DiffResult, int]:
-    """Return (DiffResult, next_sequence_number).
+@dataclass
+class GateDecision:
+    result: str = "pass"                  # pass | fail | pass_with_bypass
+    reasons: list[str] = field(default_factory=list)
+    violations: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    bypass_used: bool = False
+    bypass_reason: str = ""
+    bypass_actor: str = ""
 
-    `reset_sla_on_reopen` - when a closed finding comes back, restart the
-    remediation clock. Default True: a regression is a fresh obligation.
-    Set False if your assessor wants continuity from original discovery.
-    """
-    sla_days = sla_days or {"CRITICAL": 30, "HIGH": 30, "MEDIUM": 90, "LOW": 180, "DEFAULT": 90}
-    as_of = as_of or today_iso()
-    seq = next_seq
+    @property
+    def failed(self) -> bool:
+        return self.result == "fail"
 
-    current: dict[str, Finding] = {f.finding_key: f for f in findings}
-    prior: dict[str, PoamRecord] = {r.finding_key: r for r in prior_records}
 
-    result = DiffResult()
-
-    for key, finding in current.items():
-        existing = prior.get(key)
-
-        if existing is None:
-            record = _record_from_finding(finding, next_poam_id(meta.component_id, seq), meta, sla_days, as_of)
-            seq += 1
-            result.new.append(record)
-            result.all_records.append(record)
-            continue
-
-        was_closed = existing.status == STATUS_CLOSED
-        prior_severity = existing.severity
-
-        _refresh_mutable_fields(existing, finding, meta, as_of)
-
-        # Severity reclassification on an otherwise unchanged finding is worth
-        # surfacing: a Medium promoted to Critical is a real posture change.
-        if finding.severity != prior_severity:
-            existing.severity = finding.severity
-            result.severity_drift.append(
-                {
-                    "poam_id": existing.poam_id,
-                    "vuln_id": existing.vuln_id,
-                    "pkg_name": existing.pkg_name,
-                    "from": prior_severity,
-                    "to": finding.severity,
-                    "escalation": _is_escalation(prior_severity, finding.severity),
-                }
-            )
-            # Re-derive the due date from the ORIGINAL detection date so an
-            # escalation tightens the deadline instead of granting a new window.
-            sla = sla_days.get(finding.severity, sla_days.get("DEFAULT", 90))
-            base = existing.first_detected or as_of
-            existing.scheduled_completion_date = _add_days(base, sla)
-
-        if was_closed:
-            existing.status = STATUS_OPEN
-            existing.closed_date = ""
-            existing.reopened_count += 1
-            if reset_sla_on_reopen:
-                sla = sla_days.get(finding.severity, sla_days.get("DEFAULT", 90))
-                existing.scheduled_completion_date = _add_days(as_of, sla)
-            result.reopened.append(existing)
+def load_policy(path: str | Path | None) -> dict[str, Any]:
+    policy = json.loads(json.dumps(DEFAULT_POLICY))  # deep copy
+    if not path:
+        return policy
+    with open(path, "r", encoding="utf-8") as fh:
+        loaded = yaml.safe_load(fh) or {}
+    for key, value in loaded.items():
+        if isinstance(value, dict) and isinstance(policy.get(key), dict):
+            policy[key].update(value)
         else:
-            result.persisting.append(existing)
+            policy[key] = value
+    return policy
 
-        result.all_records.append(existing)
 
-    # Anything previously open and absent from this scan is remediated.
-    for key, record in prior.items():
-        if key in current:
+def policy_fingerprint(policy: dict[str, Any]) -> str:
+    """Hash of the effective policy, recorded in the POA&M for auditability."""
+    blob = json.dumps(policy, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def load_exceptions(paths: Iterable[str | Path]) -> tuple[list[Exception_], list[str]]:
+    """Load every *.yaml/*.yml under the given files or directories.
+
+    Returns (valid_exceptions, validation_errors). Malformed entries are
+    rejected loudly rather than silently ignored - a broken exception file
+    must not quietly become "no exceptions" or "everything excepted".
+    """
+    exceptions: list[Exception_] = []
+    errors: list[str] = []
+    files: list[Path] = []
+
+    for p in paths:
+        path = Path(p)
+        if path.is_dir():
+            files.extend(sorted(path.rglob("*.yaml")))
+            files.extend(sorted(path.rglob("*.yml")))
+        elif path.is_file():
+            files.append(path)
+
+    for f in files:
+        if f.name in {"schema.json", "schema.yaml"}:
             continue
-        if record.status == STATUS_OPEN:
-            record.status = STATUS_CLOSED
-            record.closed_date = as_of
-            result.closed.append(record)
-        result.all_records.append(record)
+        try:
+            data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            errors.append(f"{f}: unparseable YAML: {exc}")
+            continue
 
-    result.all_records.sort(key=_sort_key)
-    return result, seq
+        entries = data.get("exceptions") if isinstance(data, dict) else data
+        if not isinstance(entries, list):
+            errors.append(f"{f}: expected a top-level 'exceptions' list")
+            continue
+
+        for i, raw in enumerate(entries):
+            if not isinstance(raw, dict):
+                errors.append(f"{f}[{i}]: entry is not a mapping")
+                continue
+            missing = [k for k in ("component_id", "vuln_id", "justification", "approved_by") if not raw.get(k)]
+            if missing:
+                errors.append(f"{f}[{i}]: missing required field(s): {', '.join(missing)}")
+                continue
+            dev_type = str(raw.get("deviation_type", "Risk Adjusted"))
+            if dev_type not in VALID_DEVIATIONS:
+                errors.append(f"{f}[{i}]: invalid deviation_type '{dev_type}'")
+                continue
+            expires = raw.get("expires_on", "")
+            exceptions.append(
+                Exception_(
+                    component_id=str(raw["component_id"]),
+                    vuln_id=str(raw.get("vuln_id", "*")),
+                    pkg_name=str(raw.get("pkg_name", "*")),
+                    target=str(raw.get("target", "*")),
+                    deviation_type=dev_type,
+                    justification=str(raw["justification"]),
+                    approved_by=str(raw["approved_by"]),
+                    expires_on=str(expires) if expires else "",
+                    ref=str(raw.get("ref", "")),
+                    source_file=str(f),
+                )
+            )
+
+    return exceptions, errors
 
 
-def _is_escalation(old: str, new: str) -> bool:
-    from .models import SEVERITY_RANK
+def apply_exceptions(
+    records: Iterable[PoamRecord],
+    exceptions: list[Exception_],
+    component_id: str,
+    policy: dict[str, Any],
+    as_of: str | None = None,
+) -> dict[str, Any]:
+    """Stamp deviation metadata onto matching records. Fails closed on expiry."""
+    dev_cfg = policy.get("deviations", {})
+    require_expiry = dev_cfg.get("require_expiry", True)
+    max_days = dev_cfg.get("max_days", 90)
+    warn_days = dev_cfg.get("warn_before_expiry_days", 14)
 
-    return SEVERITY_RANK.get(new, 99) < SEVERITY_RANK.get(old, 99)
+    applied = 0
+    expiring_soon: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    expired_hits: list[str] = []
 
+    usable: list[Exception_] = []
+    for exc in exceptions:
+        if require_expiry and not exc.expires_on:
+            rejected.append(f"{exc.vuln_id} ({exc.source_file}): no expires_on and policy requires one")
+            continue
+        if exc.is_expired(as_of):
+            expired_hits.append(f"{exc.vuln_id} expired {exc.expires_on} ({exc.source_file})")
+            continue
+        remaining = exc.days_to_expiry(as_of)
+        if remaining is not None and max_days and remaining > max_days:
+            rejected.append(
+                f"{exc.vuln_id} ({exc.source_file}): expiry {exc.expires_on} exceeds max_days={max_days}"
+            )
+            continue
+        usable.append(exc)
 
-def _sort_key(record: PoamRecord) -> tuple:
-    from .models import SEVERITY_RANK
-
-    return (
-        0 if record.is_open else 1,
-        SEVERITY_RANK.get(record.severity, 99),
-        record.scheduled_completion_date or "9999-12-31",
-        record.vuln_id,
-        record.pkg_name,
-    )
-
-
-def summarize(result: DiffResult) -> dict[str, Any]:
-    """Compact summary suitable for telemetry and job-summary rendering."""
-    counts = result.counts()
-    by_sev_new: dict[str, int] = {}
-    for r in result.new:
-        by_sev_new[r.severity] = by_sev_new.get(r.severity, 0) + 1
-
-    overdue = [r for r in result.all_records if r.is_overdue()]
-    by_sev_overdue: dict[str, int] = {}
-    for r in overdue:
-        by_sev_overdue[r.severity] = by_sev_overdue.get(r.severity, 0) + 1
+    for record in records:
+        if not record.is_open:
+            continue
+        for exc in usable:
+            if not exc.matches(record, component_id):
+                continue
+            record.deviation_type = exc.deviation_type
+            record.deviation_ref = exc.ref
+            record.deviation_justification = exc.justification
+            record.deviation_approved_by = exc.approved_by
+            record.deviation_expires = exc.expires_on
+            applied += 1
+            remaining = exc.days_to_expiry(as_of)
+            if remaining is not None and remaining <= warn_days:
+                expiring_soon.append(
+                    {
+                        "poam_id": record.poam_id,
+                        "vuln_id": record.vuln_id,
+                        "expires_on": exc.expires_on,
+                        "days_remaining": remaining,
+                        "approved_by": exc.approved_by,
+                    }
+                )
+            break
 
     return {
-        **counts,
-        "open_by_severity": result.severity_breakdown(only_gating=False),
-        "gating_by_severity": result.severity_breakdown(only_gating=True),
-        "new_by_severity": by_sev_new,
-        "overdue_count": len(overdue),
-        "overdue_by_severity": by_sev_overdue,
-        "deviations_active": len([r for r in result.all_records if r.has_active_deviation]),
-        "escalations": len([d for d in result.severity_drift if d["escalation"]]),
+        "applied": applied,
+        "usable": len(usable),
+        "expiring_soon": expiring_soon,
+        "rejected": rejected,
+        "expired": expired_hits,
+    }
+
+
+def evaluate(
+    diff: DiffResult,
+    policy: dict[str, Any],
+    bypass: bool = False,
+    bypass_reason: str = "",
+    bypass_actor: str = "",
+    as_of: str | None = None,
+) -> GateDecision:
+    """Decide pass/fail. Only gating records (open, no active deviation) count."""
+    as_of = as_of or today_iso()
+    decision = GateDecision()
+    fail_on = policy.get("fail_on", {})
+    grace = int(policy.get("grace_period_days", 0) or 0)
+
+    def _sev_set(key: str) -> set[str]:
+        return {s.upper() for s in (fail_on.get(key) or [])}
+
+    # 1. New findings above threshold, outside any grace window.
+    new_sevs = _sev_set("new")
+    if new_sevs:
+        for r in diff.new:
+            if not r.gating or r.severity not in new_sevs:
+                continue
+            if grace:
+                from datetime import date, timedelta
+
+                first = date(*(int(x) for x in r.first_detected.split("-")))
+                if date(*(int(x) for x in as_of.split("-"))) < first + timedelta(days=grace):
+                    decision.warnings.append(
+                        f"{r.poam_id} {r.vuln_id} ({r.severity}) new, within {grace}-day grace period"
+                    )
+                    continue
+            decision.violations.append(_violation(r, "new"))
+
+    # 2. Anything past its scheduled completion date.
+    overdue_sevs = _sev_set("overdue")
+    if overdue_sevs:
+        for r in diff.all_records:
+            if r.severity in overdue_sevs and r.is_overdue(as_of):
+                decision.violations.append(_violation(r, "overdue"))
+
+    # 3. Regressions: a previously closed finding that came back.
+    reopened_sevs = _sev_set("reopened")
+    if reopened_sevs:
+        for r in diff.reopened:
+            if r.gating and r.severity in reopened_sevs:
+                decision.violations.append(_violation(r, "reopened"))
+
+    # 4. Severity escalation into a listed band on an existing item.
+    escalated_sevs = _sev_set("escalated_into")
+    if escalated_sevs:
+        by_id = {r.poam_id: r for r in diff.all_records}
+        for drift in diff.severity_drift:
+            if not drift["escalation"] or drift["to"] not in escalated_sevs:
+                continue
+            r = by_id.get(drift["poam_id"])
+            if r and r.gating:
+                decision.violations.append(_violation(r, f"escalated {drift['from']}->{drift['to']}"))
+
+    # Deduplicate: one item can trip several rules.
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for v in decision.violations:
+        if v["poam_id"] in seen:
+            continue
+        seen.add(v["poam_id"])
+        unique.append(v)
+    decision.violations = unique
+
+    if unique:
+        by_rule: dict[str, int] = {}
+        for v in unique:
+            by_rule[v["rule"]] = by_rule.get(v["rule"], 0) + 1
+        decision.reasons = [f"{count} {rule} finding(s)" for rule, count in sorted(by_rule.items())]
+        if bypass:
+            decision.result = "pass_with_bypass"
+            decision.bypass_used = True
+            decision.bypass_reason = bypass_reason
+            decision.bypass_actor = bypass_actor
+        else:
+            decision.result = "fail"
+    else:
+        decision.result = "pass"
+        if bypass:
+            decision.warnings.append("Bypass was requested but no violations were present.")
+
+    return decision
+
+
+def _violation(record: PoamRecord, rule: str) -> dict[str, Any]:
+    return {
+        "rule": rule,
+        "poam_id": record.poam_id,
+        "vuln_id": record.vuln_id,
+        "pkg_name": record.pkg_name,
+        "installed_version": record.installed_version,
+        "fixed_version": record.fixed_version,
+        "severity": record.severity,
+        "target": record.target,
+        "scheduled_completion_date": record.scheduled_completion_date,
     }
