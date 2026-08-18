@@ -1,211 +1,155 @@
-# Telemetry pipeline: gate run -> Logs Ingestion API -> DCE -> DCR -> custom table.
+# POA&M state, SBOMs, and raw scan output.
 #
-# Verify Data Collection Rule and Logs Ingestion API availability in your Gov
-# region before relying on this. Azure Monitor features reach Government after
-# commercial, and this is the piece most likely to be missing.
+# This account holds an enumerated list of exploitable weaknesses in your
+# images. Treat it as CUI: no public network access, no shared keys, and a
+# retention policy your assessor will accept.
 
-resource "azurerm_log_analytics_workspace" "gate" {
-  name                = "log-${local.name_prefix}"
+resource "azurerm_storage_account" "gate" {
+  name                = replace("st${local.name_prefix}", "-", "")
   resource_group_name = azurerm_resource_group.gate.name
   location            = azurerm_resource_group.gate.location
-  sku                 = "PerGB2018"
-  retention_in_days   = var.log_retention_days
-  tags                = local.tags
+
+  account_tier             = "Standard"
+  account_replication_type = var.storage_replication
+  account_kind             = "StorageV2"
+  access_tier              = "Hot"
+
+  min_tls_version                 = "TLS1_2"
+  https_traffic_only_enabled      = true
+  allow_nested_items_to_be_public = false
+
+  # Force OIDC/Entra auth. Shared keys would let anyone holding the key read
+  # every team's vulnerability posture, and they never rotate on their own.
+  shared_access_key_enabled = false
+  public_network_access_enabled = var.enable_private_endpoint ? false : true
+
+  blob_properties {
+    versioning_enabled = true
+
+    delete_retention_policy {
+      days = var.soft_delete_days
+    }
+
+    container_delete_retention_policy {
+      days = var.soft_delete_days
+    }
+
+    change_feed_enabled = true
+  }
+
+  network_rules {
+    # Runner subnets need an explicit allow when the private endpoint is off.
+    default_action             = var.enable_private_endpoint ? "Deny" : "Allow"
+    bypass                     = ["AzureServices"]
+    ip_rules                   = var.allowed_ip_ranges
+    virtual_network_subnet_ids = var.runner_subnet_ids
+  }
+
+  tags = local.tags
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-# Custom table. Column names here must match the keys emitted by
-# poam/telemetry.py::build_event exactly, and the KQL alerts depend on both.
-# Changing a name is a three-file edit.
-resource "azapi_resource" "gate_table" {
-  type      = "Microsoft.OperationalInsights/workspaces/tables@2022-10-01"
-  name      = "SecurityGate_CL"
-  parent_id = azurerm_log_analytics_workspace.gate.id
+resource "azurerm_storage_container" "poam" {
+  name                  = "poam"
+  storage_account_id    = azurerm_storage_account.gate.id
+  container_access_type = "private"
+}
+
+# Immutability is what makes the POA&M tamper-evident. A time-based policy in
+# unlocked mode is right for rollout; lock it once retention is agreed, because
+# a locked policy CANNOT be shortened or removed afterwards - only extended.
+resource "azapi_resource" "poam_immutability" {
+  count = var.enable_immutability ? 1 : 0
+
+  type      = "Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01"
+  name      = "default"
+  parent_id = azurerm_storage_container.poam.id
 
   body = {
     properties = {
-      schema = {
-        name = "SecurityGate_CL"
-        columns = [
-          { name = "TimeGenerated", type = "datetime" },
-          { name = "ComponentId", type = "string" },
-          { name = "Repository", type = "string" },
-          { name = "ImageDigest", type = "string" },
-          { name = "ImageTag", type = "string" },
-          { name = "ImageRef", type = "string" },
-          { name = "GateResult", type = "string" },
-          { name = "BypassUsed", type = "boolean" },
-          { name = "BypassActor", type = "string" },
-          { name = "BypassReason", type = "string" },
-          { name = "IsInitialScan", type = "boolean" },
-          { name = "PolicyProfile", type = "string" },
-          { name = "PolicyFingerprint", type = "string" },
-          { name = "GateVersion", type = "string" },
-          { name = "TrivyVersion", type = "string" },
-          { name = "VulnDbUpdatedAt", type = "string" },
-          { name = "VulnDbAgeHours", type = "real" },
-          { name = "NewCount", type = "int" },
-          { name = "ClosedCount", type = "int" },
-          { name = "ReopenedCount", type = "int" },
-          { name = "PersistingCount", type = "int" },
-          { name = "TotalOpen", type = "int" },
-          { name = "OverdueCount", type = "int" },
-          { name = "EscalationCount", type = "int" },
-          { name = "CriticalOpen", type = "int" },
-          { name = "HighOpen", type = "int" },
-          { name = "MediumOpen", type = "int" },
-          { name = "LowOpen", type = "int" },
-          { name = "CriticalOpenIncludingDeviations", type = "int" },
-          { name = "HighOpenIncludingDeviations", type = "int" },
-          { name = "NewCritical", type = "int" },
-          { name = "NewHigh", type = "int" },
-          { name = "DeviationsActive", type = "int" },
-          { name = "DeviationsExpiringSoon", type = "int" },
-          { name = "DeviationsExpired", type = "int" },
-          { name = "DeviationsRejected", type = "int" },
-          { name = "ViolationCount", type = "int" },
-          { name = "ViolationSummary", type = "string" },
-          { name = "RunId", type = "string" },
-          { name = "RunUrl", type = "string" },
-          { name = "Actor", type = "string" },
-          { name = "CommitSha", type = "string" },
-          { name = "DurationSeconds", type = "real" },
-          { name = "PoamUri", type = "string" },
-          { name = "SbomUri", type = "string" },
-        ]
-      }
-      retentionInDays      = var.log_retention_days
-      totalRetentionInDays = var.log_total_retention_days
+      immutabilityPeriodSinceCreationInDays = var.immutability_days
+      allowProtectedAppendWrites            = true
     }
   }
-
-  schema_validation_enabled = false
 }
 
-resource "azurerm_monitor_data_collection_endpoint" "gate" {
-  name                          = "dce-${local.name_prefix}"
-  resource_group_name           = azurerm_resource_group.gate.name
-  location                      = azurerm_resource_group.gate.location
-  public_network_access_enabled = var.dce_public_access
-  description                   = "Ingestion endpoint for container security gate telemetry"
-  tags                          = local.tags
-}
+# Age out raw scan JSON aggressively; keep POA&M history for the long haul.
+resource "azurerm_storage_management_policy" "gate" {
+  storage_account_id = azurerm_storage_account.gate.id
 
-resource "azurerm_monitor_data_collection_rule" "gate" {
-  name                        = "dcr-${local.name_prefix}"
-  resource_group_name         = azurerm_resource_group.gate.name
-  location                    = azurerm_resource_group.gate.location
-  data_collection_endpoint_id = azurerm_monitor_data_collection_endpoint.gate.id
-  tags                        = local.tags
-
-  destinations {
-    log_analytics {
-      workspace_resource_id = azurerm_log_analytics_workspace.gate.id
-      name                  = "gate-workspace"
+  rule {
+    name    = "archive-poam-history"
+    enabled = true
+    filters {
+      prefix_match = ["poam/history"]
+      blob_types   = ["blockBlob"]
     }
-  }
-
-  data_flow {
-    streams       = ["Custom-SecurityGate_CL"]
-    destinations  = ["gate-workspace"]
-    output_stream = "Custom-SecurityGate_CL"
-    transform_kql = "source"
-  }
-
-  stream_declaration {
-    stream_name = "Custom-SecurityGate_CL"
-
-    dynamic "column" {
-      for_each = local.gate_stream_columns
-      content {
-        name = column.value.name
-        type = column.value.type
+    actions {
+      base_blob {
+        tier_to_cool_after_days_since_modification_greater_than    = 90
+        tier_to_archive_after_days_since_modification_greater_than = 365
       }
     }
   }
 
-  depends_on = [azapi_resource.gate_table]
+  rule {
+    name    = "expire-raw-scans"
+    enabled = true
+    filters {
+      prefix_match = ["poam/raw"]
+      blob_types   = ["blockBlob"]
+    }
+    actions {
+      base_blob {
+        tier_to_cool_after_days_since_modification_greater_than = 30
+        delete_after_days_since_modification_greater_than       = var.raw_scan_retention_days
+      }
+    }
+  }
 }
 
-locals {
-  # Stream declaration mirrors the table schema. Kept as a local so the two
-  # cannot drift apart silently.
-  gate_stream_columns = [
-    { name = "TimeGenerated", type = "datetime" },
-    { name = "ComponentId", type = "string" },
-    { name = "Repository", type = "string" },
-    { name = "ImageDigest", type = "string" },
-    { name = "ImageTag", type = "string" },
-    { name = "ImageRef", type = "string" },
-    { name = "GateResult", type = "string" },
-    { name = "BypassUsed", type = "boolean" },
-    { name = "BypassActor", type = "string" },
-    { name = "BypassReason", type = "string" },
-    { name = "IsInitialScan", type = "boolean" },
-    { name = "PolicyProfile", type = "string" },
-    { name = "PolicyFingerprint", type = "string" },
-    { name = "GateVersion", type = "string" },
-    { name = "TrivyVersion", type = "string" },
-    { name = "VulnDbUpdatedAt", type = "string" },
-    { name = "VulnDbAgeHours", type = "real" },
-    { name = "NewCount", type = "int" },
-    { name = "ClosedCount", type = "int" },
-    { name = "ReopenedCount", type = "int" },
-    { name = "PersistingCount", type = "int" },
-    { name = "TotalOpen", type = "int" },
-    { name = "OverdueCount", type = "int" },
-    { name = "EscalationCount", type = "int" },
-    { name = "CriticalOpen", type = "int" },
-    { name = "HighOpen", type = "int" },
-    { name = "MediumOpen", type = "int" },
-    { name = "LowOpen", type = "int" },
-    { name = "CriticalOpenIncludingDeviations", type = "int" },
-    { name = "HighOpenIncludingDeviations", type = "int" },
-    { name = "NewCritical", type = "int" },
-    { name = "NewHigh", type = "int" },
-    { name = "DeviationsActive", type = "int" },
-    { name = "DeviationsExpiringSoon", type = "int" },
-    { name = "DeviationsExpired", type = "int" },
-    { name = "DeviationsRejected", type = "int" },
-    { name = "ViolationCount", type = "int" },
-    { name = "ViolationSummary", type = "string" },
-    { name = "RunId", type = "string" },
-    { name = "RunUrl", type = "string" },
-    { name = "Actor", type = "string" },
-    { name = "CommitSha", type = "string" },
-    { name = "DurationSeconds", type = "real" },
-    { name = "PoamUri", type = "string" },
-    { name = "SbomUri", type = "string" },
-  ]
+resource "azurerm_private_endpoint" "storage" {
+  count = var.enable_private_endpoint ? 1 : 0
+
+  name                = "pe-${local.name_prefix}-blob"
+  resource_group_name = azurerm_resource_group.gate.name
+  location            = azurerm_resource_group.gate.location
+  subnet_id           = var.private_endpoint_subnet_id
+
+  private_service_connection {
+    name                           = "psc-${local.name_prefix}-blob"
+    private_connection_resource_id = azurerm_storage_account.gate.id
+    subresource_names              = ["blob"]
+    is_manual_connection           = false
+  }
+
+  dynamic "private_dns_zone_group" {
+    for_each = var.private_dns_zone_id == "" ? [] : [1]
+    content {
+      name                 = "default"
+      private_dns_zone_ids = [var.private_dns_zone_id]
+    }
+  }
+
+  tags = local.tags
 }
 
-# The gate identity needs this to POST to the Logs Ingestion API.
-resource "azurerm_role_assignment" "gate_metrics_publisher" {
-  scope                = azurerm_monitor_data_collection_rule.gate.id
-  role_definition_name = "Monitoring Metrics Publisher"
+# The gate's federated identity writes POA&M state. Data Contributor rather
+# than Owner: it never needs to change container ACLs or policies.
+resource "azurerm_role_assignment" "gate_blob_write" {
+  scope                = azurerm_storage_account.gate.id
+  role_definition_name = "Storage Blob Data Contributor"
   principal_id         = var.gate_principal_id
 }
 
-resource "azurerm_monitor_action_group" "security" {
-  name                = "ag-${local.name_prefix}-security"
-  resource_group_name = azurerm_resource_group.gate.name
-  short_name          = substr(replace(var.name_prefix, "-", ""), 0, 12)
-  tags                = local.tags
+# Auditors and the security team read but never write.
+resource "azurerm_role_assignment" "auditor_blob_read" {
+  for_each = toset(var.auditor_principal_ids)
 
-  dynamic "email_receiver" {
-    for_each = var.security_email_receivers
-    content {
-      name                    = email_receiver.key
-      email_address           = email_receiver.value
-      use_common_alert_schema = true
-    }
-  }
-
-  dynamic "webhook_receiver" {
-    for_each = var.security_webhook_url == "" ? [] : [1]
-    content {
-      name                    = "teams"
-      service_uri             = var.security_webhook_url
-      use_common_alert_schema = true
-    }
-  }
+  scope                = azurerm_storage_account.gate.id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = each.value
 }
