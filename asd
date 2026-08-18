@@ -1,367 +1,211 @@
-# Alert rules over SecurityGate_CL.
+# Telemetry pipeline: gate run -> Logs Ingestion API -> DCE -> DCR -> custom table.
 #
-# Ordered roughly by value. The coverage alerts at the bottom matter most:
-# they detect the ABSENCE of signal. Everything above them only fires when the
-# gate ran, which means none of them catch the team that quietly stopped
-# calling the workflow — the most common way these programs fail in practice.
+# Verify Data Collection Rule and Logs Ingestion API availability in your Gov
+# region before relying on this. Azure Monitor features reach Government after
+# commercial, and this is the piece most likely to be missing.
+
+resource "azurerm_log_analytics_workspace" "gate" {
+  name                = "log-${local.name_prefix}"
+  resource_group_name = azurerm_resource_group.gate.name
+  location            = azurerm_resource_group.gate.location
+  sku                 = "PerGB2018"
+  retention_in_days   = var.log_retention_days
+  tags                = local.tags
+}
+
+# Custom table. Column names here must match the keys emitted by
+# poam/telemetry.py::build_event exactly, and the KQL alerts depend on both.
+# Changing a name is a three-file edit.
+resource "azapi_resource" "gate_table" {
+  type      = "Microsoft.OperationalInsights/workspaces/tables@2022-10-01"
+  name      = "SecurityGate_CL"
+  parent_id = azurerm_log_analytics_workspace.gate.id
+
+  body = {
+    properties = {
+      schema = {
+        name = "SecurityGate_CL"
+        columns = [
+          { name = "TimeGenerated", type = "datetime" },
+          { name = "ComponentId", type = "string" },
+          { name = "Repository", type = "string" },
+          { name = "ImageDigest", type = "string" },
+          { name = "ImageTag", type = "string" },
+          { name = "ImageRef", type = "string" },
+          { name = "GateResult", type = "string" },
+          { name = "BypassUsed", type = "boolean" },
+          { name = "BypassActor", type = "string" },
+          { name = "BypassReason", type = "string" },
+          { name = "IsInitialScan", type = "boolean" },
+          { name = "PolicyProfile", type = "string" },
+          { name = "PolicyFingerprint", type = "string" },
+          { name = "GateVersion", type = "string" },
+          { name = "TrivyVersion", type = "string" },
+          { name = "VulnDbUpdatedAt", type = "string" },
+          { name = "VulnDbAgeHours", type = "real" },
+          { name = "NewCount", type = "int" },
+          { name = "ClosedCount", type = "int" },
+          { name = "ReopenedCount", type = "int" },
+          { name = "PersistingCount", type = "int" },
+          { name = "TotalOpen", type = "int" },
+          { name = "OverdueCount", type = "int" },
+          { name = "EscalationCount", type = "int" },
+          { name = "CriticalOpen", type = "int" },
+          { name = "HighOpen", type = "int" },
+          { name = "MediumOpen", type = "int" },
+          { name = "LowOpen", type = "int" },
+          { name = "CriticalOpenIncludingDeviations", type = "int" },
+          { name = "HighOpenIncludingDeviations", type = "int" },
+          { name = "NewCritical", type = "int" },
+          { name = "NewHigh", type = "int" },
+          { name = "DeviationsActive", type = "int" },
+          { name = "DeviationsExpiringSoon", type = "int" },
+          { name = "DeviationsExpired", type = "int" },
+          { name = "DeviationsRejected", type = "int" },
+          { name = "ViolationCount", type = "int" },
+          { name = "ViolationSummary", type = "string" },
+          { name = "RunId", type = "string" },
+          { name = "RunUrl", type = "string" },
+          { name = "Actor", type = "string" },
+          { name = "CommitSha", type = "string" },
+          { name = "DurationSeconds", type = "real" },
+          { name = "PoamUri", type = "string" },
+          { name = "SbomUri", type = "string" },
+        ]
+      }
+      retentionInDays      = var.log_retention_days
+      totalRetentionInDays = var.log_total_retention_days
+    }
+  }
+
+  schema_validation_enabled = false
+}
+
+resource "azurerm_monitor_data_collection_endpoint" "gate" {
+  name                          = "dce-${local.name_prefix}"
+  resource_group_name           = azurerm_resource_group.gate.name
+  location                      = azurerm_resource_group.gate.location
+  public_network_access_enabled = var.dce_public_access
+  description                   = "Ingestion endpoint for container security gate telemetry"
+  tags                          = local.tags
+}
+
+resource "azurerm_monitor_data_collection_rule" "gate" {
+  name                        = "dcr-${local.name_prefix}"
+  resource_group_name         = azurerm_resource_group.gate.name
+  location                    = azurerm_resource_group.gate.location
+  data_collection_endpoint_id = azurerm_monitor_data_collection_endpoint.gate.id
+  tags                        = local.tags
+
+  destinations {
+    log_analytics {
+      workspace_resource_id = azurerm_log_analytics_workspace.gate.id
+      name                  = "gate-workspace"
+    }
+  }
+
+  data_flow {
+    streams       = ["Custom-SecurityGate_CL"]
+    destinations  = ["gate-workspace"]
+    output_stream = "Custom-SecurityGate_CL"
+    transform_kql = "source"
+  }
+
+  stream_declaration {
+    stream_name = "Custom-SecurityGate_CL"
+
+    dynamic "column" {
+      for_each = local.gate_stream_columns
+      content {
+        name = column.value.name
+        type = column.value.type
+      }
+    }
+  }
+
+  depends_on = [azapi_resource.gate_table]
+}
 
 locals {
-  alert_scopes = [azurerm_log_analytics_workspace.gate.id]
+  # Stream declaration mirrors the table schema. Kept as a local so the two
+  # cannot drift apart silently.
+  gate_stream_columns = [
+    { name = "TimeGenerated", type = "datetime" },
+    { name = "ComponentId", type = "string" },
+    { name = "Repository", type = "string" },
+    { name = "ImageDigest", type = "string" },
+    { name = "ImageTag", type = "string" },
+    { name = "ImageRef", type = "string" },
+    { name = "GateResult", type = "string" },
+    { name = "BypassUsed", type = "boolean" },
+    { name = "BypassActor", type = "string" },
+    { name = "BypassReason", type = "string" },
+    { name = "IsInitialScan", type = "boolean" },
+    { name = "PolicyProfile", type = "string" },
+    { name = "PolicyFingerprint", type = "string" },
+    { name = "GateVersion", type = "string" },
+    { name = "TrivyVersion", type = "string" },
+    { name = "VulnDbUpdatedAt", type = "string" },
+    { name = "VulnDbAgeHours", type = "real" },
+    { name = "NewCount", type = "int" },
+    { name = "ClosedCount", type = "int" },
+    { name = "ReopenedCount", type = "int" },
+    { name = "PersistingCount", type = "int" },
+    { name = "TotalOpen", type = "int" },
+    { name = "OverdueCount", type = "int" },
+    { name = "EscalationCount", type = "int" },
+    { name = "CriticalOpen", type = "int" },
+    { name = "HighOpen", type = "int" },
+    { name = "MediumOpen", type = "int" },
+    { name = "LowOpen", type = "int" },
+    { name = "CriticalOpenIncludingDeviations", type = "int" },
+    { name = "HighOpenIncludingDeviations", type = "int" },
+    { name = "NewCritical", type = "int" },
+    { name = "NewHigh", type = "int" },
+    { name = "DeviationsActive", type = "int" },
+    { name = "DeviationsExpiringSoon", type = "int" },
+    { name = "DeviationsExpired", type = "int" },
+    { name = "DeviationsRejected", type = "int" },
+    { name = "ViolationCount", type = "int" },
+    { name = "ViolationSummary", type = "string" },
+    { name = "RunId", type = "string" },
+    { name = "RunUrl", type = "string" },
+    { name = "Actor", type = "string" },
+    { name = "CommitSha", type = "string" },
+    { name = "DurationSeconds", type = "real" },
+    { name = "PoamUri", type = "string" },
+    { name = "SbomUri", type = "string" },
+  ]
 }
 
-# --- 1. Bypass used -------------------------------------------------------
+# The gate identity needs this to POST to the Logs Ingestion API.
+resource "azurerm_role_assignment" "gate_metrics_publisher" {
+  scope                = azurerm_monitor_data_collection_rule.gate.id
+  role_definition_name = "Monitoring Metrics Publisher"
+  principal_id         = var.gate_principal_id
+}
 
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "bypass_used" {
-  name                = "alert-${local.name_prefix}-bypass-used"
+resource "azurerm_monitor_action_group" "security" {
+  name                = "ag-${local.name_prefix}-security"
   resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 1
-  scopes              = local.alert_scopes
-  description         = "Emergency bypass was used to ship an image that failed the security gate."
-  enabled             = true
+  short_name          = substr(replace(var.name_prefix, "-", ""), 0, 12)
+  tags                = local.tags
 
-  evaluation_frequency = "PT5M"
-  window_duration      = "PT10M"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | where BypassUsed == true
-      | project TimeGenerated, ComponentId, ImageDigest, BypassActor, BypassReason, ViolationCount, RunUrl
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "ComponentId"
-      operator = "Include"
-      values   = ["*"]
+  dynamic "email_receiver" {
+    for_each = var.security_email_receivers
+    content {
+      name                    = email_receiver.key
+      email_address           = email_receiver.value
+      use_common_alert_schema = true
     }
   }
 
-  auto_mitigation_enabled = false
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 2. New critical introduced -------------------------------------------
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "new_critical" {
-  name                = "alert-${local.name_prefix}-new-critical"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 2
-  scopes              = local.alert_scopes
-  description         = "A build introduced a new CRITICAL finding not covered by an approved deviation."
-
-  evaluation_frequency = "PT15M"
-  window_duration      = "PT30M"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | where NewCritical > 0
-      | project TimeGenerated, ComponentId, ImageTag, NewCritical, GateResult, RunUrl
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "ComponentId"
-      operator = "Include"
-      values   = ["*"]
+  dynamic "webhook_receiver" {
+    for_each = var.security_webhook_url == "" ? [] : [1]
+    content {
+      name                    = "teams"
+      service_uri             = var.security_webhook_url
+      use_common_alert_schema = true
     }
   }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 3. Regression: a closed finding came back ----------------------------
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "regression" {
-  name                = "alert-${local.name_prefix}-regression"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 2
-  scopes              = local.alert_scopes
-  description         = "A previously remediated finding has reappeared. Often a base-image rollback."
-
-  evaluation_frequency = "PT30M"
-  window_duration      = "PT1H"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | where ReopenedCount > 0
-      | project TimeGenerated, ComponentId, ImageTag, ReopenedCount, RunUrl
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "ComponentId"
-      operator = "Include"
-      values   = ["*"]
-    }
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 4. Deviations expiring ------------------------------------------------
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "deviations_expiring" {
-  name                = "alert-${local.name_prefix}-deviations-expiring"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 3
-  scopes              = local.alert_scopes
-  description         = "Approved deviations expire soon. On expiry these findings start failing builds."
-
-  evaluation_frequency = "PT6H"
-  window_duration      = "P1D"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | where DeviationsExpiringSoon > 0 or DeviationsExpired > 0
-      | summarize arg_max(TimeGenerated, DeviationsExpiringSoon, DeviationsExpired) by ComponentId
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "ComponentId"
-      operator = "Include"
-      values   = ["*"]
-    }
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 5. Overdue POA&M items ------------------------------------------------
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "overdue_items" {
-  name                = "alert-${local.name_prefix}-overdue-poam"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 2
-  scopes              = local.alert_scopes
-  description         = "Open POA&M items are past their scheduled completion date."
-
-  evaluation_frequency = "PT6H"
-  window_duration      = "P1D"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | summarize arg_max(TimeGenerated, OverdueCount) by ComponentId
-      | where OverdueCount > ${var.overdue_alert_threshold}
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "ComponentId"
-      operator = "Include"
-      values   = ["*"]
-    }
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 6. Trivy DB going stale ----------------------------------------------
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "stale_db" {
-  name                = "alert-${local.name_prefix}-stale-vuln-db"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 1
-  scopes              = local.alert_scopes
-  description         = "Scans ran against a stale vulnerability database. A stale DB passes images it should block."
-
-  evaluation_frequency = "PT1H"
-  window_duration      = "PT6H"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | where VulnDbAgeHours > ${var.max_db_age_hours}
-      | project TimeGenerated, ComponentId, VulnDbAgeHours, VulnDbUpdatedAt, TrivyVersion
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 7. DB mirror heartbeat missing ---------------------------------------
-# Fires on ABSENCE. A failing mirror job produces a failure signal; a DISABLED
-# or deleted schedule produces nothing at all, and that is the dangerous case.
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "mirror_heartbeat_missing" {
-  name                = "alert-${local.name_prefix}-db-mirror-silent"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 1
-  scopes              = local.alert_scopes
-  description         = "No trivy-db mirror heartbeat received. The mirror job may be disabled or deleted."
-
-  evaluation_frequency = "PT1H"
-  window_duration      = "PT12H"
-
-  criteria {
-    query                   = <<-KQL
-      let expected = 1;
-      let seen = toscalar(
-        SecurityGate_CL
-        | where ComponentId == "_infrastructure/trivy-db-mirror"
-        | where TimeGenerated > ago(12h)
-        | count
-      );
-      print MissingHeartbeat = iff(coalesce(seen, 0) == 0, 1, 0)
-      | where MissingHeartbeat == 1
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 8. COVERAGE GAP: image pushed but never gated ------------------------
-#
-# The highest-value alert here. Everything above only fires when the gate RAN.
-# This one reconciles ACR push events against gate events and catches the
-# component that quietly stopped calling the workflow.
-#
-# Requires ACR diagnostic settings (ContainerRegistryRepositoryEvents) shipped
-# to this workspace - see acr_diagnostics.tf.
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "coverage_gap" {
-  count = var.enable_coverage_alert ? 1 : 0
-
-  name                = "alert-${local.name_prefix}-coverage-gap"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 1
-  scopes              = local.alert_scopes
-  description         = "An image was pushed to ACR with no corresponding security gate run. This is a hole in the control."
-
-  evaluation_frequency = "PT1H"
-  window_duration      = "PT6H"
-
-  criteria {
-    query                   = <<-KQL
-      let gated =
-        SecurityGate_CL
-        | where TimeGenerated > ago(24h)
-        | project Digest = tolower(ImageDigest);
-      ContainerRegistryRepositoryEvents
-      | where TimeGenerated > ago(6h)
-      | where OperationName in ("Push", "push")
-      | where isnotempty(Digest)
-      | where Repository !startswith "trivy/"          // mirror artifacts, not app images
-      | extend Digest = tolower(Digest)
-      | distinct Repository, Tag, Digest, LoginServer
-      | join kind=leftanti gated on Digest
-      | project Repository, Tag, Digest, LoginServer
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "Repository"
-      operator = "Include"
-      values   = ["*"]
-    }
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
-}
-
-# --- 9. COVERAGE GAP: component went quiet --------------------------------
-# A component that used to be scanned and no longer is. Catches a pipeline
-# that was deleted or a repository that was archived without decommissioning.
-
-resource "azurerm_monitor_scheduled_query_rules_alert_v2" "component_went_quiet" {
-  name                = "alert-${local.name_prefix}-component-quiet"
-  resource_group_name = azurerm_resource_group.gate.name
-  location            = azurerm_resource_group.gate.location
-  severity            = 2
-  scopes              = local.alert_scopes
-  description         = "A component previously covered by the gate has not been scanned recently."
-
-  evaluation_frequency = "P1D"
-  window_duration      = "P1D"
-
-  criteria {
-    query                   = <<-KQL
-      SecurityGate_CL
-      | where TimeGenerated > ago(${var.component_quiet_lookback_days}d)
-      | where ComponentId !startswith "_infrastructure/"
-      | summarize LastSeen = max(TimeGenerated), Scans = count() by ComponentId
-      | where Scans >= 3                                       // was genuinely active
-      | where LastSeen < ago(${var.component_quiet_days}d)
-      | extend DaysSilent = datetime_diff('day', now(), LastSeen)
-      | project ComponentId, LastSeen, DaysSilent, Scans
-    KQL
-    time_aggregation_method = "Count"
-    threshold               = 0
-    operator                = "GreaterThan"
-
-    dimension {
-      name     = "ComponentId"
-      operator = "Include"
-      values   = ["*"]
-    }
-  }
-
-  action {
-    action_groups = [azurerm_monitor_action_group.security.id]
-  }
-
-  tags = local.tags
 }
