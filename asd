@@ -1,27 +1,14 @@
-# Example: ACR Task bootstrap build on a public pool, then the gate.
+# Example: plain docker build + push, no ACR Tasks, simple tagging.
 #
-# This mirrors the flow where the bootstrap build carries no company data and
-# runs on a public agent pool, then hands off to the gate inside the boundary.
-#
-# The only thing the gate needs from this job is the DIGEST. Note that
-# component_id stays constant while image_tag carries a detailed release stamp
-# — that split is what keeps POA&M history continuous across releases.
+# Contrast with caller-acr-task.yml: completely different build tooling and a
+# much simpler version scheme, but the gate call is nearly identical. That is
+# the point of the contract.
 
-name: Build and Gate
+name: Build and Gate (docker)
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
-    inputs:
-      emergency_bypass:
-        description: "Request emergency bypass (requires security approval)"
-        type: boolean
-        default: false
-      bypass_reason:
-        description: "Written justification — recorded permanently in the POA&M"
-        type: string
-        default: ""
+    branches: [main]
 
 permissions:
   contents: read
@@ -29,11 +16,9 @@ permissions:
 
 jobs:
   build:
-    # Public pool: no company data, no POA&M content, no state access.
     runs-on: ubuntu-latest
     outputs:
-      image_ref: ${{ steps.acr.outputs.image_ref }}
-      image_tag: ${{ steps.version.outputs.tag }}
+      image_ref: ${{ steps.push.outputs.image_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -45,64 +30,39 @@ jobs:
           subscription-id: ${{ vars.GATE_SUBSCRIPTION_ID }}
           environment: AzureUSGovernment
 
-      - name: Derive version stamp
-        id: version
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ACR
         run: |
           set -euo pipefail
-          # Long semantic stamp. The gate does not care about this format —
-          # any scheme works, because identity comes from the digest.
-          TAG="${GITHUB_REF_NAME#v}-$(date -u +%Y%m%d%H%M%S)-${GITHUB_SHA::7}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          TOKEN=$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --output tsv --query accessToken)
+          echo "::add-mask::$TOKEN"
+          echo "$TOKEN" | docker login "${{ vars.ACR_LOGIN_SERVER }}" \
+            -u "00000000-0000-0000-0000-000000000000" --password-stdin
 
-      - name: Build via ACR Task
-        id: acr
-        env:
-          REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
-          REPO: platform/api
-          TAG: ${{ steps.version.outputs.tag }}
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ vars.ACR_LOGIN_SERVER }}/team/worker:latest
+
+      - name: Emit digest-pinned reference
+        id: ref
         run: |
-          set -euo pipefail
-          # Using a task yaml. Teams that prefer `az acr build`, docker build,
-          # buildkit or kaniko all work the same way — they just need to end
-          # at a digest.
-          az acr run \
-            --registry "${{ vars.ACR_NAME }}" \
-            --file .acr/build-task.yaml \
-            --set IMAGE="${REPO}:${TAG}" \
-            .
-
-          # Resolve the digest. This is the ONLY output the gate needs.
-          DIGEST=$(az acr repository show \
-            --name "${{ vars.ACR_NAME }}" \
-            --image "${REPO}:${TAG}" \
-            --query digest -o tsv)
-
-          echo "image_ref=${REGISTRY}/${REPO}@${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "Built ${REGISTRY}/${REPO}@${DIGEST}"
+          echo "image_ref=${{ vars.ACR_LOGIN_SERVER }}/team/worker@${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
   security-gate:
     needs: build
     uses: myorg/security-gate/.github/workflows/gate.yml@v1
     with:
+      # Team uses a mutable :latest tag; the gate still gets an immutable digest,
+      # and POA&M continuity is anchored on component_id regardless.
       image_ref: ${{ needs.build.outputs.image_ref }}
-      # Stable across every release. NOT the version tag.
-      component_id: myorg/platform/api
-      image_tag: ${{ needs.build.outputs.image_tag }}
-      policy_profile: fedramp-moderate
+      component_id: myorg/team/worker
+      image_tag: latest
+      policy_profile: standard
       registry: ${{ vars.ACR_LOGIN_SERVER }}
       runs_on: self-hosted-gov
-      bypass_requested: ${{ inputs.emergency_bypass == true }}
-      bypass_reason: ${{ inputs.bypass_reason }}
     secrets: inherit
-
-  promote:
-    needs: security-gate
-    if: needs.security-gate.outputs.gate_result != 'fail'
-    runs-on: self-hosted-gov
-    steps:
-      - name: Promote to release registry
-        run: |
-          echo "Gate: ${{ needs.security-gate.outputs.gate_result }}"
-          echo "New findings: ${{ needs.security-gate.outputs.new_count }}"
-          echo "Closed this run: ${{ needs.security-gate.outputs.closed_count }}"
-          echo "Promoting ${{ needs.security-gate.outputs.image_digest }}"
