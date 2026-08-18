@@ -1,54 +1,50 @@
-# Example: composite action used INSIDE the caller's own job.
+# FedRAMP Moderate-aligned profile.
 #
-# The escape hatch for teams that need the scan in the same job as the build —
-# for instance to scan before pushing. Same engine, same POA&M state, same
-# policy; only the packaging differs.
+# Remediation timelines below reflect the commonly applied FedRAMP continuous
+# monitoring windows (High 30 days, Moderate 90, Low 180). CONFIRM THESE
+# AGAINST YOUR OWN SSP AND YOUR 3PAO before treating them as authoritative -
+# they are a starting point, not compliance advice.
+name: fedramp-moderate
 
-name: Inline Gate
+# "vendor" uses the distro maintainer's rating (Trivy's Severity field).
+# "nvd" derives the band from the NVD CVSS v3 base score - harsher, and what
+# some assessors expect. Switching this WILL reclassify existing findings and
+# show up as severity drift on the next run; expect a noisy first scan.
+severity_source: vendor
 
-on: [workflow_dispatch]
+# Report everything, including vulnerabilities with no available fix. Unfixed
+# criticals still belong in the POA&M with a vendor-dependency deviation.
+ignore_unfixed: false
 
-permissions:
-  contents: read
-  id-token: write
+severity_sla_days:
+  CRITICAL: 30
+  HIGH: 30
+  MEDIUM: 90
+  LOW: 180
+  DEFAULT: 90
 
-jobs:
-  build-and-gate:
-    runs-on: self-hosted-gov
-    steps:
-      - uses: actions/checkout@v4
+# Days a brand-new finding may sit before it fails the build. 0 = fail
+# immediately. A small window (3-7) absorbs the case where a CVE is disclosed
+# between a team's last green build and their next one.
+grace_period_days: 0
 
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.GATE_CLIENT_ID }}
-          tenant-id: ${{ vars.GATE_TENANT_ID }}
-          subscription-id: ${{ vars.GATE_SUBSCRIPTION_ID }}
-          environment: AzureUSGovernment
+fail_on:
+  new: [CRITICAL, HIGH]
+  overdue: [CRITICAL, HIGH, MEDIUM]
+  reopened: [CRITICAL, HIGH]
+  # An existing Medium reclassified upward is not "new", so without this rule
+  # it would slip through every gate.
+  escalated_into: [CRITICAL]
 
-      - name: Build and push
-        id: build
-        run: |
-          set -euo pipefail
-          # ... build and push, however you like ...
-          DIGEST=$(docker buildx imagetools inspect "${{ vars.ACR_LOGIN_SERVER }}/team/app:ci" \
-            --format '{{ "{{" }}.Manifest.Digest{{ "}}" }}')
-          echo "image_ref=${{ vars.ACR_LOGIN_SERVER }}/team/app@${DIGEST}" >> "$GITHUB_OUTPUT"
+deviations:
+  require_expiry: true
+  max_days: 90
+  allowed_types:
+    - Risk Adjusted
+    - False Positive
+    - Operational Requirement
+  warn_before_expiry_days: 14
 
-      - name: Security gate
-        id: gate
-        uses: myorg/security-gate@v1
-        with:
-          image_ref: ${{ steps.build.outputs.image_ref }}
-          component_id: myorg/team/app
-          policy_profile: observe
-          registry: ${{ vars.ACR_LOGIN_SERVER }}
-          state_store: az://${{ vars.GATE_STORAGE_ACCOUNT }}/poam
-          trivy_version: ${{ vars.GATE_TRIVY_VERSION }}
-          trivy_sha256: ${{ vars.GATE_TRIVY_SHA256 }}
-          db_repository: ${{ vars.ACR_LOGIN_SERVER }}/trivy/trivy-db
-
-      - name: Use the results
-        run: |
-          echo "Result: ${{ steps.gate.outputs.gate_result }}"
-          echo "Initial scan: ${{ steps.gate.outputs.is_initial_scan }}"
-          echo "POA&M: ${{ steps.gate.outputs.poam_uri }}"
+# A regression restarts the remediation clock. Set false if your assessor
+# wants continuity from the original discovery date instead.
+reset_sla_on_reopen: true
