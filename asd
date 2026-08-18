@@ -1,68 +1,54 @@
-# Example: plain docker build + push, no ACR Tasks, simple tagging.
+# Example: composite action used INSIDE the caller's own job.
 #
-# Contrast with caller-acr-task.yml: completely different build tooling and a
-# much simpler version scheme, but the gate call is nearly identical. That is
-# the point of the contract.
+# The escape hatch for teams that need the scan in the same job as the build —
+# for instance to scan before pushing. Same engine, same POA&M state, same
+# policy; only the packaging differs.
 
-name: Build and Gate (docker)
+name: Inline Gate
 
-on:
-  push:
-    branches: [main]
+on: [workflow_dispatch]
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    outputs:
-      image_ref: ${{ steps.push.outputs.image_ref }}
+  build-and-gate:
+    runs-on: self-hosted-gov
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
-          client-id: ${{ vars.BUILD_CLIENT_ID }}
+          client-id: ${{ vars.GATE_CLIENT_ID }}
           tenant-id: ${{ vars.GATE_TENANT_ID }}
           subscription-id: ${{ vars.GATE_SUBSCRIPTION_ID }}
           environment: AzureUSGovernment
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Log in to ACR
+      - name: Build and push
+        id: build
         run: |
           set -euo pipefail
-          TOKEN=$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --output tsv --query accessToken)
-          echo "::add-mask::$TOKEN"
-          echo "$TOKEN" | docker login "${{ vars.ACR_LOGIN_SERVER }}" \
-            -u "00000000-0000-0000-0000-000000000000" --password-stdin
+          # ... build and push, however you like ...
+          DIGEST=$(docker buildx imagetools inspect "${{ vars.ACR_LOGIN_SERVER }}/team/app:ci" \
+            --format '{{ "{{" }}.Manifest.Digest{{ "}}" }}')
+          echo "image_ref=${{ vars.ACR_LOGIN_SERVER }}/team/app@${DIGEST}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push
-        id: push
-        uses: docker/build-push-action@v6
+      - name: Security gate
+        id: gate
+        uses: myorg/security-gate@v1
         with:
-          context: .
-          push: true
-          tags: ${{ vars.ACR_LOGIN_SERVER }}/team/worker:latest
+          image_ref: ${{ steps.build.outputs.image_ref }}
+          component_id: myorg/team/app
+          policy_profile: observe
+          registry: ${{ vars.ACR_LOGIN_SERVER }}
+          state_store: az://${{ vars.GATE_STORAGE_ACCOUNT }}/poam
+          trivy_version: ${{ vars.GATE_TRIVY_VERSION }}
+          trivy_sha256: ${{ vars.GATE_TRIVY_SHA256 }}
+          db_repository: ${{ vars.ACR_LOGIN_SERVER }}/trivy/trivy-db
 
-      - name: Emit digest-pinned reference
-        id: ref
+      - name: Use the results
         run: |
-          echo "image_ref=${{ vars.ACR_LOGIN_SERVER }}/team/worker@${{ steps.push.outputs.digest }}" >> "$GITHUB_OUTPUT"
-
-  security-gate:
-    needs: build
-    uses: myorg/security-gate/.github/workflows/gate.yml@v1
-    with:
-      # Team uses a mutable :latest tag; the gate still gets an immutable digest,
-      # and POA&M continuity is anchored on component_id regardless.
-      image_ref: ${{ needs.build.outputs.image_ref }}
-      component_id: myorg/team/worker
-      image_tag: latest
-      policy_profile: standard
-      registry: ${{ vars.ACR_LOGIN_SERVER }}
-      runs_on: self-hosted-gov
-    secrets: inherit
+          echo "Result: ${{ steps.gate.outputs.gate_result }}"
+          echo "Initial scan: ${{ steps.gate.outputs.is_initial_scan }}"
+          echo "POA&M: ${{ steps.gate.outputs.poam_uri }}"
