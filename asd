@@ -1,145 +1,221 @@
-name: Trivy DB Canary
+name: Container Security Gate
 
-# REPLACES the old copy-based mirror workflow.
-#
-# With a JFrog (or any) pull-through remote proxying ghcr.io, nothing needs to
-# be copied on a schedule - Artifactory fetches and caches on demand. The
-# obvious move is to delete this workflow entirely. Do not.
-#
-# Deleting it silently removes two things:
-#   1. The freshness heartbeat that the "db-mirror-silent" Azure alert watches
-#      for. That alert fires on ABSENCE of signal; with no emitter it simply
-#      never fires again and you lose stale-DB detection completely.
-#   2. Any independent check that the pull-through path still works. A broken
-#      remote repo, a revoked anonymous permission, or an expired upstream
-#      credential inside Artifactory would otherwise surface as a confusing
-#      failure in some team's build rather than as an infrastructure alert.
-#
-# So the job stops copying and becomes a canary: pull the DB the same way the
-# gate does, assert it is fresh, emit the heartbeat.
+# Teams call this. The contract is deliberately small: a digest and a stable
+# component_id. How the image got built is none of the gate's business, which is
+# what lets ACR Tasks, docker build, buildkit and kaniko all share one gate.
 
 on:
-  schedule:
-    - cron: "0 */4 * * *"
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      image_ref:
+        description: "Digest-pinned reference: <registry>/<repo>@sha256:..."
+        required: true
+        type: string
+      component_id:
+        description: "Stable POA&M identity. Must NOT change between releases."
+        required: true
+        type: string
+      image_tag:
+        description: "Display tag. Metadata only."
+        required: false
+        type: string
+        default: ""
+      policy_profile:
+        description: "fedramp-moderate | standard | observe"
+        required: false
+        type: string
+        default: "standard"
+      registry:
+        description: "ACR login server, e.g. myacr.azurecr.us"
+        required: true
+        type: string
+      runs_on:
+        description: "Runner label. Must be inside the Gov boundary - POA&M content is sensitive."
+        required: false
+        type: string
+        default: "self-hosted"
+      bypass_requested:
+        description: "Requires approval in the security-gate-bypass environment."
+        required: false
+        type: boolean
+        default: false
+      bypass_reason:
+        description: "Written justification. Recorded permanently in the POA&M."
+        required: false
+        type: string
+        default: ""
+      upload_artifacts:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      # Declared explicitly rather than relying on `secrets: inherit`. Callers
+      # can still use inherit, but naming them documents the trust surface.
+      EXCEPTIONS_READ_TOKEN:
+        description: "Read access to the central exception repository."
+        required: false
+      SECURITY_TEAMS_WEBHOOK:
+        description: "Teams/Slack webhook for bypass and regression alerts."
+        required: false
+    outputs:
+      gate_result:
+        description: "pass | fail | pass_with_bypass"
+        value: ${{ jobs.scan.outputs.gate_result }}
+      image_digest:
+        description: "Digest that was scanned"
+        value: ${{ jobs.scan.outputs.image_digest }}
+      new_count:
+        description: "Findings first seen in this scan"
+        value: ${{ jobs.scan.outputs.new_count }}
+      closed_count:
+        description: "Findings remediated since the previous scan"
+        value: ${{ jobs.scan.outputs.closed_count }}
+      reopened_count:
+        description: "Previously closed findings that returned"
+        value: ${{ jobs.scan.outputs.reopened_count }}
+      poam_uri:
+        description: "Blob URI of the generated POA&M"
+        value: ${{ jobs.scan.outputs.poam_uri }}
 
 permissions:
   contents: read
   id-token: write
 
-concurrency:
-  group: trivy-db-canary
-  cancel-in-progress: false
-
 jobs:
-  canary:
-    # Runs wherever the gate runs. If your Gov-boundary runners reach JFrog but
-    # ubuntu-latest does not (or vice versa), the canary must use the SAME
-    # network path as the gate or it proves nothing.
-    runs-on: ${{ vars.GATE_RUNNER_LABEL || 'self-hosted' }}
+  # Bypass is a separate, environment-gated job. The environment carries the
+  # required reviewers, so approver identity and timestamp are recorded by
+  # GitHub itself rather than trusted from a workflow input.
+  approve-bypass:
+    if: inputs.bypass_requested
+    runs-on: ubuntu-latest
+    environment: security-gate-bypass
+    outputs:
+      approved_by: ${{ steps.record.outputs.approved_by }}
     steps:
-      - name: Install Trivy
+      - name: Record the approval
+        id: record
         env:
-          TRIVY_VERSION: ${{ vars.GATE_TRIVY_VERSION }}
-          TRIVY_SHA256: ${{ vars.GATE_TRIVY_SHA256 }}
+          BYPASS_REASON: ${{ inputs.bypass_reason }}
+          COMPONENT_ID: ${{ inputs.component_id }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          REQUESTED_BY: ${{ github.actor }}
         run: |
           set -euo pipefail
-          TARBALL="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          curl -fsSL --retry 3 -o "$TARBALL" \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TARBALL}"
-          echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
-          tar -xzf "$TARBALL" trivy
-          mkdir -p "$HOME/.local/bin"
-          install -m 0755 trivy "$HOME/.local/bin/trivy"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/trivy" --version
-
-      - name: Pull DB through the mirror
-        id: pull
-        env:
-          DB_REPO: ${{ vars.GATE_DB_REPOSITORY }}
-          JAVA_DB_REPO: ${{ vars.GATE_JAVA_DB_REPOSITORY }}
-        run: |
-          set -euo pipefail
-          # No credentials, deliberately. This proves anonymous access still
-          # works, which is exactly the assumption the gate depends on.
-          export TRIVY_USERNAME="" TRIVY_PASSWORD=""
-
-          rm -rf ./dbcheck && mkdir -p ./dbcheck
-          START=$(date -u +%s)
-          trivy image --cache-dir ./dbcheck --download-db-only \
-            --db-repository "$DB_REPO" \
-            --java-db-repository "$JAVA_DB_REPO"
-          ELAPSED=$(( $(date -u +%s) - START ))
-
-          UPDATED=$(jq -r '.UpdatedAt' ./dbcheck/db/metadata.json)
-          NEXT=$(jq -r '.NextUpdate' ./dbcheck/db/metadata.json)
-          {
-            echo "db_updated_at=$UPDATED"
-            echo "next_update=$NEXT"
-            echo "elapsed=$ELAPSED"
-          } >> "$GITHUB_OUTPUT"
-          echo "Pulled in ${ELAPSED}s; DB updated $UPDATED, next $NEXT"
-
-      - name: Assert freshness
-        env:
-          UPDATED: ${{ steps.pull.outputs.db_updated_at }}
-          NEXT: ${{ steps.pull.outputs.next_update }}
-          MAX_AGE: ${{ vars.GATE_MAX_DB_AGE_HOURS || '24' }}
-        run: |
-          set -euo pipefail
-          AGE=$(( ( $(date -u +%s) - $(date -u -d "$UPDATED" +%s) ) / 3600 ))
-          echo "Mirrored DB is ${AGE}h old (threshold ${MAX_AGE}h)"
-
-          # A pull-through proxy can happily serve a cached manifest long after
-          # NextUpdate has passed. Artifactory's Docker remote caches metadata
-          # on its own schedule, which is invisible from here - this comparison
-          # is the only thing that catches it.
-          NOW_EPOCH=$(date -u +%s)
-          NEXT_EPOCH=$(date -u -d "$NEXT" +%s 2>/dev/null || echo 0)
-          if (( NEXT_EPOCH > 0 && NOW_EPOCH > NEXT_EPOCH )); then
-            echo "::warning::DB is past its NextUpdate ($NEXT). The proxy may be"
-            echo "::warning::serving a stale cached manifest. Check the remote repo's"
-            echo "::warning::metadata cache TTL in Artifactory."
-          fi
-
-          if (( AGE > MAX_AGE )); then
-            echo "::error::DB is ${AGE}h old, exceeding ${MAX_AGE}h."
-            echo "::error::Either upstream publishing stalled or the proxy cache is stuck."
+          if [[ -z "${BYPASS_REASON// /}" ]]; then
+            echo "::error::A bypass requires a written justification."
+            echo "::error::It is recorded permanently in the POA&M."
             exit 1
           fi
+          echo "approved_by=${REQUESTED_BY}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish freshness heartbeat
-        if: always()
+          {
+            echo "## Security gate bypass approved"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Component | \`${COMPONENT_ID}\` |"
+            echo "| Image | \`${IMAGE_REF}\` |"
+            echo "| Requested by | ${REQUESTED_BY} |"
+            echo "| Justification | ${BYPASS_REASON} |"
+            echo ""
+            echo "Recorded in the POA&M; the security team has been alerted."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    needs: [approve-bypass]
+    # Runs whether or not a bypass was requested. When bypass_requested is
+    # false the approval job is skipped, and a skipped dependency would
+    # normally skip this job too - hence the explicit result check.
+    if: >-
+      always() && !cancelled() &&
+      (needs.approve-bypass.result == 'success' || needs.approve-bypass.result == 'skipped')
+    runs-on: ${{ inputs.runs_on }}
+    outputs:
+      gate_result: ${{ steps.gate.outputs.gate_result }}
+      image_digest: ${{ steps.gate.outputs.image_digest }}
+      new_count: ${{ steps.gate.outputs.new_count }}
+      closed_count: ${{ steps.gate.outputs.closed_count }}
+      reopened_count: ${{ steps.gate.outputs.reopened_count }}
+      overdue_count: ${{ steps.gate.outputs.overdue_count }}
+      critical_open: ${{ steps.gate.outputs.critical_open }}
+      poam_uri: ${{ steps.gate.outputs.poam_uri }}
+    steps:
+      - name: Azure login (OIDC federated credential)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.GATE_CLIENT_ID }}
+          tenant-id: ${{ vars.GATE_TENANT_ID }}
+          subscription-id: ${{ vars.GATE_SUBSCRIPTION_ID }}
+          environment: AzureUSGovernment
+
+      - name: Run security gate
+        id: gate
+        uses: myorg/security-gate@v1
+        with:
+          image_ref: ${{ inputs.image_ref }}
+          component_id: ${{ inputs.component_id }}
+          image_tag: ${{ inputs.image_tag }}
+          policy_profile: ${{ inputs.policy_profile }}
+          registry: ${{ inputs.registry }}
+          state_store: az://${{ vars.GATE_STORAGE_ACCOUNT }}/poam
+          azure_environment: usgovernment
+          trivy_version: ${{ vars.GATE_TRIVY_VERSION }}
+          trivy_sha256: ${{ vars.GATE_TRIVY_SHA256 }}
+          # Pull-through mirror (e.g. JFrog remote proxying ghcr.io). Set the
+          # GATE_DB_REPOSITORY / GATE_JAVA_DB_REPOSITORY org variables. Include
+          # the :2 and :1 tags explicitly.
+          db_repository: ${{ vars.GATE_DB_REPOSITORY }}
+          java_db_repository: ${{ vars.GATE_JAVA_DB_REPOSITORY }}
+          db_anonymous: ${{ vars.GATE_DB_ANONYMOUS || 'false' }}
+          exceptions_repo: ${{ vars.GATE_EXCEPTIONS_REPO }}
+          exceptions_token: ${{ secrets.EXCEPTIONS_READ_TOKEN }}
+          dce_endpoint: ${{ vars.GATE_DCE_ENDPOINT }}
+          dcr_immutable_id: ${{ vars.GATE_DCR_IMMUTABLE_ID }}
+          bypass: ${{ inputs.bypass_requested }}
+          bypass_reason: ${{ inputs.bypass_reason }}
+          bypass_actor: ${{ needs.approve-bypass.outputs.approved_by }}
+          upload_artifacts: ${{ inputs.upload_artifacts }}
+
+      - name: Notify on bypass
+        if: always() && steps.gate.outputs.gate_result == 'pass_with_bypass'
         env:
-          DCE_ENDPOINT: ${{ vars.GATE_DCE_ENDPOINT }}
-          DCR_ID: ${{ vars.GATE_DCR_IMMUTABLE_ID }}
-          JOB_STATUS: ${{ job.status }}
-          DB_UPDATED: ${{ steps.pull.outputs.db_updated_at }}
-          ELAPSED: ${{ steps.pull.outputs.elapsed }}
+          WEBHOOK: ${{ secrets.SECURITY_TEAMS_WEBHOOK }}
+          COMPONENT_ID: ${{ inputs.component_id }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          APPROVED_BY: ${{ needs.approve-bypass.outputs.approved_by }}
+          BYPASS_REASON: ${{ inputs.bypass_reason }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # ComponentId is unchanged from the old mirror job, so the existing
-          # "db-mirror-silent" alert keeps working with no Terraform edit.
-          jq -n \
-            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg status "$JOB_STATUS" \
-            --arg dbupdated "${DB_UPDATED:-}" \
-            --arg url "$RUN_URL" \
-            --argjson elapsed "${ELAPSED:-0}" \
-            '[{
-              TimeGenerated: $ts,
-              ComponentId: "_infrastructure/trivy-db-mirror",
-              GateResult: $status,
-              VulnDbUpdatedAt: $dbupdated,
-              DurationSeconds: $elapsed,
-              RunUrl: $url
-            }]' > heartbeat.json
+          if [[ -z "$WEBHOOK" ]]; then
+            echo "::warning::No SECURITY_TEAMS_WEBHOOK configured; bypass alert not sent."
+            exit 0
+          fi
 
-          az rest --method post \
-            --url "${DCE_ENDPOINT}/dataCollectionRules/${DCR_ID}/streams/Custom-SecurityGate_CL?api-version=2023-01-01" \
-            --resource "https://monitor.azure.us" \
-            --headers "Content-Type=application/json" \
-            --body @heartbeat.json \
-            || echo "::warning::Heartbeat emit failed; the silence alert may fire."
+          # Built with jq --arg so a justification containing quotes, newlines
+          # or backslashes cannot corrupt the payload or inject fields.
+          jq -n \
+            --arg component "$COMPONENT_ID" \
+            --arg image "$IMAGE_REF" \
+            --arg approver "$APPROVED_BY" \
+            --arg reason "$BYPASS_REASON" \
+            --arg url "$RUN_URL" \
+            '{text: ("Security gate BYPASSED\n\nComponent: " + $component
+                     + "\nImage: " + $image
+                     + "\nApproved by: " + $approver
+                     + "\nReason: " + $reason
+                     + "\nRun: " + $url)}' \
+            > "$RUNNER_TEMP/bypass-alert.json"
+
+          curl -fsS -X POST "$WEBHOOK" \
+            -H 'Content-Type: application/json' \
+            --data @"$RUNNER_TEMP/bypass-alert.json" \
+            || echo "::warning::Bypass notification failed to send"
+
+      - name: Flag regressions
+        if: always() && steps.gate.outputs.reopened_count != '' && steps.gate.outputs.reopened_count != '0'
+        env:
+          REOPENED: ${{ steps.gate.outputs.reopened_count }}
+        run: |
+          echo "::warning::${REOPENED} previously-closed finding(s) have returned."
+          echo "::warning::Usually a base-image rollback or a reverted dependency bump."
