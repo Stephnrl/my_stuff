@@ -1,146 +1,36 @@
-name: Container Security Gate
+name: Mirror Trivy DB to ACR
 
-# Teams call this. The contract is deliberately small: a digest and a stable
-# component_id. How the image got built is none of the gate's business, which is
-# what lets ACR Tasks, docker build, buildkit and kaniko all share one gate.
+# Runs on a public-egress runner (no company data), copies the Trivy databases
+# into ACR as OCI artifacts, and emits a freshness heartbeat.
+#
+# This is the hardest dependency in the whole gate. Self-hosted runners inside
+# the Gov boundary generally cannot reach ghcr.io, so without this job every
+# scan either fails outright or - far worse - runs against a stale DB and
+# silently passes images it should have blocked.
+#
+# Trivy rebuilds the vulnerability DB roughly every 6 hours and the Java DB
+# daily. Every 4 hours keeps us comfortably inside max_db_age_hours.
 
 on:
-  workflow_call:
-    inputs:
-      image_ref:
-        description: "Digest-pinned reference: <registry>/<repo>@sha256:..."
-        required: true
-        type: string
-      component_id:
-        description: "Stable POA&M identity. Must NOT change between releases."
-        required: true
-        type: string
-      image_tag:
-        description: "Display tag. Metadata only."
-        required: false
-        type: string
-        default: ""
-      policy_profile:
-        description: "fedramp-moderate | standard | observe"
-        required: false
-        type: string
-        default: "standard"
-      registry:
-        description: "ACR login server, e.g. myacr.azurecr.us"
-        required: true
-        type: string
-      runs_on:
-        description: "Runner label. Must be inside the Gov boundary - POA&M content is sensitive."
-        required: false
-        type: string
-        default: "self-hosted"
-      bypass_requested:
-        description: "Requires approval in the security-gate-bypass environment."
-        required: false
-        type: boolean
-        default: false
-      bypass_reason:
-        description: "Written justification. Recorded permanently in the POA&M."
-        required: false
-        type: string
-        default: ""
-      upload_artifacts:
-        required: false
-        type: boolean
-        default: false
-    secrets:
-      # Declared explicitly rather than relying on `secrets: inherit`. Callers
-      # can still use inherit, but naming them documents the trust surface.
-      EXCEPTIONS_READ_TOKEN:
-        description: "Read access to the central exception repository."
-        required: false
-      SECURITY_TEAMS_WEBHOOK:
-        description: "Teams/Slack webhook for bypass and regression alerts."
-        required: false
-    outputs:
-      gate_result:
-        description: "pass | fail | pass_with_bypass"
-        value: ${{ jobs.scan.outputs.gate_result }}
-      image_digest:
-        description: "Digest that was scanned"
-        value: ${{ jobs.scan.outputs.image_digest }}
-      new_count:
-        description: "Findings first seen in this scan"
-        value: ${{ jobs.scan.outputs.new_count }}
-      closed_count:
-        description: "Findings remediated since the previous scan"
-        value: ${{ jobs.scan.outputs.closed_count }}
-      reopened_count:
-        description: "Previously closed findings that returned"
-        value: ${{ jobs.scan.outputs.reopened_count }}
-      poam_uri:
-        description: "Blob URI of the generated POA&M"
-        value: ${{ jobs.scan.outputs.poam_uri }}
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  # Two mirror runs pushing the same tag would race on the ACR manifest.
+  group: trivy-db-mirror
+  cancel-in-progress: false
+
 jobs:
-  # Bypass is a separate, environment-gated job. The environment carries the
-  # required reviewers, so approver identity and timestamp are recorded by
-  # GitHub itself rather than trusted from a workflow input.
-  approve-bypass:
-    if: inputs.bypass_requested
+  mirror:
     runs-on: ubuntu-latest
-    environment: security-gate-bypass
-    outputs:
-      approved_by: ${{ steps.record.outputs.approved_by }}
+    environment: trivy-db-mirror
     steps:
-      - name: Record the approval
-        id: record
-        env:
-          BYPASS_REASON: ${{ inputs.bypass_reason }}
-          COMPONENT_ID: ${{ inputs.component_id }}
-          IMAGE_REF: ${{ inputs.image_ref }}
-          REQUESTED_BY: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${BYPASS_REASON// /}" ]]; then
-            echo "::error::A bypass requires a written justification."
-            echo "::error::It is recorded permanently in the POA&M."
-            exit 1
-          fi
-          echo "approved_by=${REQUESTED_BY}" >> "$GITHUB_OUTPUT"
-
-          {
-            echo "## Security gate bypass approved"
-            echo ""
-            echo "| Field | Value |"
-            echo "|---|---|"
-            echo "| Component | \`${COMPONENT_ID}\` |"
-            echo "| Image | \`${IMAGE_REF}\` |"
-            echo "| Requested by | ${REQUESTED_BY} |"
-            echo "| Justification | ${BYPASS_REASON} |"
-            echo ""
-            echo "Recorded in the POA&M; the security team has been alerted."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  scan:
-    needs: [approve-bypass]
-    # Runs whether or not a bypass was requested. When bypass_requested is
-    # false the approval job is skipped, and a skipped dependency would
-    # normally skip this job too - hence the explicit result check.
-    if: >-
-      always() && !cancelled() &&
-      (needs.approve-bypass.result == 'success' || needs.approve-bypass.result == 'skipped')
-    runs-on: ${{ inputs.runs_on }}
-    outputs:
-      gate_result: ${{ steps.gate.outputs.gate_result }}
-      image_digest: ${{ steps.gate.outputs.image_digest }}
-      new_count: ${{ steps.gate.outputs.new_count }}
-      closed_count: ${{ steps.gate.outputs.closed_count }}
-      reopened_count: ${{ steps.gate.outputs.reopened_count }}
-      overdue_count: ${{ steps.gate.outputs.overdue_count }}
-      critical_open: ${{ steps.gate.outputs.critical_open }}
-      poam_uri: ${{ steps.gate.outputs.poam_uri }}
-    steps:
-      - name: Azure login (OIDC federated credential)
+      - name: Azure login
         uses: azure/login@v2
         with:
           client-id: ${{ vars.GATE_CLIENT_ID }}
@@ -148,70 +38,115 @@ jobs:
           subscription-id: ${{ vars.GATE_SUBSCRIPTION_ID }}
           environment: AzureUSGovernment
 
-      - name: Run security gate
-        id: gate
-        uses: myorg/security-gate@v1
-        with:
-          image_ref: ${{ inputs.image_ref }}
-          component_id: ${{ inputs.component_id }}
-          image_tag: ${{ inputs.image_tag }}
-          policy_profile: ${{ inputs.policy_profile }}
-          registry: ${{ inputs.registry }}
-          state_store: az://${{ vars.GATE_STORAGE_ACCOUNT }}/poam
-          azure_environment: usgovernment
-          trivy_version: ${{ vars.GATE_TRIVY_VERSION }}
-          trivy_sha256: ${{ vars.GATE_TRIVY_SHA256 }}
-          db_repository: ${{ inputs.registry }}/trivy/trivy-db
-          java_db_repository: ${{ inputs.registry }}/trivy/trivy-java-db
-          exceptions_repo: ${{ vars.GATE_EXCEPTIONS_REPO }}
-          exceptions_token: ${{ secrets.EXCEPTIONS_READ_TOKEN }}
-          dce_endpoint: ${{ vars.GATE_DCE_ENDPOINT }}
-          dcr_immutable_id: ${{ vars.GATE_DCR_IMMUTABLE_ID }}
-          bypass: ${{ inputs.bypass_requested }}
-          bypass_reason: ${{ inputs.bypass_reason }}
-          bypass_actor: ${{ needs.approve-bypass.outputs.approved_by }}
-          upload_artifacts: ${{ inputs.upload_artifacts }}
-
-      - name: Notify on bypass
-        if: always() && steps.gate.outputs.gate_result == 'pass_with_bypass'
+      - name: Install ORAS
         env:
-          WEBHOOK: ${{ secrets.SECURITY_TEAMS_WEBHOOK }}
-          COMPONENT_ID: ${{ inputs.component_id }}
-          IMAGE_REF: ${{ inputs.image_ref }}
-          APPROVED_BY: ${{ needs.approve-bypass.outputs.approved_by }}
-          BYPASS_REASON: ${{ inputs.bypass_reason }}
+          ORAS_VERSION: ${{ vars.ORAS_VERSION }}
+          ORAS_SHA256: ${{ vars.ORAS_SHA256 }}
+        run: |
+          set -euo pipefail
+          TARBALL="oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$TARBALL" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/${TARBALL}"
+          echo "${ORAS_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "$TARBALL" oras
+          sudo install -m 0755 oras /usr/local/bin/oras
+          oras version
+
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: ${{ vars.GATE_TRIVY_VERSION }}
+          TRIVY_SHA256: ${{ vars.GATE_TRIVY_SHA256 }}
+        run: |
+          set -euo pipefail
+          TARBALL="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL --retry 3 -o "$TARBALL" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${TARBALL}"
+          echo "${TRIVY_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "$TARBALL" trivy
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+          trivy --version
+
+      - name: Log in to ACR
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+        run: |
+          set -euo pipefail
+          TOKEN=$(az acr login --name "$ACR_NAME" --expose-token --output tsv --query accessToken)
+          echo "::add-mask::$TOKEN"
+          oras login "$ACR_LOGIN_SERVER" \
+            -u "00000000-0000-0000-0000-000000000000" \
+            -p "$TOKEN"
+
+      - name: Copy databases
+        env:
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+        run: |
+          set -euo pipefail
+          oras cp -r ghcr.io/aquasecurity/trivy-db:2 \
+            "${ACR_LOGIN_SERVER}/trivy/trivy-db:2"
+          oras cp -r ghcr.io/aquasecurity/trivy-java-db:1 \
+            "${ACR_LOGIN_SERVER}/trivy/trivy-java-db:1"
+
+      - name: Verify the mirror is actually usable
+        id: verify
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+        run: |
+          set -euo pipefail
+          # A successful push is not proof. Pull back through the mirror exactly
+          # the way the gate will, then confirm the metadata parses and is fresh.
+          TRIVY_PASSWORD=$(az acr login --name "$ACR_NAME" --expose-token --output tsv --query accessToken)
+          echo "::add-mask::$TRIVY_PASSWORD"
+          export TRIVY_PASSWORD
+          export TRIVY_USERNAME="00000000-0000-0000-0000-000000000000"
+
+          rm -rf ./dbcheck && mkdir -p ./dbcheck
+          trivy image --cache-dir ./dbcheck --download-db-only \
+            --db-repository "${ACR_LOGIN_SERVER}/trivy/trivy-db"
+
+          UPDATED=$(jq -r '.UpdatedAt' ./dbcheck/db/metadata.json)
+          echo "db_updated_at=$UPDATED" >> "$GITHUB_OUTPUT"
+
+          AGE=$(( ( $(date -u +%s) - $(date -u -d "$UPDATED" +%s) ) / 3600 ))
+          echo "Mirrored DB updated $UPDATED (${AGE}h old)"
+          if (( AGE > 12 )); then
+            echo "::error::Mirrored DB is ${AGE}h old immediately after a sync."
+            echo "::error::Upstream publishing may be stalled. Investigate before"
+            echo "::error::scans start silently passing against stale data."
+            exit 1
+          fi
+
+      - name: Publish freshness heartbeat
+        if: always()
+        env:
+          DCE_ENDPOINT: ${{ vars.GATE_DCE_ENDPOINT }}
+          DCR_ID: ${{ vars.GATE_DCR_IMMUTABLE_ID }}
+          JOB_STATUS: ${{ job.status }}
+          DB_UPDATED: ${{ steps.verify.outputs.db_updated_at }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [[ -z "$WEBHOOK" ]]; then
-            echo "::warning::No SECURITY_TEAMS_WEBHOOK configured; bypass alert not sent."
-            exit 0
-          fi
-
-          # Built with jq --arg so a justification containing quotes, newlines
-          # or backslashes cannot corrupt the payload or inject fields.
+          # The Terraform alert watches for the ABSENCE of this heartbeat.
+          # Alerting on job failure is not enough: a disabled schedule or a
+          # deleted workflow produces no failure signal at all.
           jq -n \
-            --arg component "$COMPONENT_ID" \
-            --arg image "$IMAGE_REF" \
-            --arg approver "$APPROVED_BY" \
-            --arg reason "$BYPASS_REASON" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg status "$JOB_STATUS" \
+            --arg dbupdated "${DB_UPDATED:-}" \
             --arg url "$RUN_URL" \
-            '{text: ("Security gate BYPASSED\n\nComponent: " + $component
-                     + "\nImage: " + $image
-                     + "\nApproved by: " + $approver
-                     + "\nReason: " + $reason
-                     + "\nRun: " + $url)}' \
-            > "$RUNNER_TEMP/bypass-alert.json"
+            '[{
+              TimeGenerated: $ts,
+              ComponentId: "_infrastructure/trivy-db-mirror",
+              GateResult: $status,
+              VulnDbUpdatedAt: $dbupdated,
+              RunUrl: $url
+            }]' > heartbeat.json
 
-          curl -fsS -X POST "$WEBHOOK" \
-            -H 'Content-Type: application/json' \
-            --data @"$RUNNER_TEMP/bypass-alert.json" \
-            || echo "::warning::Bypass notification failed to send"
-
-      - name: Flag regressions
-        if: always() && steps.gate.outputs.reopened_count != '' && steps.gate.outputs.reopened_count != '0'
-        env:
-          REOPENED: ${{ steps.gate.outputs.reopened_count }}
-        run: |
-          echo "::warning::${REOPENED} previously-closed finding(s) have returned."
-          echo "::warning::Usually a base-image rollback or a reverted dependency bump."
+          az rest --method post \
+            --url "${DCE_ENDPOINT}/dataCollectionRules/${DCR_ID}/streams/Custom-SecurityGate_CL?api-version=2023-01-01" \
+            --resource "https://monitor.azure.us" \
+            --headers "Content-Type=application/json" \
+            --body @heartbeat.json \
+            || echo "::warning::Heartbeat emit failed; the silence alert may fire."
