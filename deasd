@@ -1,0 +1,37 @@
+bash
+while true; do
+  echo -n "$(date +%T) "
+  curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity_status" \
+    | jq -c '{pending, inProgress, failing, pendingMin: (.pendingTime/60000 | floor)}'
+  sleep 60
+done
+
+If pending ticks down, it's a queue depth problem — raise workers. If it's flat at 51 and pendingMin keeps climbing, the worker is wedged.
+
+What's actually in the queue:
+
+bash
+# Breakdown by task type
+curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity?status=PENDING&ps=100" \
+  | jq -r '.tasks[].type' | sort | uniq -c | sort -rn
+
+# What's currently running, and since when
+curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity?status=IN_PROGRESS" \
+  | jq '.tasks[] | {type, componentName, startedAt, executionTimeMs}'
+
+The failing task's stack trace:
+
+bash
+TASK_ID=$(curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity?status=FAILED&ps=1" | jq -r '.tasks[0].id')
+curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/task?id=$TASK_ID&additionalFields=stacktrace" \
+  | jq -r '.task.errorMessage, .task.errorStacktrace'
+
+Two more worth having:
+
+bash
+# ES / DB health causes — catches the disk watermark case
+curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/system/health" | jq
+
+# Full system info: heap, DB pool, CE worker count, all in one blob
+curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/system/info" > sysinfo-$(date +%s).json
+jq '.["Compute Engine Tasks"], .["Compute Engine JVM State"]."Max Memory (MB)"' sysinfo-*.json
