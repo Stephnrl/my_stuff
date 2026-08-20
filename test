@@ -1,8 +1,0 @@
-AWS Enterprise Readiness
-Bringing our AWS environment up to the same enterprise standard as our matured Azure Gov Cloud footprint, built 100% as Infrastructure-as-Code in Terraform. Also partnering with another team to migrate their existing AWS resources under this managed Terraform baseline, consolidating governance and reducing configuration drift across the org.
-
-GitHub Actions Runner Modernization
-Migrating our years-old, Summerwind-based self-hosted runner deployment to the officially supported Actions Runner Controller (ARC) scale set model, including automated runner image builds. This puts us on a vendor-supported path, improves security posture, and reduces the maintenance burden of a deprecated toolchain.
-
-Enterprise Container Image Scanning Pipeline
-Building a reusable image scanning capability that plugs directly into CI/CD, positioned for enterprise-wide adoption. Gives us consistent vulnerability detection before images ever reach production, and a single control point for security policy across teams.
