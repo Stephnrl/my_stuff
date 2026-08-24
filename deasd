@@ -1,37 +1,23 @@
-bash
-while true; do
-  echo -n "$(date +%T) "
-  curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity_status" \
-    | jq -c '{pending, inProgress, failing, pendingMin: (.pendingTime/60000 | floor)}'
-  sleep 60
-done
+# denominator: accounts in the org
+aws organizations list-accounts --query 'Accounts[?Status==`ACTIVE`].Id' --output text | wc -w
 
-If pending ticks down, it's a queue depth problem — raise workers. If it's flat at 51 and pendingMin keeps climbing, the worker is wedged.
+# GuardDuty coverage
+DET=$(aws guardduty list-detectors --query 'DetectorIds[0]' --output text)
+aws guardduty list-members --detector-id "$DET" \
+  --query 'Members[?RelationshipStatus==`Enabled`].AccountId' --output text | wc -w
+aws guardduty describe-organization-configuration --detector-id "$DET" \
+  --query 'AutoEnableOrganizationMembers'
 
-What's actually in the queue:
+# Config coverage + rule count
+aws configservice describe-configuration-aggregators
+aws configservice get-aggregate-discovered-resource-counts \
+  --configuration-aggregator-name <name> --query 'totalDiscoveredResources'
+aws configservice describe-config-rules --query 'length(ConfigRules)'
 
-bash
-# Breakdown by task type
-curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity?status=PENDING&ps=100" \
-  | jq -r '.tasks[].type' | sort | uniq -c | sort -rn
+# IAM Access Analyzer — findings is a great "things I now detect" number
+aws accessanalyzer list-analyzers --type ORGANIZATION
+aws accessanalyzer list-findings --analyzer-arn <arn> \
+  --filter '{"status":{"eq":["ACTIVE"]}}' --query 'length(findings)'
 
-# What's currently running, and since when
-curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity?status=IN_PROGRESS" \
-  | jq '.tasks[] | {type, componentName, startedAt, executionTimeMs}'
-
-The failing task's stack trace:
-
-bash
-TASK_ID=$(curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/activity?status=FAILED&ps=1" | jq -r '.tasks[0].id')
-curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/ce/task?id=$TASK_ID&additionalFields=stacktrace" \
-  | jq -r '.task.errorMessage, .task.errorStacktrace'
-
-Two more worth having:
-
-bash
-# ES / DB health causes — catches the disk watermark case
-curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/system/health" | jq
-
-# Full system info: heap, DB pool, CE worker count, all in one blob
-curl -s -u "$SQ_TOKEN:" "$SQ_URL/api/system/info" > sysinfo-$(date +%s).json
-jq '.["Compute Engine Tasks"], .["Compute Engine JVM State"]."Max Memory (MB)"' sysinfo-*.json
+# delegated admin services (your shell script already does this)
+aws organizations list-delegated-services-for-account --account-id <security-acct>
