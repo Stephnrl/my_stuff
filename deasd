@@ -1,23 +1,17 @@
-# denominator: accounts in the org
-aws organizations list-accounts --query 'Accounts[?Status==`ACTIVE`].Id' --output text | wc -w
+# per-workspace resource count
+for d in $(find . -name '.terraform' -type d | xargs -n1 dirname); do
+  n=$(terraform -chdir="$d" state list 2>/dev/null | wc -l)
+  echo "$n $d"
+done | sort -rn
 
-# GuardDuty coverage
-DET=$(aws guardduty list-detectors --query 'DetectorIds[0]' --output text)
-aws guardduty list-members --detector-id "$DET" \
-  --query 'Members[?RelationshipStatus==`Enabled`].AccountId' --output text | wc -w
-aws guardduty describe-organization-configuration --detector-id "$DET" \
-  --query 'AutoEnableOrganizationMembers'
+# total, and unique resource types (shows breadth, not just volume)
+terraform state list | wc -l
+terraform state list | cut -d. -f1 | sort -u | wc -l
 
-# Config coverage + rule count
-aws configservice describe-configuration-aggregators
-aws configservice get-aggregate-discovered-resource-counts \
-  --configuration-aggregator-name <name> --query 'totalDiscoveredResources'
-aws configservice describe-config-rules --query 'length(ConfigRules)'
+Also count what you authored, which is different from what you deployed:
 
-# IAM Access Analyzer — findings is a great "things I now detect" number
-aws accessanalyzer list-analyzers --type ORGANIZATION
-aws accessanalyzer list-findings --analyzer-arn <arn> \
-  --filter '{"status":{"eq":["ACTIVE"]}}' --query 'length(findings)'
-
-# delegated admin services (your shell script already does this)
-aws organizations list-delegated-services-for-account --account-id <security-acct>
+bash
+# modules written
+find . -name main.tf -not -path '*/.terraform/*' | wc -l
+# lines of HCL
+find . -name '*.tf' -not -path '*/.terraform/*' | xargs wc -l | tail -1
