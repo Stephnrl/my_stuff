@@ -1,17 +1,17 @@
-# per-workspace resource count
-for d in $(find . -name '.terraform' -type d | xargs -n1 dirname); do
-  n=$(terraform -chdir="$d" state list 2>/dev/null | wc -l)
-  echo "$n $d"
-done | sort -rn
+Putting it together
 
-# total, and unique resource types (shows breadth, not just volume)
-terraform state list | wc -l
-terraform state list | cut -d. -f1 | sort -u | wc -l
+AWS Enterprise Readiness — Security Control Plane & EKS Landing Zone
 
-Also count what you authored, which is different from what you deployed:
+Took a partially configured AWS Security account (CloudTrail only) to a full org-wide control plane, delivered 100% as Terraform. Deployed AWS Config, GuardDuty, IAM Access Analyzer, and centralized CloudWatch logging as net-new IaC, with the Security account established as delegated administrator across [N] services — extending detection and compliance coverage from 1 account to all [N] org accounts, with auto-enrollment for new accounts.
 
-bash
-# modules written
-find . -name main.tf -not -path '*/.terraform/*' | wc -l
-# lines of HCL
-find . -name '*.tf' -not -path '*/.terraform/*' | xargs wc -l | tail -1
+Brought the Organization management account and the Network Hub account under Terraform control, automating Transit Gateway sharing via RAM and eliminating [N] manual, console-driven configurations. Authored an auditable delegation-verification script so delegated-admin state can be validated on demand rather than assumed.
+
+Designed and built an EKS Landing Zone architecture with CMMC compliance built in, reducing full account provisioning from [a multi-week, ticket-driven process] to a [N]-minute pipeline run that stands up [N] resources across [N] services. All deployments run from GitHub Actions via OIDC federation, removing [N] long-lived IAM access keys from the environment.
+
+Three things I'd flag as worth calling out explicitly, because reviewers consistently undervalue them unless you name them:
+
+The management account under Terraform is a big deal. Most orgs never do it — it's the highest-blast-radius account and people are scared of it. Say that.
+
+Delegated admin is a force multiplier, not a config change. Frame it as: every future account inherits the security baseline automatically, so the coverage number grows without additional work from you.
+
+The landing zone is a product, not a project. Name the internal customers, the time it saves per account, and how many accounts you expect it to serve next year. That's the difference between "shipped a thing" and "built a capability the org runs on."
