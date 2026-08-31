@@ -1,3 +1,6 @@
-jq -r '.[].name' deploys.json \
-  | sed -E 's/[0-9]{6,}//g; s/[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}//g' \
-  | sort | uniq -c | sort -rn | head -30
+Get-PnpDevice -Class MEDIA -Status OK | Where-Object FriendlyName -match 'Realtek' |
+    ForEach-Object {
+        Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false
+        Start-Sleep -Seconds 3
+        Enable-PnpDevice  -InstanceId $_.InstanceId -Confirm:$false
+    }
