@@ -1,6 +1,11 @@
-Get-PnpDevice -Class MEDIA -Status OK | Where-Object FriendlyName -match 'Realtek' |
-    ForEach-Object {
-        Disable-PnpDevice -InstanceId $_.InstanceId -Confirm:$false
-        Start-Sleep -Seconds 3
-        Enable-PnpDevice  -InstanceId $_.InstanceId -Confirm:$false
-    }
+[Name] is the person who keeps our team's intake functioning. She takes in the tasks and issues that come to the DevSecOps team, sorts out what's actually being asked, gets work assigned to the right person, and tracks it through to completion. That's work that's easy to overlook because it's most visible when it isn't happening. Because of her, requests don't sit unowned and the team has a reliable picture of what's in flight.
+
+She also carries real technical work alongside the coordination role, and she does it in a way I'd want more of. She isn't satisfied with a change that works but that she can't explain. She digs until she actually understands the system she's touching, which means her fixes tend to hold and she can speak to them later. She's also consistently willing to pick up unfamiliar technology rather than routing around it, which matters a lot on a team where the tooling keeps moving.
+
+On our core competencies, this shows up most clearly in [ownership / collaboration / continuous learning — match to your actual competency names]. She takes responsibility for outcomes and not just her assigned piece, and the learning orientation is a genuine strength rather than something she does when required.
+
+Growth: Pick whichever of these you've actually seen:
+
+Scaling herself. Much of the intake and triage process lives in her head. Writing it down and sharing it would reduce the team's dependence on her being available and free her up for more of the technical work she's good at.
+Protecting depth. The coordination load can crowd out the deeper technical work. Being more deliberate about carving out time for it would help her keep growing on the engineering side.
+Visibility. She does a lot of work that other teams and leadership don't see. Speaking up more in cross-team forums about what her team is handling would serve both her and the team.
