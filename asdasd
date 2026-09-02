@@ -1,11 +1,16 @@
-[Name] is the person who keeps our team's intake functioning. She takes in the tasks and issues that come to the DevSecOps team, sorts out what's actually being asked, gets work assigned to the right person, and tracks it through to completion. That's work that's easy to overlook because it's most visible when it isn't happening. Because of her, requests don't sit unowned and the team has a reliable picture of what's in flight.
+[Name] is early in her career and brings exactly the disposition you want at that stage. She volunteers for work rather than waiting to be assigned it, and she takes on the unglamorous tasks without complaint. That matters more than it sounds like — a team needs people who will clear the small stuff, and she does it reliably.
 
-She also carries real technical work alongside the coordination role, and she does it in a way I'd want more of. She isn't satisfied with a change that works but that she can't explain. She digs until she actually understands the system she's touching, which means her fixes tend to hold and she can speak to them later. She's also consistently willing to pick up unfamiliar technology rather than routing around it, which matters a lot on a team where the tooling keeps moving.
+Her strongest habit is follow-through. When her work depends on another team or another person, she doesn't let it stall and she doesn't quietly drop it. She asks, and then she asks again, and she keeps asking until she has what she needs. A lot of people her level get blocked and go silent. She does the opposite, and it means the work she picks up actually gets finished. She's also willing to take on larger projects that stretch beyond what she's done before, which is the right instinct.
 
-On our core competencies, this shows up most clearly in [ownership / collaboration / continuous learning — match to your actual competency names]. She takes responsibility for outcomes and not just her assigned piece, and the learning orientation is a genuine strength rather than something she does when required.
+On our core competencies, this shows up in [ownership / initiative / drive for results — match to your competency names].
 
-Growth: Pick whichever of these you've actually seen:
+Growth: building independent technical judgment.
 
-Scaling herself. Much of the intake and triage process lives in her head. Writing it down and sharing it would reduce the team's dependence on her being available and free her up for more of the technical work she's good at.
-Protecting depth. The coordination load can crowd out the deeper technical work. Being more deliberate about carving out time for it would help her keep growing on the engineering side.
-Visibility. She does a lot of work that other teams and leadership don't see. Speaking up more in cross-team forums about what her team is handling would serve both her and the team.
+The area I'd most like to see her develop is how she builds understanding of unfamiliar technology. Right now her default is to have an AI assistant explain it to her, and she tends to accept those explanations without verifying them. She doesn't push back on what she's told, and she doesn't cross-check it against the actual documentation. The result is that she sometimes submits work built on a wrong premise, and because the flawed understanding came in with confidence, she has no signal that anything is off until review.
+
+This is a habit, not a capability gap, and it's fixable. Two concrete suggestions:
+
+Go to the primary source first on anything unfamiliar. Read the actual documentation before or alongside the AI explanation. AI is genuinely useful for orienting yourself in something new, but it should be the map, not the territory. The docs are the territory.
+Treat every explanation as a claim to verify, not a fact to apply. Before writing code based on an explanation, find the thing in the docs that confirms it. If she can't find it, that's the signal to slow down and ask someone on the team.
+
+I'd also encourage her to bring questions to the team more often when something doesn't fit together. Asking a teammate "does this seem right to you?" costs a few minutes and catches problems well before PR review. Given how persistent she already is about chasing down blockers, I think she'd be good at this — it's the same instinct pointed at a different target.
